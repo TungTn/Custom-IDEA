@@ -20,12 +20,22 @@ import {
   Bell,
   User,
   ExternalLink,
-  ChevronRight
+  ChevronRight,
+  ArrowDownToLine,
+  ArrowUpFromLine,
+  Check,
+  Folder,
+  Coffee,
+  Package,
+  Terminal as TerminalIcon,
+  FileCode,
+  Flame
 } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
 import { MenuDropdown } from './MenuDropdown';
 import { menuRegistry } from '../constants/menuRegistry';
 import { MenuCategoryName, MenuItem } from '../types/menu';
+import { RunConfiguration } from '../types';
 
 export interface RecentProjectItem {
   name: string;
@@ -37,6 +47,10 @@ interface TopBarProps {
   gitBranch: string;
   isRunning: boolean;
   recentProjects?: RecentProjectItem[];
+  configurations?: RunConfiguration[];
+  activeConfigId?: string | null;
+  onSelectConfig?: (id: string) => void;
+  onOpenEditConfigs?: () => void;
   onRun: () => void;
   onStop: () => void;
   onOpenSearch: () => void;
@@ -50,6 +64,10 @@ export const TopBar: React.FC<TopBarProps> = ({
   gitBranch,
   isRunning,
   recentProjects = [],
+  configurations = [],
+  activeConfigId,
+  onSelectConfig,
+  onOpenEditConfigs,
   onRun,
   onStop,
   onOpenSearch,
@@ -68,6 +86,27 @@ export const TopBar: React.FC<TopBarProps> = ({
   const mainMenuRef = useRef<HTMLDivElement>(null);
   const projectDropdownRef = useRef<HTMLDivElement>(null);
   const runConfigRef = useRef<HTMLDivElement>(null);
+
+  const activeConfig = configurations.find(c => c.id === activeConfigId) || configurations[0];
+
+  const renderConfigIcon = (type?: string) => {
+    switch (type) {
+      case 'spring-boot':
+        return <Coffee size={12} className="text-[#59A869]" />;
+      case 'maven':
+        return <Package size={12} className="text-[#E05555]" />;
+      case 'gradle':
+        return <Flame size={12} className="text-[#3574F0]" />;
+      case 'cargo':
+        return <Package size={12} className="text-[#E08D3C]" />;
+      case 'npm':
+        return <TerminalIcon size={12} className="text-[#CB3837]" />;
+      case 'python':
+        return <FileCode size={12} className="text-[#3574F0]" />;
+      default:
+        return <span className="w-1.5 h-1.5 rounded-full bg-[#59A869]" />;
+    }
+  };
 
   const menus: MenuCategoryName[] = [
     'File', 'Edit', 'View', 'Navigate', 'Code', 'Refactor', 'Build', 'Run', 'Tools', 'Git', 'Help'
@@ -129,11 +168,20 @@ export const TopBar: React.FC<TopBarProps> = ({
     };
   }, []);
 
-  // Window state initialization
+  const lastClickTimeRef = useRef<number>(0);
+  const lastToggleRef = useRef<number>(0);
+
+  // Window state initialization and dynamic resize tracking
   useEffect(() => {
-    invoke<boolean>('app_is_maximized').then(val => {
-      if (typeof val === 'boolean') setIsMaximized(val);
-    }).catch(() => {});
+    const updateMaximized = () => {
+      invoke<boolean>('app_is_maximized').then(val => {
+        if (typeof val === 'boolean') setIsMaximized(val);
+      }).catch(() => {});
+    };
+
+    updateMaximized();
+    window.addEventListener('resize', updateMaximized);
+    return () => window.removeEventListener('resize', updateMaximized);
   }, []);
 
   const handleMinimize = async (e: React.MouseEvent) => {
@@ -147,6 +195,12 @@ export const TopBar: React.FC<TopBarProps> = ({
 
   const handleToggleMaximize = async (e?: React.MouseEvent) => {
     e?.stopPropagation();
+    const now = Date.now();
+    if (now - lastToggleRef.current < 350) {
+      return;
+    }
+    lastToggleRef.current = now;
+
     try {
       const nowMax = await invoke<boolean>('app_toggle_maximize_window');
       setIsMaximized(nowMax);
@@ -172,14 +226,45 @@ export const TopBar: React.FC<TopBarProps> = ({
     }, 600);
   };
 
+  const handleMouseDownDrag = async (e: React.MouseEvent) => {
+    // Only primary button (left click)
+    if (e.button !== 0) return;
+
+    const now = Date.now();
+    const elapsed = now - lastClickTimeRef.current;
+    lastClickTimeRef.current = now;
+
+    // Detect double-click: either e.detail >= 2 or two clicks within 400ms
+    if (e.detail >= 2 || elapsed < 400) {
+      lastClickTimeRef.current = 0;
+      handleToggleMaximize();
+      return;
+    }
+
+    try {
+      await invoke('app_start_dragging');
+    } catch {
+      try {
+        const { getCurrentWindow } = await import('@tauri-apps/api/window');
+        await getCurrentWindow().startDragging();
+      } catch (err) {
+        console.error('Drag failed:', err);
+      }
+    }
+  };
+
   return (
     <div 
-      data-tauri-drag-region
-      onDoubleClick={() => handleToggleMaximize()}
-      className="h-10 bg-[#2B2D30] border-b border-[#393B40] flex items-center justify-between pl-2 pr-0 select-none text-[12px] text-[#DFE1E5] relative z-40"
+      onDoubleClick={handleToggleMaximize}
+      className="h-10 bg-[#1E1F22] border-b border-[#2B2D30] flex items-center justify-between pl-2 pr-0 select-none text-[12px] text-[#DFE1E5] relative z-40"
     >
       {/* ─── LEFT: [ID] Logo, Hamburger Toggle (expands 11 Menus), Project Widget, VCS Widget, Refresh ─── */}
-      <div className="flex items-center gap-1.5" ref={mainMenuRef} data-tauri-drag-region="false">
+      <div 
+        className="flex items-center gap-1.5" 
+        ref={mainMenuRef} 
+        onMouseDown={(e) => e.stopPropagation()} 
+        data-tauri-drag-region="false"
+      >
         {/* IntelliJ ID Badge */}
         <div 
           onClick={(e) => {
@@ -190,7 +275,7 @@ export const TopBar: React.FC<TopBarProps> = ({
               return next;
             });
           }}
-          className="w-7 h-7 rounded bg-[#1E1F22] border border-[#393B40] hover:border-[#4E5157] flex items-center justify-center cursor-pointer transition-colors shadow-inner flex-shrink-0"
+          className="w-7 h-7 rounded bg-[#2B2D30] border border-[#393B40] hover:border-[#4E5157] flex items-center justify-center cursor-pointer transition-colors shadow-inner flex-shrink-0"
           title="IntelliJ IDEA Menu"
         >
           <span className="font-extrabold text-[11px] text-[#62B543] tracking-tighter">ID</span>
@@ -208,7 +293,7 @@ export const TopBar: React.FC<TopBarProps> = ({
           }}
           title="Main Menu"
           className={`p-1.5 rounded transition-colors flex-shrink-0 ${
-            isMainMenuActive ? 'bg-[#35373B] text-white' : 'hover:bg-[#35373B] text-[#868A91] hover:text-[#DFE1E5]'
+            isMainMenuActive ? 'bg-[#35373B] text-white' : 'hover:bg-[#2B2D30] text-[#868A91] hover:text-[#DFE1E5]'
           }`}
         >
           <Menu size={15} />
@@ -233,7 +318,7 @@ export const TopBar: React.FC<TopBarProps> = ({
                       }
                     }}
                     className={`px-2.5 py-1 rounded text-[12px] font-normal transition-colors cursor-pointer select-none ${
-                      isOpen ? 'bg-[#3574F0] text-white' : 'text-[#DFE1E5] hover:bg-[#35373B] hover:text-white'
+                      isOpen ? 'bg-[#3574F0] text-white' : 'text-[#DFE1E5] hover:bg-[#2B2D30] hover:text-white'
                     }`}
                   >
                     {menu}
@@ -263,16 +348,16 @@ export const TopBar: React.FC<TopBarProps> = ({
         ) : (
           /* When NOT interacting with menu: Normal state with Project, VCS, and Sync widgets */
           <div className="flex items-center gap-1.5 animate-in fade-in duration-100">
-            {/* Project Selector Widget: [ID] <projectName> ▾ */}
+            {/* Project Selector Widget: [Folder] <projectName> ▾ */}
             <div className="relative" ref={projectDropdownRef}>
               <button
                 onClick={() => setIsProjectDropdownOpen(prev => !prev)}
-                className="flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-[#1E1F22] hover:bg-[#35373B] border border-[#393B40] text-[#DFE1E5] text-xs transition-colors cursor-pointer"
+                className="flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-[#222427] hover:bg-[#2B2D30] border border-[#323438] text-[#DFE1E5] text-xs transition-colors cursor-pointer"
                 title={`Active Project: ${projectName}`}
               >
-                <span className="w-2 h-2 rounded-full bg-[#59A869]" />
+                <Folder size={13} className="text-[#E5A83B] fill-[#E5A83B]/20 flex-shrink-0" />
                 <span className="font-semibold text-white tracking-tight">{projectName}</span>
-                <ChevronDown size={12} className="text-[#868A91]" />
+                <ChevronDown size={11} className="text-[#868A91]" />
               </button>
 
               {/* Project Switcher Dropdown */}
@@ -321,62 +406,129 @@ export const TopBar: React.FC<TopBarProps> = ({
                 if (onOpenBranches) onOpenBranches();
                 else onSelectMenuAction('git.branches');
               }}
-              className="flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-[#1E1F22] hover:bg-[#35373B] border border-[#393B40] text-xs text-[#DFE1E5] transition-colors cursor-pointer"
+              className="flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-[#222427] hover:bg-[#2B2D30] border border-[#323438] text-xs text-[#DFE1E5] transition-colors cursor-pointer"
               title={`Git Branch: ${gitBranch} (Click to manage)`}
             >
               <FolderGit2 size={13} className="text-[#3574F0]" />
               <span className="font-medium">{gitBranch || 'Version Control'}</span>
-              <ChevronDown size={12} className="text-[#868A91]" />
+              <ChevronDown size={11} className="text-[#868A91]" />
             </button>
 
-            {/* Sync / Refresh Button */}
-            <button
-              onClick={handleRefreshClick}
-              className="p-1.5 rounded-md hover:bg-[#35373B] text-[#868A91] hover:text-white transition-colors"
-              title="Synchronize Files from Disk (Ctrl+Alt+Y)"
-            >
-              <RotateCw size={13} className={isRefreshing ? 'animate-spin text-[#3574F0]' : ''} />
-            </button>
+            {/* VCS Quick Action Icons (Update Project, Commit, Push, Sync) */}
+            <div className="flex items-center gap-0.5 ml-0.5">
+              <button
+                onClick={() => onSelectMenuAction('git.update')}
+                className="p-1.5 rounded hover:bg-[#2B2D30] text-[#3574F0] hover:text-[#56A8F5] transition-colors cursor-pointer"
+                title="Update Project (Ctrl+T)"
+              >
+                <ArrowDownToLine size={13} />
+              </button>
+              <button
+                onClick={() => onSelectMenuAction('git.commit')}
+                className="p-1.5 rounded hover:bg-[#2B2D30] text-[#3574F0] hover:text-[#56A8F5] transition-colors cursor-pointer"
+                title="Commit (Ctrl+K)"
+              >
+                <Check size={13} strokeWidth={2.5} />
+              </button>
+              <button
+                onClick={() => onSelectMenuAction('git.push')}
+                className="p-1.5 rounded hover:bg-[#2B2D30] text-[#3574F0] hover:text-[#56A8F5] transition-colors cursor-pointer"
+                title="Push (Ctrl+Shift+K)"
+              >
+                <ArrowUpFromLine size={13} />
+              </button>
+              <button
+                onClick={handleRefreshClick}
+                className="p-1.5 rounded hover:bg-[#2B2D30] text-[#868A91] hover:text-white transition-colors cursor-pointer"
+                title="Synchronize Files from Disk (Ctrl+Alt+Y)"
+              >
+                <RotateCw size={12} className={isRefreshing ? 'animate-spin text-[#3574F0]' : ''} />
+              </button>
+            </div>
           </div>
         )}
       </div>
 
+      {/* Draggable spacer Left-Center */}
+      <div 
+        onMouseDown={handleMouseDownDrag}
+        onDoubleClick={handleToggleMaximize}
+        className="flex-1 h-full min-w-[20px] cursor-default" 
+      />
+
       {/* ─── CENTER: Centered Run / Debug Configuration Widget (New UI) ─── */}
-      <div className="flex items-center gap-1.5" data-tauri-drag-region="false">
+      <div 
+        className="flex items-center gap-1.5" 
+        onMouseDown={(e) => e.stopPropagation()} 
+        data-tauri-drag-region="false"
+      >
         {/* Target Selector Pill */}
         <div className="relative" ref={runConfigRef}>
           <button
             onClick={() => setIsRunConfigOpen(prev => !prev)}
-            className="flex items-center gap-1.5 px-2.5 py-1 bg-[#1E1F22] hover:bg-[#35373B] border border-[#393B40] rounded text-xs text-[#DFE1E5] transition-colors"
+            className="flex items-center gap-1.5 px-2.5 py-1 bg-[#222427] hover:bg-[#2B2D30] border border-[#323438] rounded text-xs text-[#DFE1E5] transition-colors cursor-pointer"
             title="Edit Run/Debug Configurations"
           >
-            <span className="w-1.5 h-1.5 rounded-full bg-[#59A869]" />
-            <span className="text-[11px] font-medium">{selectedRunTarget}</span>
+            {renderConfigIcon(activeConfig?.type)}
+            <span className="text-[11px] font-medium max-w-[140px] truncate">
+              {activeConfig ? activeConfig.name : selectedRunTarget}
+            </span>
             <ChevronDown size={11} className="text-[#868A91]" />
           </button>
 
           {isRunConfigOpen && (
-            <div className="absolute left-0 top-full mt-1 w-48 bg-[#2B2D30] border border-[#393B40] rounded-lg shadow-2xl py-1 z-50 text-xs">
+            <div className="absolute left-0 top-full mt-1 w-56 bg-[#222427] border border-[#323438] rounded-lg shadow-2xl py-1 z-50 text-xs">
+              {configurations.length > 0 ? (
+                configurations.map((cfg) => {
+                  const isSelected = cfg.id === (activeConfig?.id || activeConfigId);
+                  return (
+                    <div
+                      key={cfg.id}
+                      onClick={() => {
+                        onSelectConfig?.(cfg.id);
+                        setIsRunConfigOpen(false);
+                      }}
+                      className={`px-3 py-1.5 hover:bg-[#2B2D30] cursor-pointer flex items-center justify-between transition-colors ${
+                        isSelected ? 'text-white font-medium bg-[#2B2D30]/70' : 'text-[#DFE1E5]'
+                      }`}
+                    >
+                      <div className="flex items-center gap-2 truncate pr-2">
+                        {renderConfigIcon(cfg.type)}
+                        <span className="truncate">{cfg.name}</span>
+                      </div>
+                      {isSelected && <span className="text-[#59A869] text-xs">✓</span>}
+                    </div>
+                  );
+                })
+              ) : (
+                <>
+                  <div 
+                    onClick={() => { setSelectedRunTarget('Current File'); setIsRunConfigOpen(false); }}
+                    className="px-3 py-1.5 hover:bg-[#2B2D30] cursor-pointer flex items-center justify-between"
+                  >
+                    <span>Current File</span>
+                    {selectedRunTarget === 'Current File' && <span className="text-[#59A869]">✓</span>}
+                  </div>
+                  <div 
+                    onClick={() => { setSelectedRunTarget(`${projectName} (Release)`); setIsRunConfigOpen(false); }}
+                    className="px-3 py-1.5 hover:bg-[#2B2D30] cursor-pointer flex items-center justify-between"
+                  >
+                    <span>{projectName} (Release)</span>
+                    {selectedRunTarget.includes('Release') && <span className="text-[#59A869]">✓</span>}
+                  </div>
+                </>
+              )}
+              <div className="border-t border-[#323438] my-1" />
               <div 
-                onClick={() => { setSelectedRunTarget('Current File'); setIsRunConfigOpen(false); }}
-                className="px-3 py-1.5 hover:bg-[#35373B] cursor-pointer flex items-center justify-between"
+                onClick={() => { 
+                  if (onOpenEditConfigs) onOpenEditConfigs();
+                  else onSelectMenuAction('run.editConfig');
+                  setIsRunConfigOpen(false); 
+                }}
+                className="px-3 py-1.5 hover:bg-[#2B2D30] text-[#3574F0] cursor-pointer font-medium flex items-center justify-between"
               >
-                <span>Current File</span>
-                {selectedRunTarget === 'Current File' && <span className="text-[#59A869]">✓</span>}
-              </div>
-              <div 
-                onClick={() => { setSelectedRunTarget(`${projectName} (Release)`); setIsRunConfigOpen(false); }}
-                className="px-3 py-1.5 hover:bg-[#35373B] cursor-pointer flex items-center justify-between"
-              >
-                <span>{projectName} (Release)</span>
-                {selectedRunTarget.includes('Release') && <span className="text-[#59A869]">✓</span>}
-              </div>
-              <div className="border-t border-[#393B40] my-1" />
-              <div 
-                onClick={() => { onSelectMenuAction('run.editConfig'); setIsRunConfigOpen(false); }}
-                className="px-3 py-1.5 hover:bg-[#35373B] text-[#3574F0] cursor-pointer font-medium"
-              >
-                Edit Configurations...
+                <span>Edit Configurations...</span>
+                <span className="text-[10px] text-[#868A91]">Shift+Alt+F10</span>
               </div>
             </div>
           )}
@@ -386,7 +538,7 @@ export const TopBar: React.FC<TopBarProps> = ({
         <button 
           onClick={() => onSelectMenuAction('build.rebuild')}
           title="Build Project (Ctrl+F9)"
-          className="p-1.5 rounded hover:bg-[#35373B] text-[#DFE1E5] transition-colors"
+          className="p-1.5 rounded hover:bg-[#2B2D30] text-[#DFE1E5] transition-colors cursor-pointer"
         >
           <Hammer size={14} />
         </button>
@@ -395,8 +547,8 @@ export const TopBar: React.FC<TopBarProps> = ({
         <button 
           onClick={onRun}
           title="Run 'Desktop IDE' (Shift+F10)"
-          className={`p-1.5 rounded transition-colors flex items-center justify-center ${
-            isRunning ? 'opacity-50 cursor-not-allowed bg-[#35373B]' : 'hover:bg-[#35373B]'
+          className={`p-1.5 rounded transition-colors flex items-center justify-center cursor-pointer ${
+            isRunning ? 'opacity-50 cursor-not-allowed bg-[#2B2D30]' : 'hover:bg-[#2B2D30]'
           }`}
           disabled={isRunning}
         >
@@ -407,7 +559,7 @@ export const TopBar: React.FC<TopBarProps> = ({
         <button 
           onClick={() => onSelectMenuAction('run.debug')}
           title="Debug 'Desktop IDE' (Shift+F9)"
-          className="p-1.5 rounded hover:bg-[#35373B] text-[#59A869] transition-colors"
+          className="p-1.5 rounded hover:bg-[#2B2D30] text-[#59A869] transition-colors cursor-pointer"
         >
           <Bug size={15} />
         </button>
@@ -416,8 +568,8 @@ export const TopBar: React.FC<TopBarProps> = ({
         <button 
           onClick={onStop}
           title="Stop (Ctrl+F2)"
-          className={`p-1.5 rounded transition-colors ${
-            isRunning ? 'text-[#E05555] hover:bg-[#35373B]' : 'text-[#5A5D63] cursor-not-allowed'
+          className={`p-1.5 rounded transition-colors cursor-pointer ${
+            isRunning ? 'text-[#E05555] hover:bg-[#2B2D30]' : 'text-[#5A5D63] cursor-not-allowed'
           }`}
           disabled={!isRunning}
         >
@@ -428,19 +580,30 @@ export const TopBar: React.FC<TopBarProps> = ({
         <button 
           onClick={() => onSelectMenuAction('run.editConfig')}
           title="More Run/Debug Actions"
-          className="p-1.5 rounded hover:bg-[#35373B] text-[#868A91] hover:text-[#DFE1E5] transition-colors"
+          className="p-1.5 rounded hover:bg-[#2B2D30] text-[#868A91] hover:text-[#DFE1E5] transition-colors cursor-pointer"
         >
           <MoreVertical size={13} />
         </button>
       </div>
 
+      {/* Draggable spacer Center-Right */}
+      <div 
+        onMouseDown={handleMouseDownDrag}
+        onDoubleClick={handleToggleMaximize}
+        className="flex-1 h-full min-w-[20px] cursor-default" 
+      />
+
       {/* ─── RIGHT: Search Everywhere, Code With Me, Settings & Window Buttons ─── */}
-      <div className="flex items-center gap-1" data-tauri-drag-region="false">
+      <div 
+        className="flex items-center gap-1" 
+        onMouseDown={(e) => e.stopPropagation()} 
+        data-tauri-drag-region="false"
+      >
         {/* Search Everywhere (Double Shift) */}
         <button 
           onClick={onOpenSearch}
           title="Search Everywhere (Double Shift)"
-          className="p-1.5 rounded hover:bg-[#35373B] text-[#868A91] hover:text-[#DFE1E5] transition-colors"
+          className="p-1.5 rounded hover:bg-[#2B2D30] text-[#868A91] hover:text-[#DFE1E5] transition-colors cursor-pointer"
         >
           <Search size={14} />
         </button>
@@ -449,7 +612,7 @@ export const TopBar: React.FC<TopBarProps> = ({
         <button 
           onClick={() => onSelectMenuAction('view.aiAssistant')}
           title="AI Assistant (Alt+Enter)"
-          className="p-1.5 rounded hover:bg-[#35373B] text-[#9876AA] hover:text-[#B388FF] transition-colors"
+          className="p-1.5 rounded hover:bg-[#2B2D30] text-[#9876AA] hover:text-[#B388FF] transition-colors cursor-pointer"
         >
           <Sparkles size={14} />
         </button>
@@ -458,7 +621,7 @@ export const TopBar: React.FC<TopBarProps> = ({
         <button 
           onClick={() => onSelectMenuAction('file.settings')}
           title="Settings (Ctrl+Alt+S)"
-          className="p-1.5 rounded hover:bg-[#35373B] text-[#868A91] hover:text-[#DFE1E5] transition-colors"
+          className="p-1.5 rounded hover:bg-[#2B2D30] text-[#868A91] hover:text-[#DFE1E5] transition-colors cursor-pointer"
         >
           <Settings size={14} />
         </button>
@@ -467,7 +630,7 @@ export const TopBar: React.FC<TopBarProps> = ({
         <button 
           onClick={() => onSelectMenuAction('view.notifications')}
           title="Notifications"
-          className="p-1.5 rounded hover:bg-[#35373B] text-[#868A91] hover:text-[#DFE1E5] transition-colors"
+          className="p-1.5 rounded hover:bg-[#2B2D30] text-[#868A91] hover:text-[#DFE1E5] transition-colors cursor-pointer"
         >
           <Bell size={14} />
         </button>
@@ -477,14 +640,14 @@ export const TopBar: React.FC<TopBarProps> = ({
           <button 
             onClick={handleMinimize}
             title="Minimize"
-            className="w-11 h-10 flex items-center justify-center hover:bg-[#35373B] text-[#A1A3A8] hover:text-white transition-colors cursor-default"
+            className="w-11 h-10 flex items-center justify-center hover:bg-[#2B2D30] text-[#A1A3A8] hover:text-white transition-colors cursor-default"
           >
             <Minus size={13} />
           </button>
           <button 
             onClick={handleToggleMaximize}
             title={isMaximized ? "Restore Down" : "Maximize"}
-            className="w-11 h-10 flex items-center justify-center hover:bg-[#35373B] text-[#A1A3A8] hover:text-white transition-colors cursor-default"
+            className="w-11 h-10 flex items-center justify-center hover:bg-[#2B2D30] text-[#A1A3A8] hover:text-white transition-colors cursor-default"
           >
             {isMaximized ? (
               <Copy size={12} className="rotate-90" />

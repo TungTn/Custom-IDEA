@@ -21,8 +21,8 @@ body {
 
 /* Custom Scrollbar styled for IntelliJ */
 ::-webkit-scrollbar {
-  width: 10px;
-  height: 10px;
+  width: 8px;
+  height: 8px;
 }
 
 ::-webkit-scrollbar-track {
@@ -30,8 +30,8 @@ body {
 }
 
 ::-webkit-scrollbar-thumb {
-  background: #393B40;
-  border-radius: 5px;
+  background: #323438;
+  border-radius: 4px;
   border: 2px solid transparent;
   background-clip: content-box;
 }
@@ -45,15 +45,15 @@ body {
 /* Dockview theme customization for IntelliJ style */
 .dockview-theme-dark {
   --dv-paneview-active-outline-color: #3574F0;
-  --dv-tabs-and-actions-container-background-color: #2B2D30;
+  --dv-tabs-and-actions-container-background-color: #1E1F22;
   --dv-activegroup-visiblepanel-tab-background-color: #1E1F22;
-  --dv-inactivegroup-visiblepanel-tab-background-color: #2B2D30;
-  --dv-activegroup-hiddenpanel-tab-background-color: #2B2D30;
-  --dv-inactivegroup-hiddenpanel-tab-background-color: #2B2D30;
+  --dv-inactivegroup-visiblepanel-tab-background-color: #1E1F22;
+  --dv-activegroup-hiddenpanel-tab-background-color: #1E1F22;
+  --dv-inactivegroup-hiddenpanel-tab-background-color: #1E1F22;
   --dv-activegroup-visiblepanel-tab-color: #DFE1E5;
   --dv-inactivegroup-visiblepanel-tab-color: #868A91;
-  --dv-tab-divider-color: #393B40;
-  --dv-separator-border: #393B40;
+  --dv-tab-divider-color: #2B2D30;
+  --dv-separator-border: #2B2D30;
   --dv-drag-over-background-color: rgba(53, 116, 240, 0.2);
   --dv-drag-over-border-color: #3574F0;
 }
@@ -69,4 +69,15 @@ body {
 
 .dockview-theme-dark .dockview-tab.dockview-tab-active {
   border-bottom: 2px solid #3574F0;
+}
+
+/* Suppress Monaco VS Code Peek Views and widgets (IntelliJ uses dedicated Find Usages tool window & popups) */
+.monaco-editor .peekview-widget,
+.monaco-editor .zone-widget.peekview-widget,
+.monaco-editor .inline-reference-widget {
+  display: none !important;
+  visibility: hidden !important;
+  height: 0 !important;
+  pointer-events: none !important;
+  opacity: 0 !important;
 }

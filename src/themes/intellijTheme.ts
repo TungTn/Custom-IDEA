@@ -13,7 +13,17 @@ export const intellijNewUIDarkTheme: editor.IStandaloneThemeData = {
     { token: 'function', foreground: 'FFC66D' },
     { token: 'variable', foreground: '9876AA' },
     { token: 'operator', foreground: 'A9B7C6' },
-    { token: 'delimiter', foreground: 'A9B7C6' }
+    { token: 'delimiter', foreground: 'A9B7C6' },
+    { token: 'delimiter.bracket', foreground: 'A9B7C6' },
+    { token: 'tag', foreground: 'E8BF6A' },
+    { token: 'tag.id', foreground: '9876AA' },
+    { token: 'tag.class', foreground: '9876AA' },
+    { token: 'attribute.name', foreground: 'BABABA' },
+    { token: 'attribute.value', foreground: '6A8759' },
+    { token: 'keyword.directive', foreground: 'E8BF6A', fontStyle: 'bold' },
+    { token: 'metatag', foreground: 'BBB529' },
+    { token: 'identifier', foreground: 'DFE1E5' },
+    { token: 'constant', foreground: '9876AA' }
   ],
   colors: {
     'editor.background': '#1E1F22',

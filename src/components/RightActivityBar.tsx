@@ -77,9 +77,9 @@ export const RightActivityBar: React.FC<RightActivityBarProps> = ({
     <div className="flex z-20">
       {/* Sliding Content Drawer for active right panel */}
       {activeRightPanel && (
-        <div className="w-[320px] bg-[#26282B] border-l border-[#393B40] flex flex-col overflow-hidden text-xs select-none">
+        <div className="w-[320px] bg-[#1E1F22] border-l border-[#2B2D30] flex flex-col overflow-hidden text-xs select-none">
           {/* Header */}
-          <div className="h-8 bg-[#212225] border-b border-[#393B40] px-3 flex items-center justify-between text-[#DFE1E5]">
+          <div className="h-8 bg-[#1E1F22] border-b border-[#2B2D30] px-3 flex items-center justify-between text-[#DFE1E5]">
             <div className="flex items-center gap-2 font-semibold">
               {activeRightPanel === 'ai' && (
                 <>
@@ -110,7 +110,7 @@ export const RightActivityBar: React.FC<RightActivityBarProps> = ({
             <div className="flex items-center gap-1">
               <button 
                 onClick={() => onToggleRightPanel(null)}
-                className="p-1 hover:bg-[#35373B] text-[#868A91] hover:text-[#DFE1E5] rounded"
+                className="p-1 hover:bg-[#2B2D30] text-[#868A91] hover:text-[#DFE1E5] rounded cursor-pointer"
                 title="Hide Tool Window"
               >
                 <X size={13} />
@@ -288,7 +288,7 @@ export const RightActivityBar: React.FC<RightActivityBarProps> = ({
       )}
 
       {/* Right Vertical Stripe Bar (Width: 40px) */}
-      <div className="w-10 bg-[#2B2D30] border-l border-[#393B40] flex flex-col justify-between py-2 select-none">
+      <div className="w-10 bg-[#1E1F22] border-l border-[#2B2D30] flex flex-col justify-between py-2 select-none">
         {/* Top items */}
         <div className="flex flex-col items-center gap-1">
           {topItems.map((item) => {
@@ -299,15 +299,15 @@ export const RightActivityBar: React.FC<RightActivityBarProps> = ({
                 key={item.id}
                 onClick={() => onToggleRightPanel(isActive ? null : item.id)}
                 title={item.label}
-                className={`w-8 h-8 rounded flex items-center justify-center transition-colors relative ${
+                className={`w-8 h-8 rounded flex items-center justify-center transition-colors relative cursor-pointer ${
                   isActive 
-                    ? 'bg-[#35373B] text-white' 
-                    : `${item.color} hover:bg-[#35373B]/60`
+                    ? 'bg-[#2B2D30] text-white' 
+                    : `${item.color} hover:bg-[#2B2D30]/60`
                 }`}
               >
                 <Icon size={16} />
                 {isActive && (
-                  <div className="absolute right-0 top-1.5 bottom-1.5 w-[2px] bg-[#3574F0] rounded-l" />
+                  <div className="absolute right-0 top-1.5 bottom-1.5 w-[3px] bg-[#3574F0] rounded-l" />
                 )}
               </button>
             );
@@ -324,15 +324,15 @@ export const RightActivityBar: React.FC<RightActivityBarProps> = ({
                 key={item.id}
                 onClick={() => onToggleRightPanel(isActive ? null : item.id)}
                 title={item.label}
-                className={`w-8 h-8 rounded flex items-center justify-center transition-colors relative ${
+                className={`w-8 h-8 rounded flex items-center justify-center transition-colors relative cursor-pointer ${
                   isActive 
-                    ? 'bg-[#35373B] text-white' 
-                    : 'text-[#868A91] hover:text-[#DFE1E5] hover:bg-[#35373B]/60'
+                    ? 'bg-[#2B2D30] text-white' 
+                    : 'text-[#868A91] hover:text-[#DFE1E5] hover:bg-[#2B2D30]/60'
                 }`}
               >
                 <Icon size={16} />
                 {isActive && (
-                  <div className="absolute right-0 top-1.5 bottom-1.5 w-[2px] bg-[#3574F0] rounded-l" />
+                  <div className="absolute right-0 top-1.5 bottom-1.5 w-[3px] bg-[#3574F0] rounded-l" />
                 )}
               </button>
             );

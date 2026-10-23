@@ -24,4 +24,8 @@ log = "0.4"
 tauri = { version = "2.12.5", features = [] }
 tauri-plugin-log = "2"
 rfd = "0.15"
+portable-pty = "0.8"
+walkdir = "2.5"
+notify = "6.1.1"
+
 

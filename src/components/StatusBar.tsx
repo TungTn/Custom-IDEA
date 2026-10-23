@@ -37,7 +37,7 @@ export const StatusBar: React.FC<StatusBarProps> = ({
   }, []);
 
   return (
-    <div className="h-6 bg-[#2B2D30] border-t border-[#393B40] px-3 flex items-center justify-between text-[11px] text-[#868A91] select-none z-10">
+    <div className="h-6 bg-[#1E1F22] border-t border-[#2B2D30] px-3 flex items-center justify-between text-[11px] text-[#868A91] select-none z-10">
       {/* ─── Left items ─── */}
       <div className="flex items-center gap-3">
         {/* Git branch */}
@@ -51,7 +51,7 @@ export const StatusBar: React.FC<StatusBarProps> = ({
         </div>
 
         {/* Indexing status indicator */}
-        <div className="flex items-center gap-1.5 border-l border-[#393B40] pl-3">
+        <div className="flex items-center gap-1.5 border-l border-[#2B2D30] pl-3">
           {isIndexing ? (
             <span className="flex items-center gap-1.5 text-[#3574F0]">
               <RotateCw size={11} className="animate-spin" />
@@ -66,7 +66,7 @@ export const StatusBar: React.FC<StatusBarProps> = ({
         </div>
       </div>
 
-      {/* ─── Right items (Matching Image 2) ─── */}
+      {/* ─── Right items (Matching IntelliJ) ─── */}
       <div className="flex items-center gap-3 font-mono text-[11px]">
         {/* Time */}
         {currentTime && (
@@ -78,30 +78,30 @@ export const StatusBar: React.FC<StatusBarProps> = ({
         {/* Cursor Position */}
         <span 
           onClick={() => onShowToast?.('Cursor Position', `Line ${cursorLine}, Column ${cursorCol}`, 'info')}
-          className="border-l border-[#393B40] pl-3 hover:text-[#DFE1E5] cursor-pointer"
+          className="border-l border-[#2B2D30] pl-3 hover:text-[#DFE1E5] cursor-pointer"
         >
-          Ln {cursorLine}, Col {cursorCol}
+          {cursorLine}:{cursorCol}
         </span>
 
         {/* Indent Spaces */}
-        <span className="border-l border-[#393B40] pl-3 hover:text-[#DFE1E5] cursor-pointer font-sans">
-          2 spaces
+        <span className="border-l border-[#2B2D30] pl-3 hover:text-[#DFE1E5] cursor-pointer font-sans">
+          4 spaces
         </span>
 
         {/* Line Ending */}
-        <span className="border-l border-[#393B40] pl-3 hover:text-[#DFE1E5] cursor-pointer">
+        <span className="border-l border-[#2B2D30] pl-3 hover:text-[#DFE1E5] cursor-pointer">
           {lineEnding}
         </span>
 
         {/* File Encoding */}
-        <span className="border-l border-[#393B40] pl-3 hover:text-[#DFE1E5] cursor-pointer">
+        <span className="border-l border-[#2B2D30] pl-3 hover:text-[#DFE1E5] cursor-pointer">
           {encoding}
         </span>
 
         {/* Inspections Status */}
         <div 
           onClick={() => onShowToast?.('Code Analysis', 'No problems found in current file', 'success')}
-          className="border-l border-[#393B40] pl-3 flex items-center gap-1 text-[#59A869] hover:text-[#78D389] cursor-pointer"
+          className="border-l border-[#2B2D30] pl-3 flex items-center gap-1 text-[#59A869] hover:text-[#78D389] cursor-pointer"
           title="Analysis finished: No errors found"
         >
           <ShieldCheck size={12} />

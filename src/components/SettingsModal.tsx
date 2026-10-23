@@ -131,153 +131,6 @@ export interface InstalledPluginItem {
   rating?: number;
 }
 
-export const FALLBACK_MARKETPLACE_PLUGINS: MarketplacePlugin[] = [
-  {
-    id: 10080,
-    xmlId: 'izhangzhihao.rainbow.brackets',
-    name: 'Rainbow Brackets',
-    preview: 'Rainbow Brackets for IntelliJ based IDEs. Color-coded matching brackets, tags, indentation guides, and rainbow indent highlighting for maximum readability.',
-    downloads: 25118930,
-    pricingModel: 'FREEMIUM',
-    icon: '/files/10080/1165097/icon/default.svg',
-    rating: 4.58,
-    tags: ['Code Editing', 'Editor', 'Productivity', 'User Interface'],
-    vendor: { name: 'Zhihao Zhang', isVerified: true }
-  },
-  {
-    id: 9525,
-    xmlId: 'ru.adelf.idea.dotenv',
-    name: '.env files',
-    preview: 'Environment variables completion based on .env files with syntax highlighting and secret masking support.',
-    downloads: 31842677,
-    pricingModel: 'FREE',
-    icon: '/files/9525/1195805/icon/default.svg',
-    rating: 4.80,
-    tags: ['Framework', 'Configuration'],
-    vendor: { name: 'JetBrains s.r.o.', isVerified: true }
-  },
-  {
-    id: 11938,
-    xmlId: 'com.markskelton.one-dark-theme',
-    name: 'One Dark Theme',
-    preview: 'Delicious One Dark theme for JetBrains IDEs based on Atom One Dark syntax palette and modern IntelliJ UI.',
-    downloads: 11787461,
-    pricingModel: 'FREE',
-    icon: '/files/11938/1091393/icon/default.svg',
-    rating: 4.84,
-    tags: ['Theme', 'User Interface'],
-    vendor: { name: 'Mark Skelton', isVerified: false }
-  },
-  {
-    id: 8183,
-    xmlId: 'org.rust.lang',
-    name: 'Rust',
-    preview: 'Rust language support: type inference, smart completion, refactorings, navigation, macro expansion, and Cargo integration.',
-    downloads: 15400000,
-    pricingModel: 'FREE',
-    icon: '/files/8183/826723/icon/default.svg',
-    rating: 4.89,
-    tags: ['Languages', 'Rust', 'Build Tools'],
-    vendor: { name: 'JetBrains s.r.o.', isVerified: true }
-  },
-  {
-    id: 7499,
-    xmlId: 'GitToolBox',
-    name: 'GitToolBox',
-    preview: 'Inline git blame annotations, ahead/behind status on status bar, branch cleanup notifications, and auto-fetch.',
-    downloads: 9820000,
-    pricingModel: 'FREEMIUM',
-    icon: '/files/7499/1195820/icon/default.svg',
-    rating: 4.72,
-    tags: ['VCS', 'Git', 'Productivity'],
-    vendor: { name: 'Tomasz S.', isVerified: true }
-  },
-  {
-    id: 17718,
-    xmlId: 'com.github.copilot',
-    name: 'GitHub Copilot',
-    preview: 'AI pair programmer that suggests code and entire functions in real-time right from your editor.',
-    downloads: 18450000,
-    pricingModel: 'PAID',
-    icon: '/files/17718/1204011/icon/default.svg',
-    rating: 4.41,
-    tags: ['AI', 'Completion', 'Code Editing'],
-    vendor: { name: 'GitHub', isVerified: true }
-  },
-  {
-    id: 6317,
-    xmlId: 'Lombok Plugin',
-    name: 'Lombok',
-    preview: 'A plugin that adds support to IntelliJ IDEA for Project Lombok annotations like @Getter, @Setter, @Builder, etc.',
-    downloads: 29500000,
-    pricingModel: 'FREE',
-    icon: '/files/6317/6317_icon.png',
-    rating: 4.79,
-    tags: ['Java', 'Tools'],
-    vendor: { name: 'Michail Plushnikov', isVerified: true }
-  },
-  {
-    id: 10057,
-    xmlId: 'com.mallowigi',
-    name: 'Atom Material Icons',
-    preview: 'Comprehensive file and folder icon theme for JetBrains IDEs designed to make file navigation intuitive and vibrant.',
-    downloads: 12100000,
-    pricingModel: 'FREE',
-    icon: '/files/10057/icon.svg',
-    rating: 4.88,
-    tags: ['UI', 'Icons', 'Theme'],
-    vendor: { name: 'Elior Boukhobza', isVerified: true }
-  },
-  {
-    id: 164,
-    xmlId: 'IdeaVIM',
-    name: 'IdeaVim',
-    preview: 'Vim emulation plugin for IntelliJ-based IDEs supporting motions, text objects, visual mode, and macros.',
-    downloads: 10400000,
-    pricingModel: 'FREE',
-    icon: '/files/164/icon.png',
-    rating: 4.67,
-    tags: ['Editor', 'Keymap'],
-    vendor: { name: 'JetBrains s.r.o.', isVerified: true }
-  },
-  {
-    id: 7724,
-    xmlId: 'Docker',
-    name: 'Docker',
-    preview: 'Integration with Docker containers and Docker Compose. Inspect logs, terminal, images, and container stats.',
-    downloads: 16200000,
-    pricingModel: 'FREE',
-    icon: '/files/7724/icon.svg',
-    rating: 4.62,
-    tags: ['Deployment', 'DevOps'],
-    vendor: { name: 'JetBrains s.r.o.', isVerified: true }
-  },
-  {
-    id: 13710,
-    xmlId: 'com.intellij.zh',
-    name: 'Chinese (Simplified) Language Pack / 中文语言包',
-    preview: 'The Chinese Language Pack localizes the UI of IntelliJ-based IDEs into Chinese.',
-    downloads: 40104882,
-    pricingModel: 'FREE',
-    icon: '/files/13710/575323/icon/default.svg',
-    rating: 4.2,
-    tags: ['Language Pack'],
-    vendor: { name: 'JetBrains s.r.o.', isVerified: true }
-  },
-  {
-    id: 4230,
-    xmlId: 'BashSupport',
-    name: 'BashSupport',
-    preview: 'Bash language support for IntelliJ IDEs: syntax highlighting, inspections, refactoring, and run configurations.',
-    downloads: 14498979,
-    pricingModel: 'FREE',
-    icon: '/files/4230/92719/icon/default.svg',
-    rating: 4.7,
-    tags: ['Programming Language'],
-    vendor: { name: 'Joachim Ansorg', isVerified: true }
-  }
-];
-
 const SETTINGS_TREE: TreeItem[] = [
   {
     id: 'appearance-behavior',
@@ -385,6 +238,18 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   onSaveSettings,
   onShowToast,
 }) => {
+  // Close on Escape key
+  useEffect(() => {
+    if (!isOpen) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        onClose();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isOpen, onClose]);
+
   const [selectedId, setSelectedId] = useState<string>('appearance-behavior');
   const [expandedNodes, setExpandedNodes] = useState<Record<string, boolean>>({
     'appearance-behavior': true,
@@ -589,6 +454,47 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     }));
   }, [settings]);
 
+  // Helper to map and sanitize JetBrains API plugins
+  const mapPluginItem = (item: any): MarketplacePlugin => {
+    const isPaid = item.paid === true || item.pricingModel === 'PAID';
+    const isFreemium = item.pricingModel === 'FREEMIUM';
+    const pricingModel = isFreemium ? 'FREEMIUM' : isPaid ? 'PAID' : 'FREE';
+    const vendorName = item.vendorInfo?.name || item.vendor?.name || item.organization || 'JetBrains s.r.o.';
+    const isVerified = item.vendorInfo?.isVerified ?? item.vendor?.isVerified ?? true;
+    const previewText = item.preview || item.description?.replace(/<[^>]+>/g, '').slice(0, 240) || `${item.name} plugin for IntelliJ IDEA.`;
+
+    let tags: string[] = [];
+    if (Array.isArray(item.tags)) {
+      tags = item.tags.map((t: any) => typeof t === 'string' ? t : t?.name || '');
+    } else if (typeof item.tags === 'string') {
+      tags = [item.tags];
+    } else {
+      tags = ['Tools'];
+    }
+
+    return {
+      id: item.id,
+      xmlId: item.xmlId || String(item.id),
+      name: item.name,
+      preview: previewText,
+      downloads: item.downloads || 0,
+      pricingModel,
+      icon: item.icon,
+      rating: typeof item.rating === 'number' ? item.rating : undefined,
+      tags,
+      vendor: {
+        name: vendorName,
+        isVerified,
+      },
+    };
+  };
+
+  const getPluginIconUrl = (icon?: string) => {
+    if (!icon) return '';
+    if (icon.startsWith('http')) return icon;
+    return `https://plugins.jetbrains.com${icon.startsWith('/') ? '' : '/'}${icon}`;
+  };
+
   // Fetch Real JetBrains Marketplace Plugins with triple resilience
   const fetchMarketplace = async (query = '') => {
     setIsMarketplaceLoading(true);
@@ -596,9 +502,15 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 
     // 1. Primary: invoke Tauri Rust backend
     try {
-      const data: any = await invoke('fetch_marketplace_plugins', { query, max: 25 });
-      if (data && data.plugins && Array.isArray(data.plugins) && data.plugins.length > 0) {
-        results = data.plugins;
+      const data: any = await invoke('fetch_marketplace_plugins', { query: query.trim(), max: 20 });
+      let list: any[] = [];
+      if (Array.isArray(data)) {
+        list = data;
+      } else if (data && Array.isArray(data.plugins)) {
+        list = data.plugins;
+      }
+      if (list.length > 0) {
+        results = list.map(mapPluginItem);
       }
     } catch (err) {
       console.warn('Tauri invoke fetch_marketplace_plugins:', err);
@@ -608,32 +520,23 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     if (results.length === 0) {
       try {
         const url = query.trim() 
-          ? `https://plugins.jetbrains.com/api/searchPlugins?query=${encodeURIComponent(query.trim())}&max=25`
-          : `https://plugins.jetbrains.com/api/searchPlugins?max=25`;
+          ? `https://plugins.jetbrains.com/api/search/plugins?build=IU-241.14494.240&search=${encodeURIComponent(query.trim())}&max=20`
+          : `https://plugins.jetbrains.com/api/search/plugins?build=IU-241.14494.240&max=20`;
         const res = await fetch(url);
         if (res.ok) {
           const json = await res.json();
-          if (json && json.plugins && Array.isArray(json.plugins) && json.plugins.length > 0) {
-            results = json.plugins;
+          let list: any[] = [];
+          if (Array.isArray(json)) {
+            list = json;
+          } else if (json && Array.isArray(json.plugins)) {
+            list = json.plugins;
+          }
+          if (list.length > 0) {
+            results = list.map(mapPluginItem);
           }
         }
       } catch (fetchErr) {
         console.warn('Direct fetch to plugins.jetbrains.com:', fetchErr);
-      }
-    }
-
-    // 3. Tertiary: Curated top JetBrains Marketplace catalog fallback
-    if (results.length === 0) {
-      if (query.trim()) {
-        const qLower = query.trim().toLowerCase();
-        results = FALLBACK_MARKETPLACE_PLUGINS.filter(p => 
-          p.name.toLowerCase().includes(qLower) || 
-          p.preview.toLowerCase().includes(qLower) ||
-          p.vendor?.name.toLowerCase().includes(qLower) ||
-          (Array.isArray(p.tags) && p.tags.some(t => t.toLowerCase().includes(qLower)))
-        );
-      } else {
-        results = FALLBACK_MARKETPLACE_PLUGINS;
       }
     }
 
@@ -644,9 +547,53 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
         const match = results.find(p => p.id === prev.id);
         return match || results[0];
       });
+    } else {
+      setSelectedMarketplacePlugin(null);
     }
     setIsMarketplaceLoading(false);
   };
+
+  // Rich details fetch for selected plugin if it lacks icon or preview
+  useEffect(() => {
+    if (!selectedMarketplacePlugin?.id) return;
+    const pluginId = selectedMarketplacePlugin.id;
+
+    let isMounted = true;
+    const enrichDetails = async () => {
+      try {
+        let detailData: any = null;
+        try {
+          detailData = await invoke('fetch_plugin_details', { id: pluginId });
+        } catch {
+          const res = await fetch(`https://plugins.jetbrains.com/api/plugins/${pluginId}`);
+          if (res.ok) detailData = await res.json();
+        }
+
+        if (isMounted && detailData && detailData.id === pluginId) {
+          setSelectedMarketplacePlugin(curr => {
+            if (!curr || curr.id !== pluginId) return curr;
+            return {
+              ...curr,
+              icon: detailData.icon || curr.icon,
+              preview: detailData.preview || (detailData.description ? detailData.description.replace(/<[^>]+>/g, '') : curr.preview),
+              downloads: detailData.downloads || curr.downloads,
+              rating: detailData.rating ?? curr.rating,
+              pricingModel: detailData.pricingModel || curr.pricingModel,
+            };
+          });
+
+          if (detailData.icon) {
+            setMarketplacePlugins(prev => prev.map(p => p.id === pluginId ? { ...p, icon: detailData.icon } : p));
+          }
+        }
+      } catch (err) {
+        // Ignore details fetch error
+      }
+    };
+
+    enrichDetails();
+    return () => { isMounted = false; };
+  }, [selectedMarketplacePlugin?.id]);
 
   // Trigger marketplace fetch when opening plugins tab
   useEffect(() => {
@@ -2220,7 +2167,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                                 <div className="w-9 h-9 rounded-md bg-[#1E1F22] border border-[#393B40] flex items-center justify-center flex-shrink-0 overflow-hidden">
                                   {plugin.icon ? (
                                     <img 
-                                      src={`https://plugins.jetbrains.com${plugin.icon}`} 
+                                      src={getPluginIconUrl(plugin.icon)} 
                                       alt={plugin.name}
                                       className="w-full h-full object-contain p-1"
                                       onError={(e) => {
@@ -2343,7 +2290,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                           <div className="w-14 h-14 rounded-lg bg-[#1E1F22] border border-[#393B40] flex items-center justify-center flex-shrink-0 overflow-hidden">
                             {selectedMarketplacePlugin.icon ? (
                               <img 
-                                src={`https://plugins.jetbrains.com${selectedMarketplacePlugin.icon}`} 
+                                src={getPluginIconUrl(selectedMarketplacePlugin.icon)} 
                                 alt={selectedMarketplacePlugin.name}
                                 className="w-full h-full object-contain p-1.5"
                               />

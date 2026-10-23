@@ -1,10 +1,12 @@
-import React, { useState } from 'react';
-import { GitBranch, Plus, Check, X, ArrowRight } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { GitBranch, Plus, Check, X, ArrowRight, Loader2, AlertCircle } from 'lucide-react';
+import { invoke } from '@tauri-apps/api/core';
 
 interface GitBranchesModalProps {
   isOpen: boolean;
   onClose: () => void;
   currentBranch: string;
+  projectPath?: string;
   onSwitchBranch: (branch: string) => void;
   onCreateBranch: (branch: string) => void;
 }
@@ -13,25 +15,83 @@ export const GitBranchesModal: React.FC<GitBranchesModalProps> = ({
   isOpen,
   onClose,
   currentBranch,
+  projectPath = 'D:\\IDE',
   onSwitchBranch,
   onCreateBranch,
 }) => {
-  const [branches, setBranches] = useState(['main', 'dev', 'feature/intellij-ui']);
+  const [branches, setBranches] = useState<string[]>(['main', 'dev', 'feature/intellij-ui']);
   const [isCreating, setIsCreating] = useState(false);
   const [newBranchName, setNewBranchName] = useState('');
+  const [isLoading, setIsLoading] = useState(false);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    setErrorMsg(null);
+    setIsLoading(true);
+
+    const fetchBranches = async () => {
+      try {
+        if (typeof window !== 'undefined' && ('__TAURI_INTERNALS__' in window || '__TAURI__' in window)) {
+          const list = await invoke<string[]>('git_list_branches', { projectPath });
+          if (Array.isArray(list) && list.length > 0) {
+            setBranches(list);
+          }
+        }
+      } catch (err) {
+        console.warn('Failed to load branches:', err);
+      } finally {
+        setIsLoading(false);
+      }
+    };
+
+    fetchBranches();
+  }, [isOpen, projectPath]);
 
   if (!isOpen) return null;
 
-  const handleCreate = (e: React.FormEvent) => {
+  const handleCreate = async (e: React.FormEvent) => {
     e.preventDefault();
     const trimmed = newBranchName.trim();
-    if (trimmed && !branches.includes(trimmed)) {
-      setBranches([...branches, trimmed]);
+    if (!trimmed) return;
+    if (branches.includes(trimmed)) {
+      setErrorMsg(`Branch "${trimmed}" already exists.`);
+      return;
+    }
+
+    try {
+      if (typeof window !== 'undefined' && ('__TAURI_INTERNALS__' in window || '__TAURI__' in window)) {
+        await invoke('git_checkout_branch', {
+          projectPath,
+          branch: trimmed,
+          createNew: true,
+        });
+      }
+      setBranches(prev => [...prev, trimmed]);
       onCreateBranch(trimmed);
       onSwitchBranch(trimmed);
       setIsCreating(false);
       setNewBranchName('');
       onClose();
+    } catch (err) {
+      setErrorMsg(String(err));
+    }
+  };
+
+  const handleCheckout = async (targetBranch: string) => {
+    if (targetBranch === currentBranch) return;
+    try {
+      if (typeof window !== 'undefined' && ('__TAURI_INTERNALS__' in window || '__TAURI__' in window)) {
+        await invoke('git_checkout_branch', {
+          projectPath,
+          branch: targetBranch,
+          createNew: false,
+        });
+      }
+      onSwitchBranch(targetBranch);
+      onClose();
+    } catch (err) {
+      setErrorMsg(String(err));
     }
   };
 
@@ -92,18 +152,26 @@ export const GitBranchesModal: React.FC<GitBranchesModalProps> = ({
           </form>
         )}
 
+        {/* Error message */}
+        {errorMsg && (
+          <div className="mb-3 px-2.5 py-1.5 bg-[#401E22] border border-[#E05555]/40 rounded text-xs text-[#E05555] flex items-center gap-1.5">
+            <AlertCircle size={13} className="shrink-0" />
+            <span className="truncate">{errorMsg}</span>
+          </div>
+        )}
+
         {/* Branches List */}
         <div className="space-y-1 max-h-56 overflow-y-auto">
-          <div className="text-[11px] text-[#868A91] font-semibold uppercase px-1 mb-1">Local Branches</div>
+          <div className="flex items-center justify-between text-[11px] text-[#868A91] font-semibold uppercase px-1 mb-1">
+            <span>Local Branches</span>
+            {isLoading && <Loader2 size={12} className="animate-spin text-[#868A91]" />}
+          </div>
           {branches.map((b) => {
             const isCurrent = b === currentBranch;
             return (
               <div
                 key={b}
-                onClick={() => {
-                  onSwitchBranch(b);
-                  onClose();
-                }}
+                onClick={() => handleCheckout(b)}
                 className={`flex items-center justify-between px-2.5 py-1.5 rounded cursor-pointer text-xs transition-colors ${
                   isCurrent 
                     ? 'bg-[#2E436E] text-white font-medium' 

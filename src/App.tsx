@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { invoke } from '@tauri-apps/api/core';
+import { listen } from '@tauri-apps/api/event';
 import { TopBar, RecentProjectItem } from './components/TopBar';
 import { ActivityBar } from './components/ActivityBar';
 import { ProjectTree } from './components/ProjectTree';
@@ -7,6 +8,7 @@ import { CodeEditor, CodeEditorHandle } from './components/CodeEditor';
 import { TerminalPanel } from './components/TerminalPanel';
 import { RunConsolePanel } from './components/RunConsolePanel';
 import { StatusBar } from './components/StatusBar';
+import { BottomToolWindowBar } from './components/BottomToolWindowBar';
 import { SearchEverywhereModal } from './components/SearchEverywhereModal';
 import { AboutModal } from './components/AboutModal';
 import { NewFileModal } from './components/NewFileModal';
@@ -25,8 +27,10 @@ import { RepairIdeModal } from './components/RepairIdeModal';
 import { ToastContainer, ToastItem } from './components/ToastContainer';
 import { OpenProjectDialog } from './components/OpenProjectDialog';
 import { RightActivityBar } from './components/RightActivityBar';
-import { FileNode, OpenTab, RunLog, ActionItem } from './types';
-import { Terminal, PlaySquare, AlertCircle } from 'lucide-react';
+import { FindUsagesPanel } from './components/FindUsagesPanel';
+import { ShowUsagesPopup } from './components/ShowUsagesPopup';
+import { FileNode, OpenTab, RunLog, ActionItem, UsageOccurrence, FindUsagesResult, RunConfiguration } from './types';
+import { Terminal, PlaySquare, AlertCircle, Search } from 'lucide-react';
 
 const initialFiles: FileNode[] = [
   {
@@ -185,19 +189,71 @@ Một trình biên soạn mã nguồn và IDE phong cách JetBrains IntelliJ IDE
   }
 ];
 
+export const detectLanguage = (fileName: string): string => {
+  const lower = fileName.toLowerCase();
+  if (lower.endsWith('.vue')) return 'vue';
+  if (lower.endsWith('.svelte')) return 'svelte';
+  if (lower.endsWith('.ts') || lower.endsWith('.tsx')) return 'typescript';
+  if (lower.endsWith('.js') || lower.endsWith('.jsx') || lower.endsWith('.mjs') || lower.endsWith('.cjs')) return 'javascript';
+  if (lower.endsWith('.json')) return 'json';
+  if (lower.endsWith('.html') || lower.endsWith('.htm')) return 'html';
+  if (lower.endsWith('.css')) return 'css';
+  if (lower.endsWith('.scss') || lower.endsWith('.sass')) return 'scss';
+  if (lower.endsWith('.less')) return 'less';
+  if (lower.endsWith('.yaml') || lower.endsWith('.yml')) return 'yaml';
+  if (lower.endsWith('.md') || lower.endsWith('.markdown')) return 'markdown';
+  if (lower.endsWith('.rs')) return 'rust';
+  if (lower.endsWith('.py')) return 'python';
+  if (lower.endsWith('.go')) return 'go';
+  if (lower.endsWith('.java')) return 'java';
+  if (lower.endsWith('.kt') || lower.endsWith('.kts')) return 'kotlin';
+  if (lower.endsWith('.sql')) return 'sql';
+  if (lower.endsWith('.xml') || lower.endsWith('.svg')) return 'xml';
+  if (lower.endsWith('.env') || lower.endsWith('.toml') || lower.endsWith('.ini')) return 'ini';
+  if (lower.endsWith('.sh') || lower.endsWith('.bash') || lower.endsWith('.ps1')) return 'shell';
+  if (lower.endsWith('.cpp') || lower.endsWith('.c') || lower.endsWith('.h') || lower.endsWith('.hpp')) return 'cpp';
+  return 'plaintext';
+};
+
 export const App: React.FC = () => {
   const [files, setFiles] = useState<FileNode[]>(initialFiles);
   const [activeSideTab, setActiveSideTab] = useState('project');
   const [isSideBarOpen, setIsSideBarOpen] = useState(true);
   const [activeRightPanel, setActiveRightPanel] = useState<string | null>(null);
-  const [sideBarWidth] = useState(260);
+  const [sideBarWidth, setSideBarWidth] = useState(260);
 
-  const [bottomTab, setBottomTab] = useState<'run' | 'terminal' | 'problems'>('run');
+  const [bottomTab, setBottomTab] = useState<'run' | 'terminal' | 'problems' | 'find'>('run');
   const [isBottomOpen, setIsBottomOpen] = useState(true);
-  const [bottomHeight] = useState(220);
+  const [bottomHeight, setBottomHeight] = useState(240);
 
-  // Git branch
+  // Find Usages states (Authentic IntelliJ IDEA)
+  const [findResult, setFindResult] = useState<FindUsagesResult | null>(null);
+  const [showUsagesResult, setShowUsagesResult] = useState<FindUsagesResult | null>(null);
+  const [renameTarget, setRenameTarget] = useState<{ type: 'file' | 'symbol'; name: string }>({
+    type: 'file',
+    name: '',
+  });
+
+  // Git branch & status
   const [currentBranch, setCurrentBranch] = useState('main');
+
+  const refreshGitStatus = useCallback(async () => {
+    const projectDir = files[0]?.path || 'D:\\IDE';
+    try {
+      if (typeof window !== 'undefined' && ('__TAURI_INTERNALS__' in window || '__TAURI__' in window)) {
+        const res = await invoke<{ branch: string; changes: any[]; is_clean: boolean }>('git_get_status', { projectPath: projectDir });
+        if (res && res.branch) {
+          setCurrentBranch(res.branch);
+        }
+      }
+    } catch (e) {
+      // ignore
+    }
+  }, [files]);
+
+  useEffect(() => {
+    refreshGitStatus();
+  }, [refreshGitStatus]);
 
   // Ide Settings
   const [settings, setSettings] = useState<IdeSettings>(() => {
@@ -208,7 +264,7 @@ export const App: React.FC = () => {
           theme: 'intellij-new-ui-dark',
           fontSize: 13,
           tabSize: 4,
-          minimap: true,
+          minimap: false,
           lineNumbers: true,
           wordWrap: false,
           fontFamily: 'JetBrains Mono',
@@ -247,7 +303,7 @@ export const App: React.FC = () => {
       theme: 'intellij-new-ui-dark',
       fontSize: 13,
       tabSize: 4,
-      minimap: true,
+      minimap: false,
       lineNumbers: true,
       wordWrap: false,
       fontFamily: 'JetBrains Mono',
@@ -300,6 +356,19 @@ export const App: React.FC = () => {
   ]);
   const [activeTabId, setActiveTabId] = useState<string | null>('main-rs');
 
+  // Synchronize tabs language on mount in case any tab had plaintext fallback
+  useEffect(() => {
+    setTabs(prev => prev.map(t => {
+      if (!t.language || t.language === 'plaintext') {
+        const detected = detectLanguage(t.title);
+        if (detected !== 'plaintext') {
+          return { ...t, language: detected };
+        }
+      }
+      return t;
+    }));
+  }, []);
+
   // Code editor ref for direct actions
   const codeEditorRef = useRef<CodeEditorHandle>(null);
 
@@ -324,6 +393,18 @@ export const App: React.FC = () => {
   const [isRenameOpen, setIsRenameOpen] = useState(false);
   const [isTipOpen, setIsTipOpen] = useState(false);
   const [isRunConfigOpen, setIsRunConfigOpen] = useState(false);
+  const [runConfigurations, setRunConfigurations] = useState<RunConfiguration[]>(() => {
+    try {
+      const saved = localStorage.getItem('intellij_run_configurations');
+      if (saved) return JSON.parse(saved);
+    } catch (e) {
+      console.warn('Failed to parse saved run configurations:', e);
+    }
+    return [];
+  });
+  const [activeConfigId, setActiveConfigId] = useState<string | null>(() => {
+    return localStorage.getItem('intellij_active_run_config_id') || null;
+  });
   const [isNewProjectOpen, setIsNewProjectOpen] = useState(false);
   const [isProjectStructureOpen, setIsProjectStructureOpen] = useState(false);
   const [isInvalidateCachesOpen, setIsInvalidateCachesOpen] = useState(false);
@@ -337,12 +418,16 @@ export const App: React.FC = () => {
 
   const addToast = useCallback((title: string, message?: string, type: 'info' | 'success' | 'warning' | 'error' = 'info') => {
     const id = String(Date.now() + Math.random());
-    setToasts(prev => [...prev, { id, title, message, type }]);
+    setToasts(prev => {
+      // De-duplicate identical toasts and cap at 3 max visible
+      const filtered = prev.filter(t => t.title !== title);
+      return [...filtered, { id, title, message, type }].slice(-3);
+    });
 
-    // Auto dismiss after 3.5 seconds
+    // Auto dismiss after 2.8 seconds
     setTimeout(() => {
       setToasts(prev => prev.filter(t => t.id !== id));
-    }, 3500);
+    }, 2800);
   }, []);
 
   const dismissToast = (id: string) => {
@@ -376,10 +461,112 @@ export const App: React.FC = () => {
     });
   }, []);
 
+  const detectDefaultConfigurations = useCallback((rootNode: FileNode, existingConfigs: RunConfiguration[]): RunConfiguration[] => {
+    const rootPath = rootNode.path || 'D:\\IDE';
+    const childNames = rootNode.children ? rootNode.children.map(c => c.name.toLowerCase()) : [];
+    const rootName = rootNode.name || 'Application';
+
+    const hasExistingForPath = existingConfigs.some(c => c.workingDirectory === rootPath);
+    if (hasExistingForPath) return existingConfigs;
+
+    const generated: RunConfiguration[] = [];
+
+    if (childNames.includes('pom.xml')) {
+      generated.push({
+        id: `cfg-spring-${Date.now()}`,
+        name: `${rootName} (Spring Boot)`,
+        type: 'spring-boot',
+        command: 'mvn.cmd',
+        args: ['spring-boot:run'],
+        workingDirectory: rootPath,
+        envVars: { SPRING_PROFILES_ACTIVE: 'dev' },
+        isDefault: true,
+      });
+      generated.push({
+        id: `cfg-mvn-build-${Date.now() + 1}`,
+        name: `${rootName} (Maven Package)`,
+        type: 'maven',
+        command: 'mvn.cmd',
+        args: ['clean', 'package', '-DskipTests'],
+        workingDirectory: rootPath,
+      });
+    } else if (childNames.includes('build.gradle') || childNames.includes('build.gradle.kts')) {
+      generated.push({
+        id: `cfg-gradle-${Date.now()}`,
+        name: `${rootName} (Gradle bootRun)`,
+        type: 'gradle',
+        command: 'gradlew.bat',
+        args: ['bootRun'],
+        workingDirectory: rootPath,
+        isDefault: true,
+      });
+    } else if (childNames.includes('cargo.toml')) {
+      generated.push({
+        id: `cfg-cargo-${Date.now()}`,
+        name: `${rootName} (Cargo Run)`,
+        type: 'cargo',
+        command: 'cargo',
+        args: ['run'],
+        workingDirectory: rootPath,
+        isDefault: true,
+      });
+    } else if (childNames.includes('package.json')) {
+      generated.push({
+        id: `cfg-npm-${Date.now()}`,
+        name: `${rootName} (npm run dev)`,
+        type: 'npm',
+        command: 'npm',
+        args: ['run', 'dev'],
+        workingDirectory: rootPath,
+        isDefault: true,
+      });
+    } else if (childNames.includes('requirements.txt') || childNames.includes('main.py')) {
+      generated.push({
+        id: `cfg-python-${Date.now()}`,
+        name: `${rootName} (Python main.py)`,
+        type: 'python',
+        command: 'python',
+        args: ['main.py'],
+        workingDirectory: rootPath,
+        isDefault: true,
+      });
+    }
+
+    if (generated.length === 0) {
+      generated.push({
+        id: `cfg-default-${Date.now()}`,
+        name: `${rootName} (Check)`,
+        type: 'cargo',
+        command: 'cargo',
+        args: ['check', '--all-targets'],
+        workingDirectory: rootPath,
+        isDefault: true,
+      });
+    }
+
+    const merged = [...existingConfigs, ...generated];
+    try {
+      localStorage.setItem('intellij_run_configurations', JSON.stringify(merged));
+    } catch (e) {
+      console.warn(e);
+    }
+    return merged;
+  }, []);
+
   const loadProjectIntoIde = useCallback((tree: FileNode) => {
     setProjectName(tree.name);
     setFiles([tree]);
     saveRecentProject(tree.name, tree.path);
+
+    setRunConfigurations(prev => {
+      const detected = detectDefaultConfigurations(tree, prev);
+      const defaultCfg = detected.find(c => c.workingDirectory === tree.path && c.isDefault) || detected[0];
+      if (defaultCfg) {
+        setActiveConfigId(defaultCfg.id);
+        localStorage.setItem('intellij_active_run_config_id', defaultCfg.id);
+      }
+      return detected;
+    });
 
     // Recursively find first openable file
     const findFirstFile = (node: FileNode): FileNode | null => {
@@ -400,7 +587,7 @@ export const App: React.FC = () => {
         title: first.name,
         path: first.path,
         content: first.content || '',
-        language: first.language || 'plaintext',
+        language: (first.language && first.language !== 'plaintext') ? first.language : detectLanguage(first.name),
         isDirty: false,
       }]);
       setActiveTabId(first.id);
@@ -410,7 +597,21 @@ export const App: React.FC = () => {
     }
 
     addToast('Project Opened', `Loaded project [${tree.name}] from ${tree.path}`, 'success');
-  }, [saveRecentProject, addToast]);
+  }, [saveRecentProject, addToast, detectDefaultConfigurations]);
+
+  useEffect(() => {
+    if (files[0] && runConfigurations.length === 0) {
+      setRunConfigurations(prev => {
+        const detected = detectDefaultConfigurations(files[0], prev);
+        if (detected.length > 0) {
+          const defaultCfg = detected.find(c => c.isDefault) || detected[0];
+          setActiveConfigId(defaultCfg.id);
+          localStorage.setItem('intellij_active_run_config_id', defaultCfg.id);
+        }
+        return detected;
+      });
+    }
+  }, [files, detectDefaultConfigurations, runConfigurations.length]);
 
   const handleOpenNewWindow = useCallback(async (tree: FileNode) => {
     try {
@@ -482,129 +683,336 @@ export const App: React.FC = () => {
     }
   }, [requestOpenProject, addToast]);
 
-  // Automatically open project if opened via query parameter (e.g. from New Window)
+  // Automatically open project if opened via new window initial project or query parameter
   useEffect(() => {
     if (typeof window === 'undefined') return;
-    const params = new URLSearchParams(window.location.search);
-    const openPath = params.get('openPath');
-    if (openPath && ('__TAURI_INTERNALS__' in window || '__TAURI__' in window)) {
-      invoke<FileNode>('open_project_by_path', { projectPath: openPath })
-        .then(tree => {
+    const isTauri = ('__TAURI_INTERNALS__' in window || '__TAURI__' in window);
+    
+    const resolveAndLoadProject = async () => {
+      let targetPath: string | null = null;
+      if (isTauri) {
+        try {
+          targetPath = await invoke<string | null>('get_window_initial_project');
+        } catch (e) {
+          console.warn('Failed to get initial project for window:', e);
+        }
+      }
+
+      if (!targetPath) {
+        const params = new URLSearchParams(window.location.search);
+        const allPaths = params.getAll('openPath');
+        if (allPaths.length > 0) {
+          targetPath = allPaths[allPaths.length - 1];
+        }
+      }
+
+      if (targetPath && isTauri) {
+        try {
+          const tree = await invoke<FileNode>('open_project_by_path', { projectPath: targetPath });
           if (tree) {
             loadProjectIntoIde(tree);
           }
-        })
-        .catch(err => console.error('Failed to auto-load project in new window:', err));
-    }
-  }, [loadProjectIntoIde]);
+        } catch (err) {
+          console.error('Failed to auto-load project in new window:', err);
+          addToast('Open Failed', `Failed to load project at ${targetPath}`, 'error');
+        }
+      }
+    };
+
+    resolveAndLoadProject();
+  }, [loadProjectIntoIde, addToast]);
 
   // Run / Build state & logs
   const [isRunning, setIsRunning] = useState(false);
+  const activeRunIdRef = useRef<string | null>(null);
   const [runLogs, setRunLogs] = useState<RunLog[]>([
     {
       id: '1',
-      text: 'C:\\Users\\adminlocal\\.cargo\\bin\\cargo.exe run --package intellij-idea-clone',
-      type: 'cmd',
-      timestamp: '10:00:01'
-    },
-    {
-      id: '2',
-      text: '   Compiling intellij-idea-clone v0.1.0 (D:\\IDE)',
+      text: 'IntelliJ IDE Run Console ready.',
       type: 'info',
-      timestamp: '10:00:02'
-    },
-    {
-      id: '3',
-      text: '    Finished `dev` profile [optimized + debuginfo] in 0.42s',
-      type: 'success',
-      timestamp: '10:00:03'
-    },
-    {
-      id: '4',
-      text: '     Running `target\\debug\\intellij-idea-clone.exe`',
-      type: 'info',
-      timestamp: '10:00:03'
-    },
-    {
-      id: '5',
-      text: 'IntelliJ IDE UI initialized successfully on Windows.',
-      type: 'success',
-      timestamp: '10:00:04'
+      timestamp: new Date().toLocaleTimeString()
     }
   ]);
 
-  const handleRun = useCallback(() => {
+  // Listen to live Tauri process stdout/stderr and exit events
+  useEffect(() => {
+    let unlistenOutput: (() => void) | undefined;
+    let unlistenExit: (() => void) | undefined;
+
+    const setupListeners = async () => {
+      try {
+        if (typeof window !== 'undefined' && ('__TAURI_INTERNALS__' in window || '__TAURI__' in window)) {
+          unlistenOutput = await listen<{ run_id: string; text: string; stream: string }>('process-output', (event) => {
+            const { text, stream } = event.payload;
+            setRunLogs(prev => [
+              ...prev,
+              {
+                id: `${Date.now()}-${Math.random()}`,
+                text,
+                type: stream === 'stderr' ? 'warning' : 'info',
+                timestamp: new Date().toLocaleTimeString(),
+              }
+            ]);
+          });
+
+          unlistenExit = await listen<{ run_id: string; exit_code: number; success: boolean }>('process-terminated', (event) => {
+            const { exit_code, success } = event.payload;
+            setIsRunning(false);
+            activeRunIdRef.current = null;
+            setRunLogs(prev => [
+              ...prev,
+              {
+                id: `${Date.now()}-${Math.random()}`,
+                text: `Process finished with exit code ${exit_code}`,
+                type: success ? 'success' : 'error',
+                timestamp: new Date().toLocaleTimeString(),
+              }
+            ]);
+            addToast(
+              success ? 'Process Finished' : 'Process Failed',
+              `Exit code: ${exit_code}`,
+              success ? 'success' : 'error'
+            );
+          });
+        }
+      } catch (e) {
+        console.warn('Tauri event listen not available:', e);
+      }
+    };
+
+    setupListeners();
+
+    return () => {
+      if (unlistenOutput) unlistenOutput();
+      if (unlistenExit) unlistenExit();
+    };
+  }, [addToast]);
+
+  // File System Watcher & Live Disk Synchronization
+  const [isIndexing, setIsIndexing] = useState(false);
+
+  const syncProjectFilesFromDisk = useCallback(async (changedPaths?: string[]) => {
+    const rootPath = files[0]?.path || 'D:\\IDE';
+    try {
+      if (typeof window !== 'undefined' && ('__TAURI_INTERNALS__' in window || '__TAURI__' in window)) {
+        setIsIndexing(true);
+        const updatedTree = await invoke<FileNode>('open_project_by_path', { projectPath: rootPath });
+        if (updatedTree) {
+          setFiles([updatedTree]);
+        }
+
+        // Check if any open unmodified tab was modified on disk
+        if (changedPaths && changedPaths.length > 0) {
+          for (const p of changedPaths) {
+            const normalizedP = p.replace(/\\/g, '/').toLowerCase();
+            const matchingTab = tabs.find(t => 
+              t.path && (t.path.replace(/\\/g, '/').toLowerCase() === normalizedP ||
+                         normalizedP.endsWith(t.path.replace(/\\/g, '/').toLowerCase()))
+            );
+            if (matchingTab && !matchingTab.isDirty) {
+              try {
+                const newContent = await invoke<string>('read_file_content', { path: matchingTab.path });
+                if (newContent !== undefined) {
+                  setTabs(prev => prev.map(t => t.id === matchingTab.id ? { ...t, content: newContent } : t));
+                }
+              } catch (e) {
+                // file may be deleted or locked
+              }
+            }
+          }
+        }
+
+        refreshGitStatus();
+        setTimeout(() => setIsIndexing(false), 300);
+      }
+    } catch (err) {
+      setIsIndexing(false);
+      console.warn('Failed to sync files from disk:', err);
+    }
+  }, [files, tabs, refreshGitStatus]);
+
+  // Start file watcher whenever root project path changes
+  useEffect(() => {
+    const projectDir = files[0]?.path || 'D:\\IDE';
+    if (typeof window !== 'undefined' && ('__TAURI_INTERNALS__' in window || '__TAURI__' in window)) {
+      invoke('watch_project_directory', { projectPath: projectDir }).catch(err => {
+        console.warn('Failed to start file watcher:', err);
+      });
+    }
+  }, [files]);
+
+  // Listen to live fs-event from Tauri
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    let debounceTimer: any = null;
+
+    const setupFsListener = async () => {
+      try {
+        if (typeof window !== 'undefined' && ('__TAURI_INTERNALS__' in window || '__TAURI__' in window)) {
+          unlisten = await listen<{ kind: string; paths: string[] }>('fs-event', (event) => {
+            if (debounceTimer) clearTimeout(debounceTimer);
+            debounceTimer = setTimeout(() => {
+              syncProjectFilesFromDisk(event.payload.paths);
+            }, 300);
+          });
+        }
+      } catch (e) {
+        console.warn('Failed to listen to fs-event:', e);
+      }
+    };
+
+    setupFsListener();
+
+    return () => {
+      if (debounceTimer) clearTimeout(debounceTimer);
+      if (unlisten) unlisten();
+    };
+  }, [syncProjectFilesFromDisk]);
+
+  const handleRun = useCallback(async () => {
+    const activeCfg = runConfigurations.find(c => c.id === activeConfigId) || runConfigurations[0];
+    const projectDir = activeCfg?.workingDirectory || files[0]?.path || 'D:\\IDE';
+    const cmd = activeCfg?.command || 'cargo';
+    const args = activeCfg?.args || ['check', '--all-targets'];
+    const envVars = activeCfg?.envVars;
+
+    const runId = `run-${Date.now()}`;
+    activeRunIdRef.current = runId;
     setIsRunning(true);
     setBottomTab('run');
     setIsBottomOpen(true);
 
-    const startTime = new Date().toLocaleTimeString();
-    setRunLogs(prev => [
-      ...prev,
+    const timestamp = new Date().toLocaleTimeString();
+
+    setRunLogs([
       {
         id: String(Date.now()),
-        text: 'C:\\Users\\adminlocal\\.cargo\\bin\\cargo.exe check --all-targets',
+        text: `${cmd} ${args.join(' ')}`,
         type: 'cmd',
-        timestamp: startTime
+        timestamp,
       },
       {
         id: String(Date.now() + 1),
-        text: 'Checking intellij-idea-clone v0.1.0 (D:\\IDE)...',
+        text: `Working directory: ${projectDir}`,
         type: 'info',
-        timestamp: startTime
+        timestamp,
       }
     ]);
 
-    setTimeout(() => {
+    try {
+      if (typeof window !== 'undefined' && ('__TAURI_INTERNALS__' in window || '__TAURI__' in window)) {
+        await invoke('start_process', {
+          runId,
+          command: cmd,
+          args,
+          cwd: projectDir,
+          envVars: envVars || null,
+        });
+      } else {
+        // Fallback for browser-only dev testing
+        setTimeout(() => {
+          setIsRunning(false);
+          setRunLogs(prev => [
+            ...prev,
+            {
+              id: String(Date.now() + 2),
+              text: 'Process finished with exit code 0',
+              type: 'success',
+              timestamp: new Date().toLocaleTimeString()
+            }
+          ]);
+        }, 1200);
+      }
+    } catch (err) {
+      setIsRunning(false);
+      activeRunIdRef.current = null;
       setRunLogs(prev => [
         ...prev,
         {
-          id: String(Date.now() + 2),
-          text: 'Finished `dev` profile [optimized + debuginfo] in 0.38s',
-          type: 'success',
-          timestamp: new Date().toLocaleTimeString()
-        },
-        {
-          id: String(Date.now() + 3),
-          text: 'Process finished with exit code 0',
-          type: 'success',
+          id: String(Date.now()),
+          text: `Failed to spawn process: ${err}`,
+          type: 'error',
           timestamp: new Date().toLocaleTimeString()
         }
       ]);
-      setIsRunning(false);
-      addToast('Build Finished', 'Process finished with exit code 0', 'success');
-    }, 1200);
-  }, [addToast]);
+      addToast('Run Error', String(err), 'error');
+    }
+  }, [runConfigurations, activeConfigId, files, addToast]);
 
-  const handleStop = useCallback(() => {
+  const handleStop = useCallback(async () => {
+    if (activeRunIdRef.current) {
+      try {
+        if (typeof window !== 'undefined' && ('__TAURI_INTERNALS__' in window || '__TAURI__' in window)) {
+          await invoke('stop_process', { runId: activeRunIdRef.current });
+        }
+      } catch (e) {
+        console.warn('Failed to stop process:', e);
+      }
+      activeRunIdRef.current = null;
+    }
     setIsRunning(false);
     setRunLogs(prev => [
       ...prev,
       {
         id: String(Date.now()),
-        text: 'Process terminated by user with exit code 1',
-        type: 'error',
+        text: 'Process terminated by user (Ctrl+F2)',
+        type: 'warning',
         timestamp: new Date().toLocaleTimeString()
       }
     ]);
-    addToast('Process Terminated', 'Stopped Desktop IDE run task', 'warning');
+    addToast('Process Terminated', 'Stopped running process', 'warning');
   }, [addToast]);
 
-  // Handle Save
-  const handleSaveActive = useCallback(async () => {
-    const current = tabs.find(t => t.id === activeTabId);
-    if (current && typeof window !== 'undefined' && ('__TAURI_INTERNALS__' in window || '__TAURI__' in window)) {
-      if (current.path && (current.path.includes('/') || current.path.includes('\\'))) {
-        try {
-          await invoke('save_file_content', { path: current.path, content: current.content });
-        } catch (e) {
-          console.error('Failed to save to disk:', e);
+  // Save All Dirty Files to Disk (Authentic IntelliJ IDEA)
+  const saveAllFiles = useCallback(async (isManual = false) => {
+    const dirtyTabs = tabs.filter(t => t.isDirty);
+    if (dirtyTabs.length === 0) return;
+
+    if (typeof window !== 'undefined' && ('__TAURI_INTERNALS__' in window || '__TAURI__' in window)) {
+      for (const tab of dirtyTabs) {
+        if (tab.path && (tab.path.includes('/') || tab.path.includes('\\'))) {
+          try {
+            await invoke('save_file_content', { path: tab.path, content: tab.content });
+          } catch (e) {
+            console.error(`Failed to save ${tab.path} to disk:`, e);
+            if (isManual) {
+              addToast('Save Failed', `Could not save ${tab.title}: ${e}`, 'error');
+            }
+          }
         }
       }
     }
-    setTabs(prev => prev.map(t => t.id === activeTabId ? { ...t, isDirty: false } : t));
-    addToast('All files saved', 'Virtual File System synchronized', 'success');
-  }, [activeTabId, tabs, addToast]);
+
+    setTabs(prev => prev.map(t => ({ ...t, isDirty: false })));
+    refreshGitStatus();
+  }, [tabs, addToast, refreshGitStatus]);
+
+  // Handle Save (Ctrl+S or Save All action) - Silent in IntelliJ IDEA
+  const handleSaveActive = useCallback(async () => {
+    await saveAllFiles(true);
+  }, [saveAllFiles]);
+
+  // Auto-Save after typing (1s debounce)
+  useEffect(() => {
+    const hasDirty = tabs.some(t => t.isDirty);
+    if (!hasDirty) return;
+
+    const timer = setTimeout(() => {
+      saveAllFiles(false);
+    }, 1000);
+
+    return () => clearTimeout(timer);
+  }, [tabs, saveAllFiles]);
+
+  // Auto-Save on Window Blur (Frame Deactivation)
+  useEffect(() => {
+    const handleBlur = () => {
+      saveAllFiles(false);
+    };
+
+    window.addEventListener('blur', handleBlur);
+    return () => window.removeEventListener('blur', handleBlur);
+  }, [saveAllFiles]);
 
   // Handle Close Active Tab
   const handleCloseActiveTab = useCallback(() => {
@@ -651,13 +1059,196 @@ export const App: React.FC = () => {
     addToast('Renamed', `File renamed to ${newName}`, 'success');
   };
 
-  // Git Commit
-  const handleCommit = (message: string, andPush: boolean) => {
-    addToast('Committed', `[${currentBranch}] ${message}`, 'success');
-    if (andPush) {
+  // Find Usages in Project (Authentic IntelliJ IDEA)
+  const findUsagesInProject = useCallback((symbol: string): FindUsagesResult => {
+    const trimmed = symbol.trim();
+    if (!trimmed) return { symbol: '', occurrences: [] };
+
+    const escaped = trimmed.replace(/[-/\\^$*+?.()|[\]{}]/g, '\\$&');
+    const regex = new RegExp(`\\b${escaped}\\b`);
+
+    const occurrences: UsageOccurrence[] = [];
+
+    // Collect all files in workspace
+    const allFiles: { id: string; name: string; path: string; content: string }[] = [];
+    const walk = (nodes: FileNode[]) => {
+      for (const node of nodes) {
+        if (!node.isFolder && node.content !== undefined) {
+          const openTab = tabs.find(t => t.path === node.path || t.id === node.id);
+          allFiles.push({
+            id: node.id,
+            name: node.name,
+            path: node.path,
+            content: openTab ? openTab.content : node.content,
+          });
+        }
+        if (node.children) walk(node.children);
+      }
+    };
+    walk(files);
+
+    // Also include any tabs that might not be in the tree
+    for (const tab of tabs) {
+      if (!allFiles.some(f => f.path === tab.path || f.id === tab.id)) {
+        allFiles.push({
+          id: tab.id,
+          name: tab.title,
+          path: tab.path,
+          content: tab.content,
+        });
+      }
+    }
+
+    // Search in each file
+    for (const file of allFiles) {
+      const lines = file.content.split('\n');
+      for (let lineIdx = 0; lineIdx < lines.length; lineIdx++) {
+        const lineContent = lines[lineIdx];
+        if (regex.test(lineContent)) {
+          const matchCol = lineContent.indexOf(trimmed) + 1;
+          const trimmedLine = lineContent.trim();
+          let usageType: 'import' | 'declaration' | 'usage' = 'usage';
+          if (trimmedLine.startsWith('import ') || trimmedLine.includes('from \'') || trimmedLine.includes('from "') || trimmedLine.startsWith('use ')) {
+            usageType = 'import';
+          } else if (new RegExp(`\\b(class|interface|type|enum|function|const|let|var|fn|struct|pub struct|pub fn)\\s+${escaped}\\b`).test(lineContent)) {
+            usageType = 'declaration';
+          }
+
+          occurrences.push({
+            id: `${file.id}-${lineIdx + 1}-${matchCol}`,
+            fileId: file.id,
+            fileName: file.name,
+            filePath: file.path,
+            lineNumber: lineIdx + 1,
+            columnNumber: matchCol,
+            lineContent: lineContent,
+            matchText: trimmed,
+            matchStart: matchCol - 1,
+            matchEnd: matchCol - 1 + trimmed.length,
+            usageType,
+          });
+        }
+      }
+    }
+
+    return {
+      symbol: trimmed,
+      occurrences,
+    };
+  }, [files, tabs]);
+
+  const handleFindUsages = useCallback((symbol: string) => {
+    const res = findUsagesInProject(symbol);
+    setFindResult(res);
+    setBottomTab('find');
+    setIsBottomOpen(true);
+    addToast('Find Usages', `Found ${res.occurrences.length} usage${res.occurrences.length === 1 ? '' : 's'} of "${symbol}" in project`, 'info');
+  }, [findUsagesInProject, addToast]);
+
+  const handleShowUsages = useCallback((symbol: string) => {
+    const res = findUsagesInProject(symbol);
+    setShowUsagesResult(res);
+  }, [findUsagesInProject]);
+
+  const handleJumpToOccurrence = useCallback((occ: UsageOccurrence) => {
+    let targetTab = tabs.find(t => t.path === occ.filePath || t.id === occ.fileId);
+    if (!targetTab) {
+      const findNode = (nodes: FileNode[]): FileNode | null => {
+        for (const n of nodes) {
+          if (n.path === occ.filePath || n.id === occ.fileId) return n;
+          if (n.children) {
+            const found = findNode(n.children);
+            if (found) return found;
+          }
+        }
+        return null;
+      };
+      const node = findNode(files);
+      if (node) {
+        const newTab: OpenTab = {
+          id: node.id,
+          title: node.name,
+          path: node.path,
+          content: node.content || '',
+          language: node.language || 'plaintext',
+          isDirty: false,
+        };
+        setTabs(prev => [...prev, newTab]);
+        targetTab = newTab;
+      }
+    }
+
+    if (targetTab) {
+      setActiveTabId(targetTab.id);
       setTimeout(() => {
-        addToast('Pushed', `Branch ${currentBranch} up to date on remote origin`, 'success');
-      }, 800);
+        codeEditorRef.current?.revealPosition(occ.lineNumber, occ.columnNumber, occ.matchText.length);
+      }, 60);
+    }
+  }, [tabs, files]);
+
+  const handleOpenRenameSymbol = useCallback((symbol: string) => {
+    const word = symbol || codeEditorRef.current?.getWordAtCursor() || '';
+    if (word) {
+      setRenameTarget({ type: 'symbol', name: word });
+      setIsRenameOpen(true);
+    } else {
+      addToast('Rename', 'Place cursor on a symbol or select text to rename (Shift+F6)', 'info');
+    }
+  }, [addToast]);
+
+  const handleRenameUnified = useCallback((newName: string) => {
+    if (renameTarget.type === 'symbol') {
+      const oldSym = renameTarget.name;
+      if (!oldSym || !newName || oldSym === newName) return;
+
+      const escaped = oldSym.replace(/[-/\\^$*+?.()|[\]{}]/g, '\\$&');
+      const regex = new RegExp(`\\b${escaped}\\b`, 'g');
+
+      setTabs(prev => prev.map(t => {
+        if (regex.test(t.content)) {
+          return {
+            ...t,
+            content: t.content.replace(regex, newName),
+            isDirty: true,
+          };
+        }
+        return t;
+      }));
+
+      addToast('Rename Successful', `Renamed "${oldSym}" to "${newName}" across open files`, 'success');
+      setRenameTarget({ type: 'symbol', name: '' });
+    } else {
+      handleRenameActive(newName);
+    }
+  }, [renameTarget, handleRenameActive, addToast]);
+
+  // Git Commit & Push
+  const handleCommit = async (message: string, andPush: boolean, filesToCommit: string[]) => {
+    const projectDir = files[0]?.path || 'D:\\IDE';
+    try {
+      if (typeof window !== 'undefined' && ('__TAURI_INTERNALS__' in window || '__TAURI__' in window)) {
+        await invoke('git_commit', {
+          projectPath: projectDir,
+          message,
+          files: filesToCommit,
+        });
+        addToast('Committed', `[${currentBranch}] ${message}`, 'success');
+        if (andPush) {
+          await invoke('git_push', { projectPath: projectDir });
+          addToast('Pushed', `Branch ${currentBranch} up to date on remote origin`, 'success');
+        }
+        refreshGitStatus();
+      } else {
+        addToast('Committed', `[${currentBranch}] ${message}`, 'success');
+        if (andPush) {
+          setTimeout(() => {
+            addToast('Pushed', `Branch ${currentBranch} up to date on remote origin`, 'success');
+          }, 800);
+        }
+      }
+    } catch (err) {
+      console.error('Git operation failed:', err);
+      addToast('Git Error', String(err), 'error');
     }
   };
 
@@ -791,8 +1382,7 @@ export const App: React.FC = () => {
         break;
       case 'file.save':
       case 'file.saveAll':
-        setTabs(prev => prev.map(t => ({ ...t, isDirty: false })));
-        addToast('All Files Saved', 'All open files flushed to disk (Ctrl+S)', 'success');
+        handleSaveActive();
         break;
       case 'file.reloadFromDisk':
         addToast('Reload from Disk', 'Active file reloaded from disk (Ctrl+Alt+Y)', 'info');
@@ -955,6 +1545,9 @@ export const App: React.FC = () => {
       case 'run.stop':
         handleStop();
         break;
+      case 'run.editConfig':
+        setIsRunConfigOpen(true);
+        break;
 
       // Tools actions
       case 'tools.terminal':
@@ -1000,17 +1593,80 @@ export const App: React.FC = () => {
 
   // Global Keyboard Shortcuts
   useEffect(() => {
-    let lastShiftTime = 0;
+    let shiftDownTime = 0;
+    let shiftPressedAlone = false;
+    let lastShiftReleaseTime = 0;
 
     const handleKeyDown = (e: KeyboardEvent) => {
-      // Double Shift
+      // Escape key to dismiss any active modal
+      if (e.key === 'Escape') {
+        if (isSettingsOpen) { setIsSettingsOpen(false); return; }
+        if (isAboutOpen) { setIsAboutOpen(false); return; }
+        if (isNewFileOpen) { setIsNewFileOpen(false); return; }
+        if (isRenameOpen) { setIsRenameOpen(false); return; }
+        if (isCommitOpen) { setIsCommitOpen(false); return; }
+        if (isBranchesOpen) { setIsBranchesOpen(false); return; }
+        if (isRunConfigOpen) { setIsRunConfigOpen(false); return; }
+        if (isNewProjectOpen) { setIsNewProjectOpen(false); return; }
+        if (isProjectStructureOpen) { setIsProjectStructureOpen(false); return; }
+        if (isInvalidateCachesOpen) { setIsInvalidateCachesOpen(false); return; }
+        if (isLocalHistoryOpen) { setIsLocalHistoryOpen(false); return; }
+        if (isRepairIdeOpen) { setIsRepairIdeOpen(false); return; }
+        if (isOpenProjectPromptOpen) { setIsOpenProjectPromptOpen(false); return; }
+        if (isSearchOpen) { setIsSearchOpen(false); return; }
+        if (isGoToLineOpen) { setIsGoToLineOpen(false); return; }
+        if (isTipOpen) { setIsTipOpen(false); return; }
+      }
+
+      // Authentic IntelliJ IDEA Double Shift detection
       if (e.key === 'Shift') {
+        // Never trigger on held key auto-repeat
+        if (e.repeat) return;
+        // Never trigger if modifier combos are held
+        if (e.ctrlKey || e.altKey || e.metaKey) {
+          shiftPressedAlone = false;
+          lastShiftReleaseTime = 0;
+          return;
+        }
+
         const now = Date.now();
         const timeout = settings.doubleShiftTimeout || 350;
-        if (now - lastShiftTime < timeout) {
+
+        // If a standalone Shift was tapped and released within timeout, this is the 2nd tap!
+        if (lastShiftReleaseTime > 0 && (now - lastShiftReleaseTime < timeout)) {
           setIsSearchOpen(true);
+          lastShiftReleaseTime = 0;
+          shiftPressedAlone = false;
+          return;
         }
-        lastShiftTime = now;
+
+        shiftPressedAlone = true;
+        shiftDownTime = now;
+        return;
+      } else {
+        // Any other key pressed (e.g. '[', '{', 'a', etc.) means Shift is part of a combo, not alone
+        shiftPressedAlone = false;
+        lastShiftReleaseTime = 0;
+      }
+
+      // Ctrl + Shift + A (Search Everywhere - Actions)
+      if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === 'a') {
+        e.preventDefault();
+        setIsSearchOpen(true);
+        return;
+      }
+
+      // Ctrl + Shift + F (Find in Files)
+      if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === 'f') {
+        e.preventDefault();
+        setIsSearchOpen(true);
+        return;
+      }
+
+      // Ctrl + Shift + N (Search Files)
+      if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === 'n') {
+        e.preventDefault();
+        setIsSearchOpen(true);
         return;
       }
 
@@ -1105,6 +1761,13 @@ export const App: React.FC = () => {
         return;
       }
 
+      // Alt + Shift + F10 (Select / Edit Run Configuration - IntelliJ shortcut)
+      if (e.altKey && e.shiftKey && e.key === 'F10') {
+        e.preventDefault();
+        setIsRunConfigOpen(true);
+        return;
+      }
+
       // Shift + F10 (Run)
       if (e.shiftKey && e.key === 'F10') {
         e.preventDefault();
@@ -1127,19 +1790,36 @@ export const App: React.FC = () => {
       }
     };
 
+    const handleKeyUp = (e: KeyboardEvent) => {
+      if (e.key === 'Shift') {
+        const now = Date.now();
+        // Only count as a valid 1st tap if Shift was pressed alone and released within 350ms
+        if (shiftPressedAlone && (now - shiftDownTime < 350)) {
+          lastShiftReleaseTime = now;
+        } else {
+          lastShiftReleaseTime = 0;
+        }
+        shiftPressedAlone = false;
+      }
+    };
+
     window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [handleSaveActive, handleCloseActiveTab, handleMenuAction, handleRun, handleStop]);
+    window.addEventListener('keyup', handleKeyUp);
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+      window.removeEventListener('keyup', handleKeyUp);
+    };
+  }, [
+    handleSaveActive, handleCloseActiveTab, handleMenuAction, handleRun, handleStop,
+    isSettingsOpen, isAboutOpen, isNewFileOpen, isRenameOpen, isCommitOpen,
+    isBranchesOpen, isRunConfigOpen, isNewProjectOpen, isProjectStructureOpen,
+    isInvalidateCachesOpen, isLocalHistoryOpen, isRepairIdeOpen, isOpenProjectPromptOpen,
+    isSearchOpen, isGoToLineOpen, isTipOpen
+  ]);
 
   // Create New File logic
   const handleCreateNewFile = (fileName: string) => {
-    let language = 'plaintext';
-    if (fileName.endsWith('.rs')) language = 'rust';
-    if (fileName.endsWith('.ts') || fileName.endsWith('.tsx')) language = 'typescript';
-    if (fileName.endsWith('.js') || fileName.endsWith('.jsx')) language = 'javascript';
-    if (fileName.endsWith('.json') || fileName.endsWith('.toml')) language = 'json';
-    if (fileName.endsWith('.md')) language = 'markdown';
-    if (fileName.endsWith('.css')) language = 'css';
+    const language = detectLanguage(fileName);
 
     const newId = `file-${Date.now()}`;
     const newPath = `src/${fileName}`;
@@ -1198,12 +1878,14 @@ export const App: React.FC = () => {
         }
       }
 
+      const language = (file.language && file.language !== 'plaintext') ? file.language : detectLanguage(file.name);
+
       const newTab: OpenTab = {
         id: file.id,
         title: file.name,
         path: file.path,
         content: content || '',
-        language: file.language || 'plaintext',
+        language,
         isDirty: false
       };
       setTabs(prev => [...prev, newTab]);
@@ -1219,33 +1901,157 @@ export const App: React.FC = () => {
     }
   };
 
+  const handleCloseOtherTabs = (tabId: string) => {
+    const nextTabs = tabs.filter(t => t.id === tabId);
+    setTabs(nextTabs);
+    setActiveTabId(tabId);
+    addToast('Close Other Tabs', 'Closed all other tabs', 'info');
+  };
+
+  const handleCloseAllTabs = () => {
+    setTabs([]);
+    setActiveTabId(null);
+    addToast('Close All Tabs', 'All editor tabs closed', 'info');
+  };
+
+  const handleCloseUnmodifiedTabs = () => {
+    const nextTabs = tabs.filter(t => t.isDirty);
+    setTabs(nextTabs);
+    if (!nextTabs.some(t => t.id === activeTabId)) {
+      setActiveTabId(nextTabs.length > 0 ? nextTabs[0].id : null);
+    }
+    addToast('Close Unmodified', 'Closed unmodified editor tabs', 'info');
+  };
+
+  const handleCloseTabsLeft = (tabId: string) => {
+    const idx = tabs.findIndex(t => t.id === tabId);
+    if (idx <= 0) return;
+    const nextTabs = tabs.slice(idx);
+    setTabs(nextTabs);
+    if (!nextTabs.some(t => t.id === activeTabId)) {
+      setActiveTabId(tabId);
+    }
+    addToast('Close Left Tabs', 'Closed tabs to the left', 'info');
+  };
+
+  const handleCloseTabsRight = (tabId: string) => {
+    const idx = tabs.findIndex(t => t.id === tabId);
+    if (idx === -1 || idx >= tabs.length - 1) return;
+    const nextTabs = tabs.slice(0, idx + 1);
+    setTabs(nextTabs);
+    if (!nextTabs.some(t => t.id === activeTabId)) {
+      setActiveTabId(tabId);
+    }
+    addToast('Close Right Tabs', 'Closed tabs to the right', 'info');
+  };
+
   const handleChangeContent = (tabId: string, newContent: string) => {
     setTabs(prev => prev.map(t => t.id === tabId ? { ...t, content: newContent, isDirty: true } : t));
   };
 
-  const handleSelectSearchAction = (item: ActionItem) => {
+  const handleSelectSearchAction = async (item: ActionItem) => {
+    if (item.filePath) {
+      const targetPath = item.filePath;
+      let existingTab = tabs.find(t => t.path === targetPath || t.id === targetPath);
+      if (!existingTab) {
+        let content = '';
+        if (typeof window !== 'undefined' && ('__TAURI_INTERNALS__' in window || '__TAURI__' in window)) {
+          try {
+            content = await invoke<string>('read_file_content', { path: targetPath });
+          } catch (e) {
+            console.warn('Failed to read search result file:', e);
+          }
+        }
+        const fileName = targetPath.split(/[/\\]/).pop() || item.title;
+        const language = detectLanguage(fileName);
+
+        const newTab: OpenTab = {
+          id: targetPath,
+          title: fileName,
+          path: targetPath,
+          content,
+          language,
+          isDirty: false,
+        };
+        setTabs(prev => [...prev, newTab]);
+        existingTab = newTab;
+      }
+
+      setActiveTabId(existingTab.id);
+      if (item.lineNumber) {
+        setTimeout(() => {
+          codeEditorRef.current?.revealPosition(item.lineNumber!, item.columnNumber || 1, 0);
+        }, 80);
+      }
+      return;
+    }
+
     if (item.category === 'Files') {
       const match = files.flatMap(f => f.isFolder ? (f.children || []) : [f])
                          .find(f => f.name === item.title);
       if (match) handleFileSelect(match);
     } else if (item.title === 'Run Desktop IDE') {
       handleRun();
+    } else if (item.title === 'Stop Running Process') {
+      handleStop();
     } else if (item.title === 'Toggle Terminal') {
       setBottomTab('terminal');
       setIsBottomOpen(true);
+    } else if (item.title === 'Toggle Run Console') {
+      setBottomTab('run');
+      setIsBottomOpen(true);
+    } else if (item.title === 'Format Code') {
+      codeEditorRef.current?.formatDocument();
+    } else if (item.title === 'Git: Commit Changes') {
+      setIsCommitOpen(true);
+    } else if (item.title === 'Git: Branches') {
+      setIsBranchesOpen(true);
+    } else if (item.title === 'Settings / Preferences') {
+      setIsSettingsOpen(true);
+    } else if (item.title === 'Go to Line') {
+      setIsGoToLineOpen(true);
+    } else if (item.title === 'Rename Symbol') {
+      handleOpenRenameSymbol('');
     }
   };
 
   const activeTab = tabs.find(t => t.id === activeTabId);
 
+  const handleToggleSideTab = useCallback((tabId: string) => {
+    if (activeSideTab === tabId && isSideBarOpen) {
+      setIsSideBarOpen(false);
+    } else {
+      setActiveSideTab(tabId);
+      setIsSideBarOpen(true);
+    }
+  }, [activeSideTab, isSideBarOpen]);
+
+  const handleToggleBottomTab = useCallback((tabId: 'run' | 'terminal' | 'problems' | 'find') => {
+    if (bottomTab === tabId && isBottomOpen) {
+      setIsBottomOpen(false);
+    } else {
+      setBottomTab(tabId);
+      setIsBottomOpen(true);
+    }
+  }, [bottomTab, isBottomOpen]);
+
   return (
-    <div className="h-screen w-screen flex flex-col bg-[#1E1F22] text-[#DFE1E5] overflow-hidden">
-      {/* Top Main Navigation Bar with Interactive Menus */}
+    <div className="h-screen w-screen flex flex-col bg-[#1E1F22] text-[#DFE1E5] overflow-hidden select-none font-sans">
+      {/* Top Application Bar */}
       <TopBar
         projectName={projectName}
         gitBranch={currentBranch}
         isRunning={isRunning}
         recentProjects={recentProjects}
+        configurations={runConfigurations}
+        activeConfigId={activeConfigId}
+        onSelectConfig={(id) => {
+          setActiveConfigId(id);
+          try {
+            localStorage.setItem('intellij_active_run_config_id', id);
+          } catch (e) {}
+        }}
+        onOpenEditConfigs={() => setIsRunConfigOpen(true)}
         onRun={handleRun}
         onStop={handleStop}
         onOpenSearch={() => setIsSearchOpen(true)}
@@ -1258,22 +2064,25 @@ export const App: React.FC = () => {
       <div className="flex-1 flex overflow-hidden relative">
         {/* Activity Bar (Icon Stripe) */}
         <ActivityBar
-          activeTab={isSideBarOpen ? activeSideTab : ''}
-          onTabChange={(tabId) => {
-            if (activeSideTab === tabId && isSideBarOpen) {
-              setIsSideBarOpen(false);
-            } else {
-              setActiveSideTab(tabId);
-              setIsSideBarOpen(true);
-            }
+          activeSideTab={activeSideTab}
+          isSideBarOpen={isSideBarOpen}
+          onToggleSideTab={handleToggleSideTab}
+          bottomTab={bottomTab}
+          isBottomOpen={isBottomOpen}
+          onToggleBottomTab={handleToggleBottomTab}
+          onOpenCommit={() => setIsCommitOpen(true)}
+          onOpenSearch={() => setIsSearchOpen(true)}
+          onToggleDatabase={() => {
+            setActiveRightPanel(prev => prev === 'database' ? null : 'database');
           }}
+          onOpenPlugins={() => setIsSettingsOpen(true)}
         />
 
         {/* Left Tool Window (Project Tree) */}
         {isSideBarOpen && (
           <div 
             style={{ width: `${sideBarWidth}px` }} 
-            className="h-full border-r border-[#393B40] flex-shrink-0 flex flex-col overflow-hidden"
+            className="h-full border-r border-[#2B2D30] flex-shrink-0 flex flex-col overflow-hidden relative"
           >
             {activeSideTab === 'project' && (
               <ProjectTree
@@ -1282,7 +2091,40 @@ export const App: React.FC = () => {
                 onFileSelect={handleFileSelect}
                 onNewFile={() => setIsNewFileOpen(true)}
                 onNewFolder={() => setIsNewFileOpen(true)}
+                onDeleteFile={(node) => {
+                  const removeNode = (list: FileNode[]): FileNode[] => {
+                    return list
+                      .filter(n => n.id !== node.id)
+                      .map(n => n.children ? { ...n, children: removeNode(n.children) } : n);
+                  };
+                  setFiles(prev => removeNode(prev));
+                  setTabs(prev => prev.filter(t => t.id !== node.id));
+                  addToast('File Deleted', `Deleted ${node.name}`, 'warning');
+                }}
+                onRenameFile={(node) => {
+                  setActiveTabId(node.id);
+                  setIsRenameOpen(true);
+                }}
+                onOpenSplit={(node) => {
+                  handleFileSelect(node);
+                  addToast('Editor Split', `Opened ${node.name} in right split`, 'info');
+                }}
+                onLocalHistory={() => setIsLocalHistoryOpen(true)}
+                onGitCommit={() => setIsCommitOpen(true)}
+                onGitBlame={() => {
+                  codeEditorRef.current?.toggleGitBlame();
+                  addToast('Git Blame', 'Toggled git annotations', 'info');
+                }}
+                onReformatCode={() => {
+                  codeEditorRef.current?.formatDocument();
+                  addToast('Reformat Code', 'Reformatted code (Ctrl+Alt+L)', 'success');
+                }}
+                onOptimizeImports={() => {
+                  addToast('Optimize Imports', 'Optimized imports (Ctrl+Alt+O)', 'success');
+                }}
+                onRepairIde={() => setIsRepairIdeOpen(true)}
                 onShowToast={addToast}
+                onFindUsages={handleFindUsages}
               />
             )}
             {activeSideTab !== 'project' && (
@@ -1290,6 +2132,27 @@ export const App: React.FC = () => {
                 Tool Window: <span className="text-[#DFE1E5] font-semibold">{activeSideTab}</span>
               </div>
             )}
+
+            {/* Draggable Resizer for Sidebar Width */}
+            <div
+              onMouseDown={(e) => {
+                e.preventDefault();
+                const startX = e.clientX;
+                const startW = sideBarWidth;
+                const onMouseMove = (moveEvent: MouseEvent) => {
+                  const delta = moveEvent.clientX - startX;
+                  setSideBarWidth(Math.max(160, Math.min(600, startW + delta)));
+                };
+                const onMouseUp = () => {
+                  document.removeEventListener('mousemove', onMouseMove);
+                  document.removeEventListener('mouseup', onMouseUp);
+                };
+                document.addEventListener('mousemove', onMouseMove);
+                document.addEventListener('mouseup', onMouseUp);
+              }}
+              className="absolute -right-1 top-0 bottom-0 w-2 cursor-col-resize hover:bg-[#3574F0]/50 transition-colors z-20"
+              title="Drag to resize Project sidebar"
+            />
           </div>
         )}
 
@@ -1305,9 +2168,20 @@ export const App: React.FC = () => {
               isReadOnly={isReadOnly}
               onSelectTab={setActiveTabId}
               onCloseTab={handleCloseTab}
+              onCloseOtherTabs={handleCloseOtherTabs}
+              onCloseAllTabs={handleCloseAllTabs}
+              onCloseUnmodifiedTabs={handleCloseUnmodifiedTabs}
+              onCloseTabsLeft={handleCloseTabsLeft}
+              onCloseTabsRight={handleCloseTabsRight}
               onChangeContent={handleChangeContent}
               onCursorChange={(line, col) => setCursorPos({ line, col })}
               onShowToast={addToast}
+              onSelectMenuAction={handleMenuAction}
+              onRunFile={handleRun}
+              onFindUsages={handleFindUsages}
+              onShowUsages={handleShowUsages}
+              onRenameSymbol={handleOpenRenameSymbol}
+              onOpenGoToLine={() => setIsGoToLineOpen(true)}
             />
           </div>
 
@@ -1315,17 +2189,37 @@ export const App: React.FC = () => {
           {isBottomOpen && (
             <div 
               style={{ height: `${bottomHeight}px` }}
-              className="border-t border-[#393B40] flex flex-col bg-[#1E1F22] flex-shrink-0"
+              className="border-t border-[#2B2D30] flex flex-col bg-[#1E1F22] flex-shrink-0 relative"
             >
+              {/* Draggable Resizer for Bottom Panel Height */}
+              <div
+                onMouseDown={(e) => {
+                  e.preventDefault();
+                  const startY = e.clientY;
+                  const startH = bottomHeight;
+                  const onMouseMove = (moveEvent: MouseEvent) => {
+                    const delta = startY - moveEvent.clientY;
+                    setBottomHeight(Math.max(120, Math.min(window.innerHeight - 150, startH + delta)));
+                  };
+                  const onMouseUp = () => {
+                    document.removeEventListener('mousemove', onMouseMove);
+                    document.removeEventListener('mouseup', onMouseUp);
+                  };
+                  document.addEventListener('mousemove', onMouseMove);
+                  document.addEventListener('mouseup', onMouseUp);
+                }}
+                className="absolute -top-1 left-0 right-0 h-2 cursor-row-resize hover:bg-[#3574F0]/50 transition-colors z-20"
+                title="Drag to resize panel height"
+              />
               {/* Bottom Tool Window Tabs Header */}
-              <div className="h-7 bg-[#2B2D30] border-b border-[#393B40] px-2 flex items-center justify-between text-[11px] select-none">
+              <div className="h-7 bg-[#1E1F22] border-b border-[#2B2D30] px-2 flex items-center justify-between text-[11px] select-none">
                 <div className="flex items-center gap-1 h-full">
                   <button
                     onClick={() => setBottomTab('run')}
-                    className={`flex items-center gap-1.5 px-2.5 h-full transition-colors relative ${
+                    className={`flex items-center gap-1.5 px-2.5 h-full transition-colors relative cursor-pointer ${
                       bottomTab === 'run'
                         ? 'text-[#DFE1E5] font-medium bg-[#1E1F22]'
-                        : 'text-[#868A91] hover:text-[#DFE1E5]'
+                        : 'text-[#868A91] hover:text-[#DFE1E5] hover:bg-[#2B2D30]/60'
                     }`}
                   >
                     {bottomTab === 'run' && (
@@ -1337,10 +2231,10 @@ export const App: React.FC = () => {
 
                   <button
                     onClick={() => setBottomTab('terminal')}
-                    className={`flex items-center gap-1.5 px-2.5 h-full transition-colors relative ${
+                    className={`flex items-center gap-1.5 px-2.5 h-full transition-colors relative cursor-pointer ${
                       bottomTab === 'terminal'
                         ? 'text-[#DFE1E5] font-medium bg-[#1E1F22]'
-                        : 'text-[#868A91] hover:text-[#DFE1E5]'
+                        : 'text-[#868A91] hover:text-[#DFE1E5] hover:bg-[#2B2D30]/60'
                     }`}
                   >
                     {bottomTab === 'terminal' && (
@@ -1352,10 +2246,10 @@ export const App: React.FC = () => {
 
                   <button
                     onClick={() => setBottomTab('problems')}
-                    className={`flex items-center gap-1.5 px-2.5 h-full transition-colors relative ${
+                    className={`flex items-center gap-1.5 px-2.5 h-full transition-colors relative cursor-pointer ${
                       bottomTab === 'problems'
                         ? 'text-[#DFE1E5] font-medium bg-[#1E1F22]'
-                        : 'text-[#868A91] hover:text-[#DFE1E5]'
+                        : 'text-[#868A91] hover:text-[#DFE1E5] hover:bg-[#2B2D30]/60'
                     }`}
                   >
                     {bottomTab === 'problems' && (
@@ -1364,13 +2258,31 @@ export const App: React.FC = () => {
                     <AlertCircle size={13} className="text-[#59A869]" />
                     <span>Problems (0)</span>
                   </button>
+
+                  {/* 4: Find Tab (Authentic IntelliJ IDEA) */}
+                  {(findResult || bottomTab === 'find') && (
+                    <button
+                      onClick={() => setBottomTab('find')}
+                      className={`flex items-center gap-1.5 px-2.5 h-full transition-colors relative cursor-pointer ${
+                        bottomTab === 'find'
+                          ? 'text-[#DFE1E5] font-medium bg-[#1E1F22]'
+                          : 'text-[#868A91] hover:text-[#DFE1E5] hover:bg-[#2B2D30]/60'
+                      }`}
+                    >
+                      {bottomTab === 'find' && (
+                        <div className="absolute top-0 left-0 right-0 h-[2px] bg-[#3574F0]" />
+                      )}
+                      <Search size={13} className="text-[#3574F0]" />
+                      <span>4: Find {findResult ? `("${findResult.symbol}")` : ''}</span>
+                    </button>
+                  )}
                 </div>
 
                 <div className="flex items-center gap-2">
                   <button 
                     onClick={() => setIsBottomOpen(false)} 
                     title="Hide Window (Shift+Esc)"
-                    className="text-[#868A91] hover:text-[#DFE1E5] px-1 py-0.5 rounded text-[10px]"
+                    className="text-[#868A91] hover:text-[#DFE1E5] hover:bg-[#2B2D30] px-1.5 py-0.5 rounded text-[11px] cursor-pointer"
                   >
                     Hide ✕
                   </button>
@@ -1389,12 +2301,26 @@ export const App: React.FC = () => {
                   />
                 )}
                 {bottomTab === 'terminal' && (
-                  <TerminalPanel />
+                  <TerminalPanel cwd={files[0]?.path || 'D:\\IDE'} />
                 )}
                 {bottomTab === 'problems' && (
                   <div className="h-full flex items-center justify-center text-xs text-[#868A91]">
                     No problems found in workspace. Code analysis clean.
                   </div>
+                )}
+                {bottomTab === 'find' && (
+                  findResult ? (
+                    <FindUsagesPanel
+                      result={findResult}
+                      onJumpToOccurrence={handleJumpToOccurrence}
+                      onRerun={() => handleFindUsages(findResult.symbol)}
+                      onClose={() => setBottomTab('run')}
+                    />
+                  ) : (
+                    <div className="h-full flex items-center justify-center text-xs text-[#868A91]">
+                      No active find usages search. Place cursor on a symbol and press Alt+F7.
+                    </div>
+                  )
                 )}
               </div>
             </div>
@@ -1409,6 +2335,17 @@ export const App: React.FC = () => {
         />
       </div>
 
+      {/* Bottom Tool Window Dock Bar (Always accessible, authentic IntelliJ) */}
+      <BottomToolWindowBar
+        bottomTab={bottomTab}
+        isBottomOpen={isBottomOpen}
+        isRunning={isRunning}
+        hasFindResult={Boolean(findResult)}
+        findSymbol={findResult?.symbol}
+        onSelectTab={setBottomTab}
+        onToggleOpen={setIsBottomOpen}
+      />
+
       {/* Bottom Status Bar */}
       <StatusBar
         branch={currentBranch}
@@ -1416,7 +2353,7 @@ export const App: React.FC = () => {
         cursorCol={cursorPos.col}
         encoding={fileEncoding}
         lineEnding={lineEnding}
-        isIndexing={false}
+        isIndexing={isIndexing}
         onOpenBranches={() => setIsBranchesOpen(true)}
         onShowToast={addToast}
       />
@@ -1425,6 +2362,7 @@ export const App: React.FC = () => {
       <SearchEverywhereModal
         isOpen={isSearchOpen}
         onClose={() => setIsSearchOpen(false)}
+        projectPath={files[0]?.path || 'D:\\IDE'}
         onSelectAction={handleSelectSearchAction}
       />
 
@@ -1482,21 +2420,42 @@ export const App: React.FC = () => {
         isOpen={isBranchesOpen}
         onClose={() => setIsBranchesOpen(false)}
         currentBranch={currentBranch}
+        projectPath={files[0]?.path || 'D:\\IDE'}
         onSwitchBranch={(b) => {
           setCurrentBranch(b);
           addToast('Switched Branch', `Checked out branch [${b}]`, 'info');
+          refreshGitStatus();
         }}
         onCreateBranch={(b) => {
           addToast('Branch Created', `Created and checked out [${b}]`, 'success');
+          refreshGitStatus();
         }}
       />
 
       {/* Rename Modal (Shift+F6) */}
       <RenameModal
         isOpen={isRenameOpen}
-        onClose={() => setIsRenameOpen(false)}
-        currentName={activeTab?.title || ''}
-        onRename={handleRenameActive}
+        onClose={() => {
+          setIsRenameOpen(false);
+          setRenameTarget({ type: 'file', name: '' });
+        }}
+        currentName={renameTarget.name || activeTab?.title || ''}
+        onRename={handleRenameUnified}
+      />
+
+      {/* Show Usages Quick Popup (Ctrl+Alt+F7) */}
+      <ShowUsagesPopup
+        isOpen={!!showUsagesResult}
+        result={showUsagesResult}
+        onClose={() => setShowUsagesResult(null)}
+        onJumpToOccurrence={handleJumpToOccurrence}
+        onOpenInFindPanel={() => {
+          if (showUsagesResult) {
+            setFindResult(showUsagesResult);
+            setBottomTab('find');
+            setIsBottomOpen(true);
+          }
+        }}
       />
 
       {/* Tip of the Day Modal */}
@@ -1505,15 +2464,6 @@ export const App: React.FC = () => {
         onClose={() => setIsTipOpen(false)}
       />
 
-      {/* Run Configurations Modal */}
-      <RunConfigModal
-        isOpen={isRunConfigOpen}
-        onClose={() => setIsRunConfigOpen(false)}
-        onSaveAndRun={(cfg) => {
-          addToast('Configuration Updated', `Running '${cfg.name}': ${cfg.command} ${cfg.args}`, 'info');
-          handleRun();
-        }}
-      />
 
       {/* New Project Modal */}
       <NewProjectModal
@@ -1624,6 +2574,37 @@ export const App: React.FC = () => {
           saveRecentProject(name, fullDir);
           addToast('Project Created on Disk', `Created project files in ${fullDir}`, 'success');
           requestOpenProject(newProjectNode);
+        }}
+      />
+
+      {/* Run / Debug Configurations Modal (Alt+Shift+F10) */}
+      <RunConfigModal
+        isOpen={isRunConfigOpen}
+        onClose={() => setIsRunConfigOpen(false)}
+        configurations={runConfigurations}
+        activeConfigId={activeConfigId}
+        projectRootPath={files[0]?.path || 'D:\\IDE'}
+        onSaveConfigurations={(configs, selectedId) => {
+          setRunConfigurations(configs);
+          setActiveConfigId(selectedId);
+          try {
+            localStorage.setItem('intellij_run_configurations', JSON.stringify(configs));
+            localStorage.setItem('intellij_active_run_config_id', selectedId);
+          } catch (e) {
+            console.warn(e);
+          }
+          const active = configs.find(c => c.id === selectedId);
+          addToast('Run Configurations Saved', active ? `Active: [${active.name}]` : 'Configurations updated', 'success');
+        }}
+        onRunSelected={(config) => {
+          setActiveConfigId(config.id);
+          try {
+            localStorage.setItem('intellij_active_run_config_id', config.id);
+          } catch (e) {}
+          setIsRunConfigOpen(false);
+          setTimeout(() => {
+            handleRun();
+          }, 60);
         }}
       />
 

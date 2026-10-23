@@ -38,6 +38,8 @@ export const MenuDropdown: React.FC<MenuDropdownProps> = ({
 
   return (
     <div 
+      onMouseDown={(e) => e.stopPropagation()}
+      data-tauri-drag-region="false"
       className={`min-w-[260px] max-w-[320px] bg-[#2B2D30] border border-[#43454A] rounded-md shadow-2xl py-1 text-[12.5px] select-none z-50 animate-in fade-in duration-75 ${
         isSubmenu ? 'absolute left-full top-[-4px] -ml-1' : 'absolute left-0 top-full mt-0.5'
       }`}

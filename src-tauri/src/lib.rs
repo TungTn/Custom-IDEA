@@ -714,7 +714,7 @@ fn terminal_spawn(
   #[cfg(not(windows))]
   let target_shell = shell.unwrap_or_else(|| std::env::var("SHELL").unwrap_or_else(|_| "bash".to_string()));
 
-  let mut cmd = CommandBuilder::new(target_shell);
+  let mut cmd = CommandBuilder::new(&target_shell);
   if let Some(args) = shell_args {
     for a in args {
       cmd.arg(a);
@@ -722,11 +722,28 @@ fn terminal_spawn(
   }
   if let Some(dir) = cwd {
     if !dir.is_empty() {
-      cmd.cwd(dir);
+      let mut p = std::path::PathBuf::from(&dir);
+      if p.is_file() {
+        if let Some(parent) = p.parent() {
+          p = parent.to_path_buf();
+        }
+      }
+      if !p.exists() {
+        let _ = std::fs::create_dir_all(&p);
+      }
+      if p.is_dir() {
+        cmd.cwd(&p);
+      }
     }
   }
 
-  let child = pair.slave.spawn_command(cmd).map_err(|e| format!("Failed to spawn shell: {}", e))?;
+  let child = match pair.slave.spawn_command(cmd) {
+    Ok(c) => c,
+    Err(e) => {
+      let fallback_cmd = CommandBuilder::new(&target_shell);
+      pair.slave.spawn_command(fallback_cmd).map_err(|e2| format!("Failed to spawn shell: {} (fallback: {})", e, e2))?
+    }
+  };
   drop(pair.slave);
 
   let mut reader = pair.master.try_clone_reader().map_err(|e| format!("Failed to clone PTY reader: {}", e))?;

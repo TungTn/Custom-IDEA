@@ -121,6 +121,9 @@ const TerminalPaneView: React.FC<PaneViewProps> = ({
     term.loadAddon(fitAddon);
     term.loadAddon(searchAddon);
 
+    if (containerRef.current) {
+      containerRef.current.innerHTML = '';
+    }
     term.open(containerRef.current);
     xtermRef.current = term;
     fitAddonRef.current = fitAddon;
@@ -793,7 +796,7 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
           }`}>
             {activeTab.panes.map((pane) => (
               <TerminalPaneView
-                key={pane.id}
+                key={`${pane.id}-${cwd || 'root'}`}
                 pane={pane}
                 isActive={pane.id === activeTab.activePaneId}
                 isSplit={activeTab.panes.length > 1}

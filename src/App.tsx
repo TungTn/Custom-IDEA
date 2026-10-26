@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { TopBar, RecentProjectItem } from './components/TopBar';
@@ -223,6 +223,21 @@ export const detectLanguage = (fileName: string): string => {
   return 'plaintext';
 };
 
+const getInitialProjectPath = (): string => {
+  try {
+    if (typeof window !== 'undefined') {
+      const params = new URLSearchParams(window.location.search);
+      const allPaths = params.getAll('openPath');
+      if (allPaths.length > 0 && allPaths[allPaths.length - 1]) {
+        return allPaths[allPaths.length - 1];
+      }
+      const savedPath = localStorage.getItem('ij_current_project_path');
+      if (savedPath) return savedPath;
+    }
+  } catch (e) {}
+  return 'D:\\IDE';
+};
+
 export const App: React.FC = () => {
   const [files, setFiles] = useState<FileNode[]>([]);
   const [activeSideTab, setActiveSideTab] = useState('project');
@@ -232,6 +247,19 @@ export const App: React.FC = () => {
 
   const [bottomTab, setBottomTab] = useState<'find' | 'run' | 'debug' | 'terminal' | 'problems' | 'git' | 'tests'>('run');
   const [hasOpenedTerminal, setHasOpenedTerminal] = useState(false);
+
+  const [projectRootPath, setProjectRootPath] = useState<string>(getInitialProjectPath);
+
+  const currentProjectDirectory = useMemo(() => {
+    if (projectRootPath) return projectRootPath;
+    if (files[0]) {
+      if (files[0].isFolder) return files[0].path;
+      const parts = files[0].path.replace(/\//g, '\\').split('\\');
+      parts.pop();
+      return parts.join('\\') || 'D:\\IDE';
+    }
+    return 'D:\\IDE';
+  }, [projectRootPath, files]);
   const [isBottomOpen, setIsBottomOpen] = useState(true);
 
   useEffect(() => {
@@ -273,7 +301,7 @@ export const App: React.FC = () => {
   const [currentBranch, setCurrentBranch] = useState('main');
 
   const refreshGitStatus = useCallback(async () => {
-    const projectDir = files[0]?.path || 'D:\\IDE';
+    const projectDir = currentProjectDirectory;
     try {
       if (typeof window !== 'undefined' && ('__TAURI_INTERNALS__' in window || '__TAURI__' in window)) {
         const res = await invoke<{ branch: string; changes: any[]; is_clean: boolean }>('git_get_status', { projectPath: projectDir });
@@ -644,7 +672,7 @@ export const App: React.FC = () => {
     setIsRunning(true);
     addToast('Executing Build Task', command, 'info');
 
-    const projectDir = files[0]?.path || 'D:\\IDE';
+    const projectDir = currentProjectDirectory;
     const newLog: RunLog = {
       id: `log-${Date.now()}`,
       text: `$ ${command}\nExecuting build task [${tool}: ${taskName}] in ${projectDir}...\n`,
@@ -841,6 +869,7 @@ export const App: React.FC = () => {
   const loadProjectIntoIde = useCallback((tree: FileNode) => {
     setProjectName(tree.name);
     setFiles([tree]);
+    setProjectRootPath(tree.path);
     saveRecentProject(tree.name, tree.path);
     try {
       localStorage.setItem('ij_current_project_path', tree.path);
@@ -1009,6 +1038,7 @@ export const App: React.FC = () => {
       }
 
       if (targetPath && isTauri) {
+        setProjectRootPath(targetPath);
         try {
           const tree = await invoke<FileNode>('open_project_by_path', { projectPath: targetPath });
           if (tree) {
@@ -1094,7 +1124,7 @@ export const App: React.FC = () => {
   const [isIndexing, setIsIndexing] = useState(false);
 
   const syncProjectFilesFromDisk = useCallback(async (changedPaths?: string[]) => {
-    const rootPath = files[0]?.path || 'D:\\IDE';
+    const rootPath = currentProjectDirectory;
     try {
       if (typeof window !== 'undefined' && ('__TAURI_INTERNALS__' in window || '__TAURI__' in window)) {
         setIsIndexing(true);
@@ -1135,7 +1165,7 @@ export const App: React.FC = () => {
 
   // Start file watcher whenever root project path changes
   useEffect(() => {
-    const projectDir = files[0]?.path || 'D:\\IDE';
+    const projectDir = currentProjectDirectory;
     if (typeof window !== 'undefined' && ('__TAURI_INTERNALS__' in window || '__TAURI__' in window)) {
       invoke('watch_project_directory', { projectPath: projectDir }).catch(err => {
         console.warn('Failed to start file watcher:', err);
@@ -1173,7 +1203,7 @@ export const App: React.FC = () => {
 
   const handleRun = useCallback(async () => {
     const activeCfg = runConfigurations.find(c => c.id === activeConfigId) || runConfigurations[0];
-    const projectDir = activeCfg?.workingDirectory || files[0]?.path || 'D:\\IDE';
+    const projectDir = activeCfg?.workingDirectory || currentProjectDirectory;
     const cmd = activeCfg?.command || 'cargo';
     const args = activeCfg?.args || ['check', '--all-targets'];
     const envVars = activeCfg?.envVars;
@@ -1526,7 +1556,7 @@ export const App: React.FC = () => {
 
   // Git Commit & Push
   const handleCommit = async (message: string, andPush: boolean, filesToCommit: string[], amend?: boolean) => {
-    const projectDir = files[0]?.path || 'D:\\IDE';
+    const projectDir = currentProjectDirectory;
     try {
       if (typeof window !== 'undefined' && ('__TAURI_INTERNALS__' in window || '__TAURI__' in window)) {
         await invoke('git_commit', {
@@ -1562,7 +1592,7 @@ export const App: React.FC = () => {
       addToast('Diff Viewer', 'No active file open to compare with HEAD', 'info');
       return;
     }
-    const projectDir = files[0]?.path || 'D:\\IDE';
+    const projectDir = currentProjectDirectory;
     try {
       if (typeof window !== 'undefined' && ('__TAURI_INTERNALS__' in window || '__TAURI__' in window)) {
         const base = await invoke<string>('git_get_file_content_at_head', {
@@ -1691,6 +1721,7 @@ export const App: React.FC = () => {
         setActiveTabId(null);
         setFiles([]);
         setProjectName('');
+        setProjectRootPath('');
         try {
           localStorage.removeItem('ij_current_project_path');
         } catch (e) {}
@@ -2294,7 +2325,7 @@ export const App: React.FC = () => {
         addToast('Git Pull', `Updated ${currentBranch} from remote`, 'success');
         break;
       case 'git.fetch':
-        invoke('git_fetch', { projectPath: files[0]?.path || 'D:\\IDE' })
+        invoke('git_fetch', { projectPath: currentProjectDirectory })
           .then(() => addToast('Git Fetch', 'Fetched latest branches and commits from remote', 'success'))
           .catch(e => addToast('Git Fetch Failed', String(e), 'error'));
         break;
@@ -3030,7 +3061,7 @@ export const App: React.FC = () => {
           <div className="flex-1 min-h-0">
             <CodeEditor
               ref={codeEditorRef}
-              projectPath={files[0]?.path || 'D:\\IDE'}
+              projectPath={currentProjectDirectory}
               tabs={tabs}
               activeTabId={activeTabId}
               settings={settings}
@@ -3176,7 +3207,7 @@ export const App: React.FC = () => {
                 )}
                 {bottomTab === 'git' && (
                   <GitToolWindow
-                    projectPath={files[0]?.path || 'D:\\IDE'}
+                    projectPath={currentProjectDirectory}
                     currentBranch={currentBranch}
                     onToggleMaximize={handleToggleMaximizeBottom}
                     onHide={() => setIsBottomOpen(false)}
@@ -3186,7 +3217,8 @@ export const App: React.FC = () => {
                 <div className={`h-full ${bottomTab === 'terminal' ? 'block' : 'hidden'}`}>
                   {hasOpenedTerminal && (
                     <TerminalPanel 
-                      cwd={files[0]?.path || 'D:\\IDE'} 
+                      key={currentProjectDirectory}
+                      cwd={currentProjectDirectory} 
                       onToggleMaximize={handleToggleMaximizeBottom}
                       onHide={() => setIsBottomOpen(false)}
                       onOpenSettings={() => setIsSettingsOpen(true)}
@@ -3233,7 +3265,7 @@ export const App: React.FC = () => {
           onOpenSqlConsole={handleOpenSqlConsole}
           onAddNewDataSource={() => setIsAddDataSourceOpen(true)}
           onRemoveDataSource={handleRemoveDataSource}
-          projectPath={files[0]?.path || 'D:\\IDE'}
+          projectPath={currentProjectDirectory}
           onExecuteBuildTask={handleExecuteBuildTask}
           onExecuteCustomGoal={(cmd) => handleExecuteBuildTask('custom', 'goal', cmd)}
         />
@@ -3268,7 +3300,7 @@ export const App: React.FC = () => {
       <FindInFilesModal
         isOpen={isFindInFilesOpen}
         onClose={() => setIsFindInFilesOpen(false)}
-        projectPath={files[0]?.path || 'D:\\IDE'}
+        projectPath={currentProjectDirectory}
         initialMode={findInFilesMode}
         initialQuery={findInFilesInitialQuery}
         openFiles={tabs.map(t => ({ path: t.path || t.id, name: t.title }))}
@@ -3282,7 +3314,7 @@ export const App: React.FC = () => {
       <SearchEverywhereModal
         isOpen={isSearchOpen}
         onClose={() => setIsSearchOpen(false)}
-        projectPath={files[0]?.path || 'D:\\IDE'}
+        projectPath={currentProjectDirectory}
         onSelectAction={handleSelectSearchAction}
       />
 
@@ -3340,7 +3372,7 @@ export const App: React.FC = () => {
         isOpen={isBranchesOpen}
         onClose={() => setIsBranchesOpen(false)}
         currentBranch={currentBranch}
-        projectPath={files[0]?.path || 'D:\\IDE'}
+        projectPath={currentProjectDirectory}
         onSwitchBranch={(b) => {
           setCurrentBranch(b);
           addToast('Switched Branch', `Checked out branch [${b}]`, 'info');
@@ -3401,6 +3433,10 @@ export const App: React.FC = () => {
         onCreateProject={async (name, cat, loc, createGit, addSampleCode) => {
           setProjectName(name);
           const fullDir = loc ? `${loc}\\${name}` : `D:\\IDE\\projects\\${name}`;
+          setProjectRootPath(fullDir);
+          try {
+            localStorage.setItem('ij_current_project_path', fullDir);
+          } catch (e) {}
           const sampleId = `file-${Date.now()}`;
           let fileName = 'Main.java';
           let lang = 'java';
@@ -3520,7 +3556,7 @@ export const App: React.FC = () => {
         onClose={() => setIsRunConfigOpen(false)}
         configurations={runConfigurations}
         activeConfigId={activeConfigId}
-        projectRootPath={files[0]?.path || 'D:\\IDE'}
+        projectRootPath={currentProjectDirectory}
         onSaveConfigurations={(configs, selectedId) => {
           setRunConfigurations(configs);
           setActiveConfigId(selectedId);

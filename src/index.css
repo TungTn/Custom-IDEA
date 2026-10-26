@@ -81,3 +81,106 @@ body {
   pointer-events: none !important;
   opacity: 0 !important;
 }
+
+/* Authentic IntelliJ IDEA Breakpoint & Debugger Styles */
+.monaco-breakpoint-glyph {
+  background-color: #E55353 !important;
+  width: 10px !important;
+  height: 10px !important;
+  border-radius: 50% !important;
+  margin-left: 5px !important;
+  margin-top: 5px !important;
+  box-shadow: 0 0 6px rgba(229, 83, 83, 0.7) !important;
+  cursor: pointer !important;
+}
+
+.monaco-breakpoint-glyph-disabled {
+  background-color: transparent !important;
+  border: 2px solid #E55353 !important;
+  width: 10px !important;
+  height: 10px !important;
+  border-radius: 50% !important;
+  margin-left: 5px !important;
+  margin-top: 5px !important;
+  cursor: pointer !important;
+  box-sizing: border-box !important;
+}
+
+.monaco-debug-active-line {
+  background-color: rgba(53, 116, 240, 0.22) !important;
+  border-top: 1px solid rgba(53, 116, 240, 0.5) !important;
+  border-bottom: 1px solid rgba(53, 116, 240, 0.5) !important;
+}
+
+.monaco-debug-active-glyph {
+  background-color: #3574F0 !important;
+  clip-path: polygon(0 0, 100% 50%, 0 100%) !important;
+  width: 10px !important;
+  height: 10px !important;
+  margin-left: 5px !important;
+  margin-top: 5px !important;
+}
+
+.monaco-bookmark-indicator {
+  background-color: #3574F0 !important;
+  clip-path: polygon(0 0, 100% 0, 100% 100%, 50% 70%, 0 100%) !important;
+  width: 8px !important;
+  height: 10px !important;
+  margin-left: 6px !important;
+  margin-top: 5px !important;
+}
+
+/* Authentic IntelliJ Test Gutter Run Triangle */
+.monaco-test-run-glyph {
+  background-color: #59A869 !important;
+  clip-path: polygon(0 0, 100% 50%, 0 100%) !important;
+  width: 9px !important;
+  height: 10px !important;
+  margin-left: 6px !important;
+  margin-top: 5px !important;
+  cursor: pointer !important;
+  transition: transform 0.15s ease, background-color 0.15s ease !important;
+}
+
+.monaco-test-run-glyph:hover {
+  background-color: #3574F0 !important;
+  transform: scale(1.25) !important;
+}
+
+
+/* Nyan Cat Progress Bar Animations */
+@keyframes nyanBounce {
+  0% { transform: translateY(0px) scale(1); }
+  100% { transform: translateY(-2px) scale(1.05); }
+}
+
+@keyframes nyanWave {
+  0% { opacity: 0.85; filter: brightness(1); }
+  50% { opacity: 1; filter: brightness(1.2); }
+  100% { opacity: 0.85; filter: brightness(1); }
+}
+
+/* Dynamic JetBrains Theme Variables */
+:root {
+  --bg-primary: #1E1F22;
+  --bg-secondary: #2B2D30;
+  --bg-tertiary: #26282B;
+  --bg-hover: #35373B;
+  --border-color: #393B40;
+  --text-primary: #DFE1E5;
+  --text-secondary: #868A91;
+  --accent-color: #3574F0;
+  --selection-bg: #214283;
+  --status-bar-bg: #2B2D30;
+  --gutter-bg: #1E1F22;
+}
+
+body.theme-intellij-light {
+  background-color: #FFFFFF !important;
+  color: #1F1F1F !important;
+}
+
+body.theme-darcula-classic {
+  background-color: #2B2B2B !important;
+  color: #A9B7C6 !important;
+}

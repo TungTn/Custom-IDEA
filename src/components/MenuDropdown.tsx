@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { ChevronRight, Check } from 'lucide-react';
 import { MenuItem } from '../types/menu';
 
@@ -16,7 +16,18 @@ export const MenuDropdown: React.FC<MenuDropdownProps> = ({
   isSubmenu = false,
 }) => {
   const [activeSubmenuId, setActiveSubmenuId] = useState<string | null>(null);
+  const [flipLeft, setFlipLeft] = useState(false);
+  const dropdownRef = useRef<HTMLDivElement>(null);
   const submenuTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+
+  useEffect(() => {
+    if (dropdownRef.current && isSubmenu) {
+      const rect = dropdownRef.current.getBoundingClientRect();
+      if (rect.right > window.innerWidth - 10) {
+        setFlipLeft(true);
+      }
+    }
+  }, [isSubmenu]);
 
   const handleMouseEnterItem = (item: MenuItem) => {
     if (submenuTimeoutRef.current) {
@@ -38,10 +49,13 @@ export const MenuDropdown: React.FC<MenuDropdownProps> = ({
 
   return (
     <div 
+      ref={dropdownRef}
       onMouseDown={(e) => e.stopPropagation()}
       data-tauri-drag-region="false"
       className={`min-w-[260px] max-w-[320px] bg-[#2B2D30] border border-[#43454A] rounded-md shadow-2xl py-1 text-[12.5px] select-none z-50 animate-in fade-in duration-75 ${
-        isSubmenu ? 'absolute left-full top-[-4px] -ml-1' : 'absolute left-0 top-full mt-0.5'
+        isSubmenu 
+          ? (flipLeft ? 'absolute right-full top-[-4px] -mr-1' : 'absolute left-full top-[-4px] -ml-1')
+          : 'absolute left-0 top-full mt-0.5'
       }`}
     >
       {items.map((item) => {

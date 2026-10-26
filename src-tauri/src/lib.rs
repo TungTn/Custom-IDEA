@@ -5,6 +5,7 @@ use std::collections::HashMap;
 use std::process::{Child, Command, Stdio};
 use std::io::{BufRead, BufReader, Read, Write};
 use tauri::Emitter;
+use serde::{Deserialize, Serialize};
 use portable_pty::{CommandBuilder, NativePtySystem, PtySize, PtySystem};
 use notify::{Watcher, RecursiveMode, Event};
 
@@ -336,6 +337,11 @@ pub struct ToolchainInfo {
   pub node: Option<String>,
   pub python: Option<String>,
   pub java: Option<String>,
+  pub go: Option<String>,
+  pub git: Option<String>,
+  pub docker: Option<String>,
+  pub cmake: Option<String>,
+  pub clang: Option<String>,
 }
 
 #[tauri::command]
@@ -349,7 +355,7 @@ fn detect_toolchains() -> Result<ToolchainInfo, String> {
       let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
       let err = String::from_utf8_lossy(&out.stderr).trim().to_string();
       if out.status.success() && !s.is_empty() { 
-        Some(s) 
+        Some(s.lines().next().unwrap_or("").to_string()) 
       } else if !err.is_empty() && (err.contains("version") || err.contains("openjdk") || err.contains("java")) { 
         Some(err.lines().next().unwrap_or("").to_string()) 
       } else { 
@@ -364,6 +370,11 @@ fn detect_toolchains() -> Result<ToolchainInfo, String> {
     node: run_cmd("node", "--version"),
     python: run_cmd("python", "--version"),
     java: run_cmd("java", "-version"),
+    go: run_cmd("go", "version"),
+    git: run_cmd("git", "--version"),
+    docker: run_cmd("docker", "--version"),
+    cmake: run_cmd("cmake", "--version"),
+    clang: run_cmd("clang", "--version"),
   })
 }
 
@@ -600,11 +611,74 @@ fn terminal_kill(session_id: String) -> Result<(), String> {
   Ok(())
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+pub struct AvailableShell {
+  pub id: String,
+  pub name: String,
+  pub command: String,
+  pub is_available: bool,
+}
+
+#[tauri::command]
+fn get_available_shells() -> Result<Vec<AvailableShell>, String> {
+  let mut shells = Vec::new();
+
+  #[cfg(windows)]
+  {
+    shells.push(AvailableShell {
+      id: "powershell".into(),
+      name: "PowerShell".into(),
+      command: "powershell.exe".into(),
+      is_available: true,
+    });
+    shells.push(AvailableShell {
+      id: "cmd".into(),
+      name: "Command Prompt".into(),
+      command: "cmd.exe".into(),
+      is_available: true,
+    });
+
+    let git_bash_path = if std::path::Path::new(r"C:\Program Files\Git\bin\bash.exe").exists() {
+      r"C:\Program Files\Git\bin\bash.exe".to_string()
+    } else {
+      "bash.exe".to_string()
+    };
+    shells.push(AvailableShell {
+      id: "git-bash".into(),
+      name: "Git Bash".into(),
+      command: git_bash_path,
+      is_available: true,
+    });
+
+    shells.push(AvailableShell {
+      id: "wsl".into(),
+      name: "WSL (Linux)".into(),
+      command: "wsl.exe".into(),
+      is_available: true,
+    });
+  }
+
+  #[cfg(not(windows))]
+  {
+    let current_shell = std::env::var("SHELL").unwrap_or_else(|_| "bash".to_string());
+    shells.push(AvailableShell {
+      id: "default".into(),
+      name: "Default Shell".into(),
+      command: current_shell,
+      is_available: true,
+    });
+  }
+
+  Ok(shells)
+}
+
 #[tauri::command]
 fn terminal_spawn(
   app: tauri::AppHandle,
   session_id: String,
   cwd: Option<String>,
+  shell: Option<String>,
+  shell_args: Option<Vec<String>>,
   cols: Option<u16>,
   rows: Option<u16>,
 ) -> Result<(), String> {
@@ -621,11 +695,31 @@ fn terminal_spawn(
     .map_err(|e| format!("Failed to open PTY: {}", e))?;
 
   #[cfg(windows)]
-  let shell = "powershell.exe";
-  #[cfg(not(windows))]
-  let shell = std::env::var("SHELL").unwrap_or_else(|_| "bash".to_string());
+  let target_shell = match shell.as_deref() {
+    Some("cmd") | Some("cmd.exe") => "cmd.exe".to_string(),
+    Some("bash") | Some("git-bash") => {
+      if std::path::Path::new(r"C:\Program Files\Git\bin\bash.exe").exists() {
+        r"C:\Program Files\Git\bin\bash.exe".to_string()
+      } else if std::path::Path::new(r"C:\Program Files (x86)\Git\bin\bash.exe").exists() {
+        r"C:\Program Files (x86)\Git\bin\bash.exe".to_string()
+      } else {
+        "bash.exe".to_string()
+      }
+    }
+    Some("wsl") | Some("wsl.exe") => "wsl.exe".to_string(),
+    Some(custom) if !custom.is_empty() => custom.to_string(),
+    _ => "powershell.exe".to_string(),
+  };
 
-  let mut cmd = CommandBuilder::new(shell);
+  #[cfg(not(windows))]
+  let target_shell = shell.unwrap_or_else(|| std::env::var("SHELL").unwrap_or_else(|_| "bash".to_string()));
+
+  let mut cmd = CommandBuilder::new(target_shell);
+  if let Some(args) = shell_args {
+    for a in args {
+      cmd.arg(a);
+    }
+  }
   if let Some(dir) = cwd {
     if !dir.is_empty() {
       cmd.cwd(dir);
@@ -767,8 +861,28 @@ fn git_get_diff(project_path: String, file_path: String) -> Result<String, Strin
     .or_else(|_| run_git_cmd(&project_path, &["diff", "--", &file_path]))
 }
 
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+pub struct GitCommitItemDto {
+  pub hash: String,
+  pub short_hash: String,
+  pub author: String,
+  pub email: String,
+  pub date: String,
+  pub subject: String,
+}
+
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+pub struct GitCommitDetailsDto {
+  pub hash: String,
+  pub author: String,
+  pub email: String,
+  pub date: String,
+  pub message: String,
+  pub files: Vec<GitFileChangeDto>,
+}
+
 #[tauri::command]
-fn git_commit(project_path: String, message: String, files: Vec<String>) -> Result<String, String> {
+fn git_commit(project_path: String, message: String, files: Vec<String>, amend: Option<bool>) -> Result<String, String> {
   if files.is_empty() {
     let _ = run_git_cmd(&project_path, &["add", "-A"]);
   } else {
@@ -776,7 +890,205 @@ fn git_commit(project_path: String, message: String, files: Vec<String>) -> Resu
       let _ = run_git_cmd(&project_path, &["add", "--", f]);
     }
   }
-  run_git_cmd(&project_path, &["commit", "-m", &message])
+  if amend.unwrap_or(false) {
+    run_git_cmd(&project_path, &["commit", "--amend", "-m", &message])
+  } else {
+    run_git_cmd(&project_path, &["commit", "-m", &message])
+  }
+}
+
+#[tauri::command]
+fn git_get_log(project_path: String, max_count: Option<usize>) -> Result<Vec<GitCommitItemDto>, String> {
+  let count_arg = format!("-n{}", max_count.unwrap_or(50));
+  let out = run_git_cmd(&project_path, &["log", &count_arg, "--pretty=format:%H\t%h\t%an\t%ae\t%ad\t%s", "--date=short"])?;
+  let mut commits = Vec::new();
+  for line in out.lines() {
+    let parts: Vec<&str> = line.split('\t').collect();
+    if parts.len() >= 6 {
+      commits.push(GitCommitItemDto {
+        hash: parts[0].to_string(),
+        short_hash: parts[1].to_string(),
+        author: parts[2].to_string(),
+        email: parts[3].to_string(),
+        date: parts[4].to_string(),
+        subject: parts[5].to_string(),
+      });
+    }
+  }
+  Ok(commits)
+}
+
+#[tauri::command]
+fn git_get_commit_details(project_path: String, commit_hash: String) -> Result<GitCommitDetailsDto, String> {
+  let meta_out = run_git_cmd(&project_path, &["show", "-s", "--pretty=format:%H\t%an\t%ae\t%ad\t%B", "--date=short", &commit_hash])?;
+  let parts: Vec<&str> = meta_out.splitn(5, '\t').collect();
+  let (hash, author, email, date, message) = if parts.len() >= 5 {
+    (parts[0].to_string(), parts[1].to_string(), parts[2].to_string(), parts[3].to_string(), parts[4].trim().to_string())
+  } else {
+    (commit_hash.clone(), "Unknown".to_string(), "".to_string(), "".to_string(), "".to_string())
+  };
+
+  let files_out = run_git_cmd(&project_path, &["diff-tree", "--no-commit-id", "--name-status", "-r", &commit_hash])
+    .unwrap_or_default();
+  let mut files = Vec::new();
+  for line in files_out.lines() {
+    let trimmed = line.trim();
+    let parts: Vec<&str> = trimmed.split_whitespace().collect();
+    if parts.len() >= 2 {
+      files.push(GitFileChangeDto {
+        status: parts[0].to_string(),
+        path: parts[1].to_string(),
+      });
+    }
+  }
+
+  Ok(GitCommitDetailsDto {
+    hash,
+    author,
+    email,
+    date,
+    message,
+    files,
+  })
+}
+
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct GitBlameLineDto {
+  pub line: usize,
+  pub commit_hash: String,
+  pub short_hash: String,
+  pub author: String,
+  pub email: String,
+  pub date: String,
+  pub relative_time: String,
+  pub summary: String,
+}
+
+#[derive(Default, Clone)]
+struct CommitMeta {
+  author: String,
+  email: String,
+  time: i64,
+  summary: String,
+}
+
+#[tauri::command]
+fn git_get_blame(project_path: String, file_path: String) -> Result<Vec<GitBlameLineDto>, String> {
+  let clean_file = file_path.replace('\\', "/");
+  let out = run_git_cmd(&project_path, &["blame", "--line-porcelain", "--", &clean_file])?;
+  
+  let now_secs = std::time::SystemTime::now()
+    .duration_since(std::time::UNIX_EPOCH)
+    .map(|d| d.as_secs() as i64)
+    .unwrap_or(0);
+
+  let mut commit_cache: std::collections::HashMap<String, CommitMeta> = std::collections::HashMap::new();
+  let mut lines_result = Vec::new();
+
+  let mut cur_hash = String::new();
+  let mut cur_line_num: usize = 0;
+  let mut cur_meta = CommitMeta::default();
+
+  for line in out.lines() {
+    if line.starts_with('\t') {
+      if !cur_hash.is_empty() && cur_line_num > 0 {
+        commit_cache.insert(cur_hash.clone(), cur_meta.clone());
+
+        let diff = if now_secs > cur_meta.time && cur_meta.time > 0 {
+          now_secs - cur_meta.time
+        } else {
+          0
+        };
+
+        let relative_time = if cur_meta.time == 0 {
+          "Not committed".to_string()
+        } else if diff < 60 {
+          "just now".to_string()
+        } else if diff < 3600 {
+          format!("{}m ago", diff / 60)
+        } else if diff < 86400 {
+          format!("{}h ago", diff / 3600)
+        } else if diff < 7 * 86400 {
+          format!("{}d ago", diff / 86400)
+        } else if diff < 30 * 86400 {
+          format!("{}w ago", diff / (7 * 86400))
+        } else {
+          format!("{}mo ago", diff / (30 * 86400))
+        };
+
+        let short_hash = if cur_hash.len() >= 7 {
+          cur_hash[..7].to_string()
+        } else {
+          cur_hash.clone()
+        };
+
+        lines_result.push(GitBlameLineDto {
+          line: cur_line_num,
+          commit_hash: cur_hash.clone(),
+          short_hash,
+          author: if cur_meta.author.is_empty() { "Unknown".to_string() } else { cur_meta.author.clone() },
+          email: cur_meta.email.clone(),
+          date: format!("{}", cur_meta.time),
+          relative_time,
+          summary: if cur_meta.summary.is_empty() { "Commit".to_string() } else { cur_meta.summary.clone() },
+        });
+      }
+      cur_hash.clear();
+      cur_line_num = 0;
+      cur_meta = CommitMeta::default();
+    } else if let Some(space_idx) = line.find(' ') {
+      let first_token = &line[..space_idx];
+      if first_token.len() == 40 && first_token.chars().all(|c| c.is_ascii_hexdigit()) {
+        cur_hash = first_token.to_string();
+        let rest = line[space_idx + 1..].trim();
+        let parts: Vec<&str> = rest.split_whitespace().collect();
+        if parts.len() >= 2 {
+          if let Ok(ln) = parts[1].parse::<usize>() {
+            cur_line_num = ln;
+          }
+        }
+        if let Some(cached) = commit_cache.get(&cur_hash) {
+          cur_meta = cached.clone();
+        }
+      } else if line.starts_with("author ") {
+        cur_meta.author = line[7..].trim().to_string();
+      } else if line.starts_with("author-mail ") {
+        cur_meta.email = line[12..].trim().trim_matches(|c| c == '<' || c == '>').to_string();
+      } else if line.starts_with("author-time ") {
+        if let Ok(t) = line[12..].trim().parse::<i64>() {
+          cur_meta.time = t;
+        }
+      } else if line.starts_with("summary ") {
+        cur_meta.summary = line[8..].trim().to_string();
+      }
+    }
+  }
+
+  Ok(lines_result)
+}
+
+#[tauri::command]
+fn git_get_file_content_at_head(project_path: String, file_path: String) -> Result<String, String> {
+  let clean_path = file_path.replace('\\', "/");
+  let target = format!("HEAD:{}", clean_path);
+  run_git_cmd(&project_path, &["show", &target])
+}
+
+#[tauri::command]
+fn git_rollback_file(project_path: String, file_path: String) -> Result<String, String> {
+  run_git_cmd(&project_path, &["checkout", "HEAD", "--", &file_path])
+    .or_else(|_| run_git_cmd(&project_path, &["restore", &file_path]))
+}
+
+#[tauri::command]
+fn git_fetch(project_path: String) -> Result<String, String> {
+  run_git_cmd(&project_path, &["fetch", "--all", "--prune"])
+}
+
+#[tauri::command]
+fn git_pull(project_path: String) -> Result<String, String> {
+  run_git_cmd(&project_path, &["pull"])
 }
 
 #[tauri::command]
@@ -808,6 +1120,149 @@ fn git_checkout_branch(project_path: String, branch: String, create_new: bool) -
     run_git_cmd(&project_path, &["checkout", &branch])
   }
 }
+
+#[tauri::command]
+fn git_clone(url: String, target_dir: String) -> Result<String, String> {
+  let target = std::path::Path::new(&target_dir);
+  if let Some(parent) = target.parent() {
+    let _ = std::fs::create_dir_all(parent);
+  }
+  let mut cmd = std::process::Command::new("git");
+  cmd.args(&["clone", &url, &target_dir]);
+  #[cfg(windows)]
+  cmd.creation_flags(0x08000000);
+  let output = cmd.output().map_err(|e| format!("Failed to run git clone: {}", e))?;
+  if !output.status.success() {
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    return Err(format!("Git clone failed: {}\n{}", stderr, stdout));
+  }
+  Ok(target_dir)
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
+pub struct GitStashItemDto {
+  pub index: usize,
+  pub hash: String,
+  pub branch: String,
+  pub date: String,
+  pub message: String,
+}
+
+#[tauri::command]
+fn git_get_stash_list(project_path: String) -> Result<Vec<GitStashItemDto>, String> {
+  let out = run_git_cmd(&project_path, &["stash", "list", "--pretty=format:%gd%x09%h%x09%cr%x09%gs"])?;
+  let mut list = Vec::new();
+  for line in out.lines() {
+    let parts: Vec<&str> = line.split('\t').collect();
+    if parts.len() >= 4 {
+      let idx_str = parts[0].trim().replace("stash@{", "").replace("}", "");
+      let index = idx_str.parse::<usize>().unwrap_or(0);
+      let hash = parts[1].trim().to_string();
+      let date = parts[2].trim().to_string();
+      let full_msg = parts[3].trim().to_string();
+      let mut branch = "main".to_string();
+      let mut message = full_msg.clone();
+      if let Some(pos) = full_msg.find(": ") {
+        let b = &full_msg[..pos];
+        if b.starts_with("WIP on ") {
+          branch = b.replace("WIP on ", "");
+        } else if b.starts_with("On ") {
+          branch = b.replace("On ", "");
+        }
+        message = full_msg[pos + 2..].to_string();
+      }
+      list.push(GitStashItemDto {
+        index,
+        hash,
+        branch,
+        date,
+        message,
+      });
+    }
+  }
+  Ok(list)
+}
+
+#[tauri::command]
+fn git_stash_save(project_path: String, message: String, keep_index: bool) -> Result<String, String> {
+  if keep_index {
+    run_git_cmd(&project_path, &["stash", "push", "--keep-index", "-m", &message])
+  } else {
+    run_git_cmd(&project_path, &["stash", "push", "-m", &message])
+  }
+}
+
+#[tauri::command]
+fn git_stash_pop(project_path: String, index: usize) -> Result<String, String> {
+  let target = format!("stash@{{{}}}", index);
+  run_git_cmd(&project_path, &["stash", "pop", &target])
+}
+
+#[tauri::command]
+fn git_stash_apply(project_path: String, index: usize) -> Result<String, String> {
+  let target = format!("stash@{{{}}}", index);
+  run_git_cmd(&project_path, &["stash", "apply", &target])
+}
+
+#[tauri::command]
+fn git_stash_drop(project_path: String, index: usize) -> Result<String, String> {
+  let target = format!("stash@{{{}}}", index);
+  run_git_cmd(&project_path, &["stash", "drop", &target])
+}
+
+#[tauri::command]
+fn git_stash_clear(project_path: String) -> Result<String, String> {
+  run_git_cmd(&project_path, &["stash", "clear"])
+}
+
+#[tauri::command]
+fn git_stash_get_files(project_path: String, index: usize) -> Result<Vec<GitFileChangeDto>, String> {
+  let target = format!("stash@{{{}}}", index);
+  let files_out = run_git_cmd(&project_path, &["stash", "show", "--name-status", &target])?;
+  let mut files = Vec::new();
+  for line in files_out.lines() {
+    let p: Vec<&str> = line.split_whitespace().collect();
+    if p.len() >= 2 {
+      files.push(GitFileChangeDto {
+        status: p[0].to_string(),
+        path: p[1].to_string(),
+      });
+    }
+  }
+  Ok(files)
+}
+
+#[tauri::command]
+fn git_reset_branch(project_path: String, commit_hash: String, mode: String) -> Result<String, String> {
+  let flag = match mode.to_lowercase().as_str() {
+    "soft" => "--soft",
+    "hard" => "--hard",
+    "keep" => "--keep",
+    _ => "--mixed",
+  };
+  run_git_cmd(&project_path, &["reset", flag, &commit_hash])
+}
+
+#[tauri::command]
+fn git_cherry_pick(project_path: String, commit_hash: String) -> Result<String, String> {
+  run_git_cmd(&project_path, &["cherry-pick", &commit_hash])
+}
+
+#[tauri::command]
+fn git_revert_commit(project_path: String, commit_hash: String) -> Result<String, String> {
+  run_git_cmd(&project_path, &["revert", "--no-edit", &commit_hash])
+}
+
+#[tauri::command]
+fn git_create_tag(project_path: String, tag_name: String, commit_hash: Option<String>) -> Result<String, String> {
+  if let Some(hash) = commit_hash {
+    run_git_cmd(&project_path, &["tag", &tag_name, &hash])
+  } else {
+    run_git_cmd(&project_path, &["tag", &tag_name])
+  }
+}
+
 
 fn is_ignored_path(path: &std::path::Path) -> bool {
   for comp in path.components() {
@@ -1004,12 +1459,32 @@ pub fn run() {
       terminal_write,
       terminal_resize,
       terminal_kill,
+      get_available_shells,
       git_get_status,
+      git_get_blame,
       git_get_diff,
       git_commit,
       git_push,
+      git_get_log,
+      git_get_commit_details,
+      git_get_file_content_at_head,
+      git_rollback_file,
+      git_fetch,
+      git_pull,
       git_list_branches,
       git_checkout_branch,
+      git_clone,
+      git_get_stash_list,
+      git_stash_save,
+      git_stash_pop,
+      git_stash_apply,
+      git_stash_drop,
+      git_stash_clear,
+      git_stash_get_files,
+      git_reset_branch,
+      git_cherry_pick,
+      git_revert_commit,
+      git_create_tag,
       search_project_files,
       search_project_text,
       watch_project_directory,

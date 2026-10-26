@@ -14,6 +14,7 @@ import {
   X,
   Layers,
   Sparkles,
+  Palette,
   Menu,
   RotateCw,
   MoreVertical,
@@ -29,11 +30,17 @@ import {
   Package,
   Terminal as TerminalIcon,
   FileCode,
-  Flame
+  Flame,
+  Shield,
+  Activity,
+  Pin,
+  Crosshair,
+  Sliders
 } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
 import { MenuDropdown } from './MenuDropdown';
-import { menuRegistry } from '../constants/menuRegistry';
+import { IntelliJHamburgerMenu } from './IntelliJHamburgerMenu';
+import { menuRegistry, getFileMenuItems } from '../constants/menuRegistry';
 import { MenuCategoryName, MenuItem } from '../types/menu';
 import { RunConfiguration } from '../types';
 
@@ -46,6 +53,10 @@ interface TopBarProps {
   projectName: string;
   gitBranch: string;
   isRunning: boolean;
+  powerSaveMode?: boolean;
+  isReadOnly?: boolean;
+  fileEncoding?: string;
+  lineEnding?: 'CRLF' | 'LF';
   recentProjects?: RecentProjectItem[];
   configurations?: RunConfiguration[];
   activeConfigId?: string | null;
@@ -57,12 +68,18 @@ interface TopBarProps {
   onSelectMenuAction: (actionId: string) => void;
   onOpenProjectDialog?: () => void;
   onOpenBranches?: () => void;
+  activeRightPanel?: string | null;
+  unreadNotificationsCount?: number;
 }
 
 export const TopBar: React.FC<TopBarProps> = ({
   projectName,
   gitBranch,
   isRunning,
+  powerSaveMode = false,
+  isReadOnly = false,
+  fileEncoding = 'UTF-8',
+  lineEnding = 'CRLF',
   recentProjects = [],
   configurations = [],
   activeConfigId,
@@ -74,11 +91,19 @@ export const TopBar: React.FC<TopBarProps> = ({
   onSelectMenuAction,
   onOpenProjectDialog,
   onOpenBranches,
+  activeRightPanel,
+  unreadNotificationsCount = 0,
 }) => {
   const [isMainMenuActive, setIsMainMenuActive] = useState(false);
   const [activeMenu, setActiveMenu] = useState<MenuCategoryName | null>(null);
+  const [isHamburgerOpen, setIsHamburgerOpen] = useState(false);
+  const [windowWidth, setWindowWidth] = useState(
+    typeof window !== 'undefined' ? window.innerWidth : 1400
+  );
   const [isProjectDropdownOpen, setIsProjectDropdownOpen] = useState(false);
   const [isRunConfigOpen, setIsRunConfigOpen] = useState(false);
+  const [isMoreRunMenuOpen, setIsMoreRunMenuOpen] = useState(false);
+  const [isSettingsMenuOpen, setIsSettingsMenuOpen] = useState(false);
   const [selectedRunTarget, setSelectedRunTarget] = useState('Current File');
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [isMaximized, setIsMaximized] = useState(false);
@@ -86,6 +111,19 @@ export const TopBar: React.FC<TopBarProps> = ({
   const mainMenuRef = useRef<HTMLDivElement>(null);
   const projectDropdownRef = useRef<HTMLDivElement>(null);
   const runConfigRef = useRef<HTMLDivElement>(null);
+  const moreRunMenuRef = useRef<HTMLDivElement>(null);
+  const settingsMenuRef = useRef<HTMLDivElement>(null);
+
+  // Auto-collapse horizontal menus into Hamburger Menu when window is shrunk
+  const isMenuCollapsed = windowWidth < 1250;
+
+  useEffect(() => {
+    const handleWindowResize = () => {
+      setWindowWidth(window.innerWidth);
+    };
+    window.addEventListener('resize', handleWindowResize);
+    return () => window.removeEventListener('resize', handleWindowResize);
+  }, []);
 
   const activeConfig = configurations.find(c => c.id === activeConfigId) || configurations[0];
 
@@ -104,7 +142,7 @@ export const TopBar: React.FC<TopBarProps> = ({
       case 'python':
         return <FileCode size={12} className="text-[#3574F0]" />;
       default:
-        return <span className="w-1.5 h-1.5 rounded-full bg-[#59A869]" />;
+        return <TerminalIcon size={12} className="text-[#59A869]" />;
     }
   };
 
@@ -113,27 +151,16 @@ export const TopBar: React.FC<TopBarProps> = ({
   ];
 
   const getMenuItems = (menu: MenuCategoryName): MenuItem[] => {
-    const rawItems = menuRegistry[menu] || [];
-    if (menu === 'File' && recentProjects.length > 0) {
-      return rawItems.map(item => {
-        if (item.id === 'f-recent') {
-          return {
-            ...item,
-            children: [
-              ...recentProjects.map((p, idx) => ({
-                id: `recent-p-${idx}`,
-                label: `${p.name} (${p.path})`,
-                actionId: `file.openRecent:${p.path}`,
-              })),
-              { id: 'f-rec-sep', isSeparator: true },
-              { id: 'f-rec-manage', label: 'Manage Projects...', actionId: 'file.manageProjects' },
-            ]
-          };
-        }
-        return item;
+    if (menu === 'File') {
+      return getFileMenuItems({
+        powerSaveMode,
+        isReadOnly,
+        fileEncoding,
+        lineEnding,
+        recentProjects,
       });
     }
-    return rawItems;
+    return menuRegistry[menu] || [];
   };
 
   // Close menus on outside click
@@ -142,6 +169,7 @@ export const TopBar: React.FC<TopBarProps> = ({
       if (mainMenuRef.current && !mainMenuRef.current.contains(e.target as Node)) {
         setIsMainMenuActive(false);
         setActiveMenu(null);
+        setIsHamburgerOpen(false);
       }
       if (projectDropdownRef.current && !projectDropdownRef.current.contains(e.target as Node)) {
         setIsProjectDropdownOpen(false);
@@ -149,14 +177,23 @@ export const TopBar: React.FC<TopBarProps> = ({
       if (runConfigRef.current && !runConfigRef.current.contains(e.target as Node)) {
         setIsRunConfigOpen(false);
       }
+      if (moreRunMenuRef.current && !moreRunMenuRef.current.contains(e.target as Node)) {
+        setIsMoreRunMenuOpen(false);
+      }
+      if (settingsMenuRef.current && !settingsMenuRef.current.contains(e.target as Node)) {
+        setIsSettingsMenuOpen(false);
+      }
     };
 
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
         setIsMainMenuActive(false);
         setActiveMenu(null);
+        setIsHamburgerOpen(false);
         setIsProjectDropdownOpen(false);
         setIsRunConfigOpen(false);
+        setIsMoreRunMenuOpen(false);
+        setIsSettingsMenuOpen(false);
       }
     };
 
@@ -255,25 +292,26 @@ export const TopBar: React.FC<TopBarProps> = ({
 
   return (
     <div 
-      onDoubleClick={handleToggleMaximize}
-      className="h-10 bg-[#1E1F22] border-b border-[#2B2D30] flex items-center justify-between pl-2 pr-0 select-none text-[12px] text-[#DFE1E5] relative z-40"
+      className="h-10 bg-[#1E1F22] border-b border-[#2B2D30] flex items-center justify-between pl-2 pr-0 select-none text-[12px] text-[#DFE1E5] relative z-40 w-full"
     >
-      {/* ─── LEFT: [ID] Logo, Hamburger Toggle (expands 11 Menus), Project Widget, VCS Widget, Refresh ─── */}
+      {/* ─── LEFT: [ID] Logo, Hamburger Icon, Horizontal Main Menu (or Collapsed Menu) ─── */}
       <div 
-        className="flex items-center gap-1.5" 
+        className="flex items-center gap-1 min-w-0 flex-shrink-0" 
         ref={mainMenuRef} 
         onMouseDown={(e) => e.stopPropagation()} 
+        onDoubleClick={(e) => e.stopPropagation()}
         data-tauri-drag-region="false"
       >
         {/* IntelliJ ID Badge */}
         <div 
           onClick={(e) => {
             e.stopPropagation();
-            setIsMainMenuActive(prev => {
-              const next = !prev;
-              setActiveMenu(next ? 'File' : null);
-              return next;
-            });
+            if (isMenuCollapsed) {
+              setIsHamburgerOpen(prev => !prev);
+              setActiveMenu(null);
+            } else {
+              setActiveMenu(prev => prev === 'File' ? null : 'File');
+            }
           }}
           className="w-7 h-7 rounded bg-[#2B2D30] border border-[#393B40] hover:border-[#4E5157] flex items-center justify-center cursor-pointer transition-colors shadow-inner flex-shrink-0"
           title="IntelliJ IDEA Menu"
@@ -281,28 +319,42 @@ export const TopBar: React.FC<TopBarProps> = ({
           <span className="font-extrabold text-[11px] text-[#62B543] tracking-tighter">ID</span>
         </div>
 
-        {/* Hamburger Menu Button */}
-        <button
-          onClick={(e) => {
-            e.stopPropagation();
-            setIsMainMenuActive(prev => {
-              const next = !prev;
-              setActiveMenu(next ? 'File' : null);
-              return next;
-            });
-          }}
-          title="Main Menu"
-          className={`p-1.5 rounded transition-colors flex-shrink-0 ${
-            isMainMenuActive ? 'bg-[#35373B] text-white' : 'hover:bg-[#2B2D30] text-[#868A91] hover:text-[#DFE1E5]'
-          }`}
-        >
-          <Menu size={15} />
-        </button>
+        {/* Hamburger Menu Button (Displayed when horizontal menu bar is collapsed) */}
+        {isMenuCollapsed && (
+          <div className="relative">
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                setIsHamburgerOpen(prev => !prev);
+                setActiveMenu(null);
+              }}
+              title="Main Menu"
+              className={`p-1.5 rounded transition-colors flex-shrink-0 cursor-pointer ${
+                isHamburgerOpen || activeMenu !== null
+                  ? 'bg-[#35373B] text-white' 
+                  : 'hover:bg-[#2B2D30] text-[#868A91] hover:text-[#DFE1E5]'
+              }`}
+            >
+              <Menu size={15} />
+            </button>
 
-        {/* When Hamburger is CLICKED / ACTIVE:
-            Hide Project / VCS / Refresh, and show the 11 Menu categories inline horizontally! */}
-        {isMainMenuActive ? (
-          <div className="flex items-center ml-0.5 animate-in fade-in duration-75">
+            {/* Authentic IntelliJ 2-Column Hamburger Flyout Menu (Available on click) */}
+            <IntelliJHamburgerMenu
+              isOpen={isHamburgerOpen}
+              onClose={() => setIsHamburgerOpen(false)}
+              onSelectAction={(actionId) => {
+                onSelectMenuAction(actionId);
+                setIsHamburgerOpen(false);
+              }}
+              menus={menus}
+              getMenuItems={getMenuItems}
+            />
+          </div>
+        )}
+
+        {/* Horizontal Main Menu Bar (Auto-collapses into Hamburger Menu when window is shrunk < 1250px) */}
+        {!isMenuCollapsed && (
+          <div className="flex items-center ml-0.5 animate-in fade-in duration-100">
             {menus.map((menu) => {
               const isOpen = activeMenu === menu;
               return (
@@ -311,13 +363,14 @@ export const TopBar: React.FC<TopBarProps> = ({
                     onClick={(e) => {
                       e.stopPropagation();
                       setActiveMenu(isOpen ? null : menu);
+                      setIsHamburgerOpen(false);
                     }}
                     onMouseEnter={() => {
                       if (activeMenu !== null) {
                         setActiveMenu(menu);
                       }
                     }}
-                    className={`px-2.5 py-1 rounded text-[12px] font-normal transition-colors cursor-pointer select-none ${
+                    className={`px-2 py-1 rounded text-[12px] font-normal transition-colors cursor-pointer select-none whitespace-nowrap ${
                       isOpen ? 'bg-[#3574F0] text-white' : 'text-[#DFE1E5] hover:bg-[#2B2D30] hover:text-white'
                     }`}
                   >
@@ -326,125 +379,44 @@ export const TopBar: React.FC<TopBarProps> = ({
 
                   {/* Dropdown Menu directly below this category */}
                   {isOpen && (
-                    <div className="absolute left-0 top-full mt-1 z-50">
-                      <MenuDropdown
-                        items={getMenuItems(menu)}
-                        onSelectAction={(actionId) => {
-                          onSelectMenuAction(actionId);
-                          setActiveMenu(null);
-                          setIsMainMenuActive(false);
-                        }}
-                        onClose={() => {
-                          setActiveMenu(null);
-                          setIsMainMenuActive(false);
-                        }}
-                      />
-                    </div>
+                    <MenuDropdown
+                      items={getMenuItems(menu)}
+                      onSelectAction={(actionId) => {
+                        onSelectMenuAction(actionId);
+                        setActiveMenu(null);
+                      }}
+                      onClose={() => {
+                        setActiveMenu(null);
+                      }}
+                    />
                   )}
                 </div>
               );
             })}
           </div>
-        ) : (
-          /* When NOT interacting with menu: Normal state with Project, VCS, and Sync widgets */
-          <div className="flex items-center gap-1.5 animate-in fade-in duration-100">
-            {/* Project Selector Widget: [Folder] <projectName> ▾ */}
-            <div className="relative" ref={projectDropdownRef}>
-              <button
-                onClick={() => setIsProjectDropdownOpen(prev => !prev)}
-                className="flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-[#222427] hover:bg-[#2B2D30] border border-[#323438] text-[#DFE1E5] text-xs transition-colors cursor-pointer"
-                title={`Active Project: ${projectName}`}
-              >
-                <Folder size={13} className="text-[#E5A83B] fill-[#E5A83B]/20 flex-shrink-0" />
-                <span className="font-semibold text-white tracking-tight">{projectName}</span>
-                <ChevronDown size={11} className="text-[#868A91]" />
-              </button>
+        )}
 
-              {/* Project Switcher Dropdown */}
-              {isProjectDropdownOpen && (
-                <div className="absolute left-0 top-full mt-1 w-72 bg-[#2B2D30] border border-[#393B40] rounded-lg shadow-2xl py-1 z-50 text-xs">
-                  <div className="px-3 py-1.5 text-[10px] uppercase font-bold text-[#868A91] tracking-wider border-b border-[#393B40]/50">
-                    Recent Projects
-                  </div>
-                  <div className="max-h-60 overflow-y-auto divide-y divide-[#393B40]/30">
-                    {recentProjects.length > 0 ? (
-                      recentProjects.map((p, idx) => (
-                        <div
-                          key={idx}
-                          onClick={() => {
-                            onSelectMenuAction(`file.openRecent:${p.path}`);
-                            setIsProjectDropdownOpen(false);
-                          }}
-                          className="px-3 py-2 hover:bg-[#35373B] cursor-pointer transition-colors"
-                        >
-                          <div className="font-semibold text-[#DFE1E5]">{p.name}</div>
-                          <div className="text-[11px] text-[#868A91] font-mono truncate">{p.path}</div>
-                        </div>
-                      ))
-                    ) : (
-                      <div className="px-3 py-2 text-[#868A91] text-center">No recent projects</div>
-                    )}
-                  </div>
-                  <div className="p-1 border-t border-[#393B40]/50">
-                    <button
-                      onClick={() => {
-                        onOpenProjectDialog?.();
-                        setIsProjectDropdownOpen(false);
-                      }}
-                      className="w-full text-left px-2 py-1 rounded hover:bg-[#35373B] text-[#3574F0] font-medium"
-                    >
-                      Open or Create Project...
-                    </button>
-                  </div>
-                </div>
-              )}
-            </div>
-
-            {/* Version Control / Branch Selector Widget */}
-            <button
-              onClick={() => {
-                if (onOpenBranches) onOpenBranches();
-                else onSelectMenuAction('git.branches');
-              }}
-              className="flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-[#222427] hover:bg-[#2B2D30] border border-[#323438] text-xs text-[#DFE1E5] transition-colors cursor-pointer"
-              title={`Git Branch: ${gitBranch} (Click to manage)`}
-            >
-              <FolderGit2 size={13} className="text-[#3574F0]" />
-              <span className="font-medium">{gitBranch || 'Version Control'}</span>
-              <ChevronDown size={11} className="text-[#868A91]" />
-            </button>
-
-            {/* VCS Quick Action Icons (Update Project, Commit, Push, Sync) */}
-            <div className="flex items-center gap-0.5 ml-0.5">
+        {/* Compact indicators when window is shrunk: Project Name & Git Branch */}
+        {isMenuCollapsed && (
+          <div className="flex items-center gap-1.5 ml-1 animate-in fade-in duration-100">
+            {projectName && (
+              <span className="text-[11px] font-medium text-[#DFE1E5] max-w-[130px] truncate" title={projectName}>
+                {projectName}
+              </span>
+            )}
+            {gitBranch && (
               <button
-                onClick={() => onSelectMenuAction('git.update')}
-                className="p-1.5 rounded hover:bg-[#2B2D30] text-[#3574F0] hover:text-[#56A8F5] transition-colors cursor-pointer"
-                title="Update Project (Ctrl+T)"
+                onClick={() => {
+                  if (onOpenBranches) onOpenBranches();
+                  else onSelectMenuAction('git.branches');
+                }}
+                className="flex items-center gap-1 text-[11px] text-[#868A91] hover:text-[#DFE1E5] px-1.5 py-0.5 rounded hover:bg-[#2B2D30] transition-colors cursor-pointer"
+                title={`Git Branch: ${gitBranch}`}
               >
-                <ArrowDownToLine size={13} />
+                <FolderGit2 size={11} className="text-[#3574F0]" />
+                <span className="max-w-[85px] truncate">{gitBranch}</span>
               </button>
-              <button
-                onClick={() => onSelectMenuAction('git.commit')}
-                className="p-1.5 rounded hover:bg-[#2B2D30] text-[#3574F0] hover:text-[#56A8F5] transition-colors cursor-pointer"
-                title="Commit (Ctrl+K)"
-              >
-                <Check size={13} strokeWidth={2.5} />
-              </button>
-              <button
-                onClick={() => onSelectMenuAction('git.push')}
-                className="p-1.5 rounded hover:bg-[#2B2D30] text-[#3574F0] hover:text-[#56A8F5] transition-colors cursor-pointer"
-                title="Push (Ctrl+Shift+K)"
-              >
-                <ArrowUpFromLine size={13} />
-              </button>
-              <button
-                onClick={handleRefreshClick}
-                className="p-1.5 rounded hover:bg-[#2B2D30] text-[#868A91] hover:text-white transition-colors cursor-pointer"
-                title="Synchronize Files from Disk (Ctrl+Alt+Y)"
-              >
-                <RotateCw size={12} className={isRefreshing ? 'animate-spin text-[#3574F0]' : ''} />
-              </button>
-            </div>
+            )}
           </div>
         )}
       </div>
@@ -453,31 +425,46 @@ export const TopBar: React.FC<TopBarProps> = ({
       <div 
         onMouseDown={handleMouseDownDrag}
         onDoubleClick={handleToggleMaximize}
-        className="flex-1 h-full min-w-[20px] cursor-default" 
+        className="flex-1 h-full min-w-[8px] cursor-default" 
       />
 
       {/* ─── CENTER: Centered Run / Debug Configuration Widget (New UI) ─── */}
       <div 
-        className="flex items-center gap-1.5" 
+        className="flex items-center gap-1.5 flex-shrink min-w-0" 
         onMouseDown={(e) => e.stopPropagation()} 
+        onDoubleClick={(e) => e.stopPropagation()}
         data-tauri-drag-region="false"
       >
         {/* Target Selector Pill */}
         <div className="relative" ref={runConfigRef}>
           <button
             onClick={() => setIsRunConfigOpen(prev => !prev)}
-            className="flex items-center gap-1.5 px-2.5 py-1 bg-[#222427] hover:bg-[#2B2D30] border border-[#323438] rounded text-xs text-[#DFE1E5] transition-colors cursor-pointer"
+            className={`flex items-center gap-1.5 px-2.5 py-1 bg-[#222427] hover:bg-[#2B2D30] border ${
+              isRunning ? 'border-[#59A869]/60 shadow-[0_0_8px_rgba(89,168,105,0.18)]' : 'border-[#323438]'
+            } rounded text-xs text-[#DFE1E5] transition-all cursor-pointer`}
             title="Edit Run/Debug Configurations"
           >
+            {/* Live Process Execution Indicator */}
+            {isRunning && (
+              <span className="relative flex h-2 w-2 mr-0.5">
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-[#59A869] opacity-75"></span>
+                <span className="relative inline-flex rounded-full h-2 w-2 bg-[#59A869]"></span>
+              </span>
+            )}
             {renderConfigIcon(activeConfig?.type)}
-            <span className="text-[11px] font-medium max-w-[140px] truncate">
-              {activeConfig ? activeConfig.name : selectedRunTarget}
+            <span className="text-[11px] font-medium max-w-[100px] sm:max-w-[140px] md:max-w-[180px] lg:max-w-[220px] truncate">
+              {projectName 
+                ? (activeConfig ? `${projectName} (${activeConfig.name})` : projectName) 
+                : (activeConfig ? activeConfig.name : selectedRunTarget)}
             </span>
             <ChevronDown size={11} className="text-[#868A91]" />
           </button>
 
           {isRunConfigOpen && (
-            <div className="absolute left-0 top-full mt-1 w-56 bg-[#222427] border border-[#323438] rounded-lg shadow-2xl py-1 z-50 text-xs">
+            <div className="absolute left-0 top-full mt-1 w-64 bg-[#222427] border border-[#393B40] rounded-lg shadow-2xl py-1 z-50 text-xs">
+              <div className="px-3 py-1 text-[10px] uppercase tracking-wider text-[#868A91] font-semibold">
+                Run Configurations
+              </div>
               {configurations.length > 0 ? (
                 configurations.map((cfg) => {
                   const isSelected = cfg.id === (activeConfig?.id || activeConfigId);
@@ -496,7 +483,7 @@ export const TopBar: React.FC<TopBarProps> = ({
                         {renderConfigIcon(cfg.type)}
                         <span className="truncate">{cfg.name}</span>
                       </div>
-                      {isSelected && <span className="text-[#59A869] text-xs">✓</span>}
+                      {isSelected && <span className="text-[#59A869] text-xs font-bold">✓</span>}
                     </div>
                   );
                 })
@@ -504,16 +491,22 @@ export const TopBar: React.FC<TopBarProps> = ({
                 <>
                   <div 
                     onClick={() => { setSelectedRunTarget('Current File'); setIsRunConfigOpen(false); }}
-                    className="px-3 py-1.5 hover:bg-[#2B2D30] cursor-pointer flex items-center justify-between"
+                    className="px-3 py-1.5 hover:bg-[#2B2D30] cursor-pointer flex items-center justify-between transition-colors"
                   >
-                    <span>Current File</span>
+                    <div className="flex items-center gap-2">
+                      <TerminalIcon size={12} className="text-[#59A869]" />
+                      <span>Current File</span>
+                    </div>
                     {selectedRunTarget === 'Current File' && <span className="text-[#59A869]">✓</span>}
                   </div>
                   <div 
                     onClick={() => { setSelectedRunTarget(`${projectName} (Release)`); setIsRunConfigOpen(false); }}
-                    className="px-3 py-1.5 hover:bg-[#2B2D30] cursor-pointer flex items-center justify-between"
+                    className="px-3 py-1.5 hover:bg-[#2B2D30] cursor-pointer flex items-center justify-between transition-colors"
                   >
-                    <span>{projectName} (Release)</span>
+                    <div className="flex items-center gap-2">
+                      <Package size={12} className="text-[#E08D3C]" />
+                      <span>{projectName} (Release)</span>
+                    </div>
                     {selectedRunTarget.includes('Release') && <span className="text-[#59A869]">✓</span>}
                   </div>
                 </>
@@ -525,9 +518,12 @@ export const TopBar: React.FC<TopBarProps> = ({
                   else onSelectMenuAction('run.editConfig');
                   setIsRunConfigOpen(false); 
                 }}
-                className="px-3 py-1.5 hover:bg-[#2B2D30] text-[#3574F0] cursor-pointer font-medium flex items-center justify-between"
+                className="px-3 py-1.5 hover:bg-[#2B2D30] text-[#3574F0] cursor-pointer font-medium flex items-center justify-between transition-colors"
               >
-                <span>Edit Configurations...</span>
+                <div className="flex items-center gap-2">
+                  <Sliders size={13} className="text-[#3574F0]" />
+                  <span>Edit Configurations...</span>
+                </div>
                 <span className="text-[10px] text-[#868A91]">Shift+Alt+F10</span>
               </div>
             </div>
@@ -543,60 +539,161 @@ export const TopBar: React.FC<TopBarProps> = ({
           <Hammer size={14} />
         </button>
 
-        {/* Run Button (Green Play Icon in New UI Pill) */}
+        {/* Run Button (Green Play Icon) */}
         <button 
           onClick={onRun}
-          title="Run 'Desktop IDE' (Shift+F10)"
-          className={`p-1.5 rounded transition-colors flex items-center justify-center cursor-pointer ${
-            isRunning ? 'opacity-50 cursor-not-allowed bg-[#2B2D30]' : 'hover:bg-[#2B2D30]'
-          }`}
-          disabled={isRunning}
+          title={isRunning ? `Rerun '${projectName || 'Project'}' (Shift+F10)` : `Run '${projectName || 'Project'}' (Shift+F10)`}
+          className="p-1.5 rounded hover:bg-[#2B2D30] transition-colors flex items-center justify-center cursor-pointer group"
         >
-          <Play size={15} className="fill-[#59A869] text-[#59A869]" />
+          <Play size={15} className="fill-[#59A869] text-[#59A869] group-hover:scale-105 transition-transform" />
         </button>
 
         {/* Debug Button (Green Bug) */}
         <button 
           onClick={() => onSelectMenuAction('run.debug')}
-          title="Debug 'Desktop IDE' (Shift+F9)"
-          className="p-1.5 rounded hover:bg-[#2B2D30] text-[#59A869] transition-colors cursor-pointer"
+          title={`Debug '${projectName || 'Project'}' (Shift+F9)`}
+          className="p-1.5 rounded hover:bg-[#2B2D30] text-[#59A869] transition-colors cursor-pointer group"
         >
-          <Bug size={15} />
+          <Bug size={15} className="group-hover:scale-105 transition-transform" />
+        </button>
+
+        {/* Run with Coverage (Shield Icon) */}
+        <button 
+          onClick={() => onSelectMenuAction('run.coverage')}
+          title={`Run '${projectName || 'Project'}' with Coverage`}
+          className="p-1.5 rounded hover:bg-[#2B2D30] text-[#59A869] transition-colors cursor-pointer group"
+        >
+          <Shield size={14} className="fill-[#59A869]/20 group-hover:scale-105 transition-transform" />
         </button>
 
         {/* Stop Button */}
         <button 
           onClick={onStop}
-          title="Stop (Ctrl+F2)"
-          className={`p-1.5 rounded transition-colors cursor-pointer ${
-            isRunning ? 'text-[#E05555] hover:bg-[#2B2D30]' : 'text-[#5A5D63] cursor-not-allowed'
+          title={isRunning ? "Stop (Ctrl+F2)" : "Stop (Not running)"}
+          className={`p-1.5 rounded transition-colors ${
+            isRunning ? 'text-[#E05555] hover:bg-[#2B2D30] cursor-pointer' : 'text-[#5A5D63] cursor-not-allowed opacity-60'
           }`}
           disabled={!isRunning}
         >
           <Square size={13} className={isRunning ? 'fill-[#E05555]' : ''} />
         </button>
 
-        {/* More Run Actions */}
-        <button 
-          onClick={() => onSelectMenuAction('run.editConfig')}
-          title="More Run/Debug Actions"
-          className="p-1.5 rounded hover:bg-[#2B2D30] text-[#868A91] hover:text-[#DFE1E5] transition-colors cursor-pointer"
-        >
-          <MoreVertical size={13} />
-        </button>
+        {/* More Run Actions Dropdown */}
+        <div className="relative" ref={moreRunMenuRef}>
+          <button 
+            onClick={() => setIsMoreRunMenuOpen(prev => !prev)}
+            title="More Run/Debug Actions"
+            className={`p-1.5 rounded hover:bg-[#2B2D30] transition-colors cursor-pointer ${
+              isMoreRunMenuOpen ? 'bg-[#2B2D30] text-[#DFE1E5]' : 'text-[#868A91] hover:text-[#DFE1E5]'
+            }`}
+          >
+            <MoreVertical size={13} />
+          </button>
+
+          {isMoreRunMenuOpen && (
+            <div className="absolute right-0 top-full mt-1 w-64 bg-[#222427] border border-[#393B40] rounded-lg shadow-2xl py-1 z-50 text-xs">
+              {/* Edit Configurations... */}
+              <div 
+                onClick={() => {
+                  setIsMoreRunMenuOpen(false);
+                  if (onOpenEditConfigs) onOpenEditConfigs();
+                  else onSelectMenuAction('run.editConfig');
+                }}
+                className="px-3 py-1.5 hover:bg-[#2B2D30] text-[#DFE1E5] cursor-pointer flex items-center justify-between transition-colors"
+              >
+                <div className="flex items-center gap-2">
+                  <Sliders size={13} className="text-[#868A91]" />
+                  <span>Edit Configurations...</span>
+                </div>
+                <span className="text-[10px] text-[#868A91]">Shift+Alt+F10</span>
+              </div>
+
+              {/* Run with Coverage */}
+              <div 
+                onClick={() => {
+                  setIsMoreRunMenuOpen(false);
+                  onSelectMenuAction('run.coverage');
+                }}
+                className="px-3 py-1.5 hover:bg-[#2B2D30] text-[#DFE1E5] cursor-pointer flex items-center gap-2 transition-colors"
+              >
+                <Shield size={13} className="text-[#59A869]" />
+                <span>Run with Coverage</span>
+              </div>
+
+              {/* Profile Application */}
+              <div 
+                onClick={() => {
+                  setIsMoreRunMenuOpen(false);
+                  onSelectMenuAction('run.profile');
+                }}
+                className="px-3 py-1.5 hover:bg-[#2B2D30] text-[#DFE1E5] cursor-pointer flex items-center gap-2 transition-colors"
+              >
+                <Activity size={13} className="text-[#3574F0]" />
+                <span>Profile '{projectName || 'Application'}'</span>
+              </div>
+
+              {/* Stop Background Processes */}
+              <div 
+                onClick={() => {
+                  setIsMoreRunMenuOpen(false);
+                  if (isRunning) onStop();
+                }}
+                className={`px-3 py-1.5 flex items-center justify-between transition-colors ${
+                  isRunning ? 'hover:bg-[#2B2D30] text-[#DFE1E5] cursor-pointer' : 'text-[#6C707E] cursor-not-allowed opacity-50'
+                }`}
+              >
+                <div className="flex items-center gap-2">
+                  <Square size={13} className={isRunning ? 'text-[#E05555] fill-[#E05555]' : 'text-[#6C707E]'} />
+                  <span>Stop Background Processes</span>
+                </div>
+                <span className="text-[10px] text-[#868A91]">Ctrl+F2</span>
+              </div>
+
+              <div className="border-t border-[#323438] my-1" />
+
+              {/* Pin Run Console Tab */}
+              <div 
+                onClick={() => {
+                  setIsMoreRunMenuOpen(false);
+                  onSelectMenuAction('run.pinTab');
+                }}
+                className="px-3 py-1.5 hover:bg-[#2B2D30] text-[#DFE1E5] cursor-pointer flex items-center gap-2 transition-colors"
+              >
+                <Pin size={13} className="text-[#868A91]" />
+                <span>Pin Run Console Tab</span>
+              </div>
+
+              {/* Show Execution Point */}
+              <div 
+                onClick={() => {
+                  setIsMoreRunMenuOpen(false);
+                  onSelectMenuAction('run.showExecutionPoint');
+                }}
+                className="px-3 py-1.5 hover:bg-[#2B2D30] text-[#DFE1E5] cursor-pointer flex items-center justify-between transition-colors"
+              >
+                <div className="flex items-center gap-2">
+                  <Crosshair size={13} className="text-[#868A91]" />
+                  <span>Show Execution Point</span>
+                </div>
+                <span className="text-[10px] text-[#868A91]">Alt+F10</span>
+              </div>
+            </div>
+          )}
+        </div>
       </div>
 
       {/* Draggable spacer Center-Right */}
       <div 
         onMouseDown={handleMouseDownDrag}
         onDoubleClick={handleToggleMaximize}
-        className="flex-1 h-full min-w-[20px] cursor-default" 
+        className="flex-1 h-full min-w-[8px] cursor-default" 
       />
 
       {/* ─── RIGHT: Search Everywhere, Code With Me, Settings & Window Buttons ─── */}
       <div 
-        className="flex items-center gap-1" 
+        className="flex items-center gap-1 flex-shrink-0" 
         onMouseDown={(e) => e.stopPropagation()} 
+        onDoubleClick={(e) => e.stopPropagation()}
         data-tauri-drag-region="false"
       >
         {/* Search Everywhere (Double Shift) */}
@@ -612,31 +709,142 @@ export const TopBar: React.FC<TopBarProps> = ({
         <button 
           onClick={() => onSelectMenuAction('view.aiAssistant')}
           title="AI Assistant (Alt+Enter)"
-          className="p-1.5 rounded hover:bg-[#2B2D30] text-[#9876AA] hover:text-[#B388FF] transition-colors cursor-pointer"
+          className={`p-1.5 rounded transition-colors cursor-pointer ${
+            activeRightPanel === 'ai' 
+              ? 'bg-[#2B2D30] text-[#B388FF]' 
+              : 'hover:bg-[#2B2D30] text-[#9876AA] hover:text-[#B388FF]'
+          }`}
         >
           <Sparkles size={14} />
         </button>
 
-        {/* Settings Button (Ctrl+Alt+S) */}
-        <button 
-          onClick={() => onSelectMenuAction('file.settings')}
-          title="Settings (Ctrl+Alt+S)"
-          className="p-1.5 rounded hover:bg-[#2B2D30] text-[#868A91] hover:text-[#DFE1E5] transition-colors cursor-pointer"
-        >
-          <Settings size={14} />
-        </button>
+        {/* Quick Settings Dropdown (Ctrl+Alt+S) */}
+        <div className="relative" ref={settingsMenuRef}>
+          <button 
+            onClick={() => setIsSettingsMenuOpen(prev => !prev)}
+            title="Settings (Ctrl+Alt+S)"
+            className={`p-1.5 rounded transition-colors cursor-pointer ${
+              isSettingsMenuOpen 
+                ? 'bg-[#2B2D30] text-[#DFE1E5]' 
+                : 'hover:bg-[#2B2D30] text-[#868A91] hover:text-[#DFE1E5]'
+            }`}
+          >
+            <Settings size={14} />
+          </button>
+
+          {isSettingsMenuOpen && (
+            <div className="absolute right-0 top-full mt-1 w-60 bg-[#222427] border border-[#393B40] rounded-lg shadow-2xl py-1 z-50 text-xs">
+              <div 
+                onClick={() => {
+                  setIsSettingsMenuOpen(false);
+                  onSelectMenuAction('file.settings');
+                }}
+                className="px-3 py-1.5 hover:bg-[#2B2D30] text-[#DFE1E5] cursor-pointer flex items-center justify-between transition-colors"
+              >
+                <div className="flex items-center gap-2">
+                  <Settings size={13} className="text-[#868A91]" />
+                  <span>Settings...</span>
+                </div>
+                <span className="text-[10px] text-[#868A91]">Ctrl+Alt+S</span>
+              </div>
+
+              <div 
+                onClick={() => {
+                  setIsSettingsMenuOpen(false);
+                  onSelectMenuAction('tools.plugins');
+                }}
+                className="px-3 py-1.5 hover:bg-[#2B2D30] text-[#DFE1E5] cursor-pointer flex items-center gap-2 transition-colors"
+              >
+                <Package size={13} className="text-[#868A91]" />
+                <span>Plugins...</span>
+              </div>
+
+              <div 
+                onClick={() => {
+                  setIsSettingsMenuOpen(false);
+                  onSelectMenuAction('help.keymap');
+                }}
+                className="px-3 py-1.5 hover:bg-[#2B2D30] text-[#DFE1E5] cursor-pointer flex items-center gap-2 transition-colors"
+              >
+                <FileCode size={13} className="text-[#868A91]" />
+                <span>Keymap Reference...</span>
+              </div>
+
+              <div className="border-t border-[#323438] my-1" />
+
+              <div 
+                onClick={() => {
+                  setIsSettingsMenuOpen(false);
+                  onSelectMenuAction('tools.themeStudio');
+                }}
+                className="px-3 py-1.5 hover:bg-[#2B2D30] text-[#DFE1E5] cursor-pointer flex items-center justify-between transition-colors"
+              >
+                <div className="flex items-center gap-2">
+                  <Sparkles size={13} className="text-[#868A91]" />
+                  <span>Theme Studio & Schemes...</span>
+                </div>
+                <span className="text-[#59A869] text-xs font-bold">✓</span>
+              </div>
+
+              <div 
+                onClick={() => {
+                  setIsSettingsMenuOpen(false);
+                  handleToggleMaximize();
+                }}
+                className="px-3 py-1.5 hover:bg-[#2B2D30] text-[#DFE1E5] cursor-pointer flex items-center justify-between transition-colors"
+              >
+                <div className="flex items-center gap-2">
+                  <WindowSquare size={13} className="text-[#868A91]" />
+                  <span>{isMaximized ? 'Exit Full Screen' : 'Enter Full Screen'}</span>
+                </div>
+                <span className="text-[10px] text-[#868A91]">F11</span>
+              </div>
+
+              <div className="border-t border-[#323438] my-1" />
+
+              <div 
+                onClick={() => {
+                  setIsSettingsMenuOpen(false);
+                  onSelectMenuAction('help.checkUpdates');
+                }}
+                className="px-3 py-1.5 hover:bg-[#2B2D30] text-[#DFE1E5] cursor-pointer flex items-center gap-2 transition-colors"
+              >
+                <RotateCw size={13} className="text-[#868A91]" />
+                <span>Check for Updates...</span>
+              </div>
+
+              <div 
+                onClick={() => {
+                  setIsSettingsMenuOpen(false);
+                  onSelectMenuAction('help.about');
+                }}
+                className="px-3 py-1.5 hover:bg-[#2B2D30] text-[#DFE1E5] cursor-pointer flex items-center gap-2 transition-colors"
+              >
+                <span className="text-[10px] font-bold text-[#62B543]">ID</span>
+                <span>About IntelliJ IDEA</span>
+              </div>
+            </div>
+          )}
+        </div>
 
         {/* Notifications Bell */}
         <button 
           onClick={() => onSelectMenuAction('view.notifications')}
-          title="Notifications"
-          className="p-1.5 rounded hover:bg-[#2B2D30] text-[#868A91] hover:text-[#DFE1E5] transition-colors cursor-pointer"
+          title={unreadNotificationsCount > 0 ? `Notifications (${unreadNotificationsCount} unread)` : "Notifications"}
+          className={`p-1.5 rounded transition-colors cursor-pointer relative ${
+            activeRightPanel === 'notifications' 
+              ? 'bg-[#2B2D30] text-[#DFE1E5]' 
+              : 'hover:bg-[#2B2D30] text-[#868A91] hover:text-[#DFE1E5]'
+          }`}
         >
           <Bell size={14} />
+          {unreadNotificationsCount > 0 && (
+            <span className="absolute top-1 right-1 w-2 h-2 rounded-full bg-[#3574F0] ring-2 ring-[#1E1F22] animate-pulse" />
+          )}
         </button>
 
         {/* Edge-to-Edge Desktop Window Buttons */}
-        <div className="flex items-center h-10 ml-2" data-tauri-drag-region="false">
+        <div className="flex items-center h-10 ml-2" data-tauri-drag-region="false" onDoubleClick={(e) => e.stopPropagation()}>
           <button 
             onClick={handleMinimize}
             title="Minimize"

@@ -17,9 +17,9 @@ export interface ActivityBarProps {
   onToggleSideTab: (tabId: string) => void;
 
   // Bottom Tool Window
-  bottomTab?: 'run' | 'terminal' | 'problems' | 'find';
+  bottomTab?: 'run' | 'debug' | 'terminal' | 'problems' | 'find' | 'git' | 'tests';
   isBottomOpen?: boolean;
-  onToggleBottomTab?: (tabId: 'run' | 'terminal' | 'problems' | 'find') => void;
+  onToggleBottomTab?: (tabId: 'run' | 'debug' | 'terminal' | 'problems' | 'find' | 'git' | 'tests') => void;
 
   // Quick Action Callbacks
   onOpenCommit?: () => void;

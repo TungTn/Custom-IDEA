@@ -1,5 +1,6 @@
+import { NyanProgressBar } from './plugins/NyanProgressBar';
 import React, { useState, useEffect } from 'react';
-import { GitBranch, Bell, CheckCircle2, RotateCw, ShieldCheck } from 'lucide-react';
+import { GitBranch, Bell, CheckCircle2, RotateCw, ShieldCheck, Sparkles } from 'lucide-react';
 
 interface StatusBarProps {
   branch: string;
@@ -8,8 +9,10 @@ interface StatusBarProps {
   encoding?: string;
   lineEnding?: string;
   isIndexing?: boolean;
+  isRunning?: boolean;
   onOpenBranches?: () => void;
   onShowToast?: (title: string, message: string, type?: 'info' | 'success' | 'warning' | 'error') => void;
+  onToggleAi?: () => void;
 }
 
 export const StatusBar: React.FC<StatusBarProps> = ({
@@ -19,8 +22,10 @@ export const StatusBar: React.FC<StatusBarProps> = ({
   encoding = 'UTF-8',
   lineEnding = 'LF',
   isIndexing = false,
+  isRunning = false,
   onOpenBranches,
   onShowToast,
+  onToggleAi,
 }) => {
   const [currentTime, setCurrentTime] = useState('');
 
@@ -49,6 +54,13 @@ export const StatusBar: React.FC<StatusBarProps> = ({
           <GitBranch size={12} className="text-[#3574F0]" />
           <span>{branch || 'main'}</span>
         </div>
+
+        {/* Nyan Progress Bar during execution */}
+        {isRunning && (
+          <div className="border-l border-[#2B2D30] pl-3">
+            <NyanProgressBar label="Running..." />
+          </div>
+        )}
 
         {/* Indexing status indicator */}
         <div className="flex items-center gap-1.5 border-l border-[#2B2D30] pl-3">
@@ -105,6 +117,16 @@ export const StatusBar: React.FC<StatusBarProps> = ({
           title="Analysis finished: No errors found"
         >
           <ShieldCheck size={12} />
+        </div>
+
+        {/* JetBrains AI Assistant Status Badge */}
+        <div 
+          onClick={onToggleAi}
+          className="border-l border-[#2B2D30] pl-3 flex items-center gap-1.5 text-[#9876AA] hover:text-[#B292C4] cursor-pointer font-sans"
+          title="JetBrains AI Assistant: Ready (Click to open or press Alt+\)"
+        >
+          <Sparkles size={11} className="text-[#9876AA]" />
+          <span className="text-[10px] font-medium hidden sm:inline">AI: Ready</span>
         </div>
       </div>
     </div>

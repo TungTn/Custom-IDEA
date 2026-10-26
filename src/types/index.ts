@@ -15,6 +15,13 @@ export interface OpenTab {
   content: string;
   language: string;
   isDirty?: boolean;
+  tabType?: 'code' | 'db-table' | 'sql-console';
+  dbMetadata?: {
+    dataSourceId: string;
+    schema?: string;
+    tableName?: string;
+    query?: string;
+  };
 }
 
 export interface RunLog {
@@ -67,3 +74,102 @@ export interface FindUsagesResult {
   symbol: string;
   occurrences: UsageOccurrence[];
 }
+
+export interface Breakpoint {
+  id: string;
+  filePath: string;
+  fileName: string;
+  lineNumber: number;
+  enabled: boolean;
+  condition?: string;
+  logMessage?: string;
+  hitCount?: number;
+}
+
+export type DebugState = 'idle' | 'running' | 'paused' | 'stopped';
+
+export interface StackFrame {
+  id: string;
+  name: string;
+  file: string;
+  line: number;
+  column?: number;
+  filePath: string;
+  functionName?: string;
+  fileName?: string;
+  lineNumber?: number;
+  isAppCode?: boolean;
+}
+
+export interface VariableItem {
+  name: string;
+  type: string;
+  value: string;
+  children?: VariableItem[];
+}
+
+export interface WatchItem {
+  id: string;
+  expression: string;
+  value?: string;
+  type?: string;
+  error?: string;
+}
+
+export interface ProblemItem {
+  id: string;
+  filePath: string;
+  fileName: string;
+  line: number;
+  column: number;
+  message: string;
+  severity: 'error' | 'warning' | 'info';
+  source?: string;
+  code?: string;
+  quickFixTitle?: string;
+}
+
+export interface IntentionAction {
+  id: string;
+  title: string;
+  shortcut?: string;
+  category?: 'quick-fix' | 'refactor' | 'style';
+  icon?: string;
+  handler: () => void;
+}
+
+export interface GitStashItem {
+  id: string;
+  index: number;
+  hash: string;
+  message: string;
+  relativeTime: string;
+  branch: string;
+  files?: Array<{ path: string; status: string }>;
+}
+
+export interface GitGraphCommit {
+  hash: string;
+  short_hash: string;
+  author: string;
+  email: string;
+  date: string;
+  subject: string;
+  parents?: string[];
+  branches?: string[];
+  tags?: string[];
+  lane?: number;
+  color?: string;
+}
+
+export type GitResetMode = 'soft' | 'mixed' | 'hard' | 'keep';
+
+export interface RebaseCommitItem {
+  hash: string;
+  shortHash: string;
+  action: 'pick' | 'reword' | 'edit' | 'squash' | 'fixup' | 'drop';
+  subject: string;
+  author: string;
+}
+
+

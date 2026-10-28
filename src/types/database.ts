@@ -1,4 +1,17 @@
-export type SupportedDbEngine = 'sqlite' | 'postgresql' | 'mysql' | 'duckdb';
+export type SupportedDbEngine = 
+  | 'postgresql' 
+  | 'mysql' 
+  | 'mariadb'
+  | 'oracle'
+  | 'sqlserver' 
+  | 'sqlite' 
+  | 'redis' 
+  | 'mongodb' 
+  | 'clickhouse' 
+  | 'duckdb' 
+  | 'h2' 
+  | 'cassandra' 
+  | 'snowflake';
 
 export interface DbColumn {
   name: string;

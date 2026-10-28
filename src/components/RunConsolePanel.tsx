@@ -98,6 +98,47 @@ function parseAnsi(input: string): AnsiChunk[] {
   return chunks.length > 0 ? chunks : [{ text: input }];
 }
 
+interface LogLineRowProps {
+  log: RunLog;
+  softWrap: boolean;
+}
+
+const LogLineRow: React.FC<LogLineRowProps> = React.memo(({ log, softWrap }) => {
+  let defaultColor = '#DFE1E5';
+  let isSpecial = false;
+
+  if (log.type === 'cmd') {
+    defaultColor = '#3574F0';
+    isSpecial = true;
+  } else if (log.type === 'success') {
+    defaultColor = '#59A869';
+    isSpecial = true;
+  } else if (log.type === 'warning') {
+    defaultColor = '#EDA200';
+  } else if (log.type === 'error') {
+    defaultColor = '#E05555';
+  }
+
+  const chunks = useMemo(() => parseAnsi(log.text), [log.text]);
+
+  return (
+    <div className="flex items-start gap-2 leading-relaxed hover:bg-[#2B2D30]/25 px-1 py-0.5 rounded transition-colors font-mono">
+      <span className="text-[#4E5157] text-[10.5px] select-none flex-shrink-0 pt-0.5">{log.timestamp}</span>
+      <div className={`flex-1 ${softWrap ? 'whitespace-pre-wrap break-all' : 'whitespace-pre overflow-x-auto'} ${isSpecial ? 'font-semibold' : ''}`}>
+        {chunks.map((chunk, idx) => (
+          <span 
+            key={idx}
+            style={{ color: chunk.color || defaultColor }}
+            className={chunk.bold ? 'font-bold' : ''}
+          >
+            {chunk.text}
+          </span>
+        ))}
+      </div>
+    </div>
+  );
+});
+
 export const RunConsolePanel: React.FC<RunConsolePanelProps> = ({
   logs,
   isRunning,
@@ -297,41 +338,9 @@ export const RunConsolePanel: React.FC<RunConsolePanelProps> = ({
               {searchQuery ? `No logs matching "${searchQuery}"` : 'No execution logs.'}
             </div>
           ) : (
-            filteredLogs.map((log) => {
-              let defaultColor = '#DFE1E5';
-              let isSpecial = false;
-
-              if (log.type === 'cmd') {
-                defaultColor = '#3574F0';
-                isSpecial = true;
-              } else if (log.type === 'success') {
-                defaultColor = '#59A869';
-                isSpecial = true;
-              } else if (log.type === 'warning') {
-                defaultColor = '#EDA200';
-              } else if (log.type === 'error') {
-                defaultColor = '#E05555';
-              }
-
-              const chunks = parseAnsi(log.text);
-
-              return (
-                <div key={log.id} className="flex items-start gap-2 leading-relaxed hover:bg-[#2B2D30]/25 px-1 py-0.5 rounded transition-colors font-mono">
-                  <span className="text-[#4E5157] text-[10.5px] select-none flex-shrink-0 pt-0.5">{log.timestamp}</span>
-                  <div className={`flex-1 ${softWrap ? 'whitespace-pre-wrap break-all' : 'whitespace-pre overflow-x-auto'} ${isSpecial ? 'font-semibold' : ''}`}>
-                    {chunks.map((chunk, idx) => (
-                      <span 
-                        key={idx}
-                        style={{ color: chunk.color || defaultColor }}
-                        className={chunk.bold ? 'font-bold' : ''}
-                      >
-                        {chunk.text}
-                      </span>
-                    ))}
-                  </div>
-                </div>
-              );
-            })
+            filteredLogs.map((log) => (
+              <LogLineRow key={log.id} log={log} softWrap={softWrap} />
+            ))
           )}
         </div>
       </div>

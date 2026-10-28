@@ -1,7 +1,11 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { invoke } from '@tauri-apps/api/core';
+import { DownloadJdkModal, JdkItem } from './DownloadJdkModal';
 import { 
   X, 
+  Download,
+  Plus,
+  Coffee,
   FolderOpen, 
   ChevronRight, 
   ChevronDown, 
@@ -69,7 +73,95 @@ export const NewProjectModal: React.FC<NewProjectModalProps> = ({
 
   // Generic build & SDK
   const [buildSystem, setBuildSystem] = useState<string>('IntelliJ');
-  const [sdk, setSdk] = useState<string>('corretto-17 (Amazon Corretto 17.0.12)');
+  const [sdk, setSdk] = useState<string>('openjdk-25');
+  const [isDownloadJdkOpen, setIsDownloadJdkOpen] = useState(false);
+  const [isDetectingJdks, setIsDetectingJdks] = useState(false);
+  const [availableJdks, setAvailableJdks] = useState<JdkItem[]>([
+    { id: 'default-25', name: 'openjdk-25 (Oracle Corporation 25.0.4.1)', version: '25.0.4.1', vendor: 'Oracle Corporation', path: 'C:\\Program Files\\Java\\jdk-25.0.4.1', is_valid: true },
+    { id: 'default-11', name: 'jdk-11 (Oracle Corporation 11.0.11)', version: '11.0.11', vendor: 'Oracle Corporation', path: 'C:\\Program Files\\Java\\jdk-11.0.11', is_valid: true },
+    { id: 'default-17', name: 'corretto-17 (Amazon Corretto 17.0.12)', version: '17.0.12', vendor: 'Amazon Corretto', path: 'C:\\Program Files\\Amazon Corretto\\jdk17.0.12_7', is_valid: true },
+  ]);
+
+  // Load and detect JDKs from disk
+  useEffect(() => {
+    if (!isOpen) return;
+
+    const detectJdks = async () => {
+      try {
+        setIsDetectingJdks(true);
+        let customJdks: JdkItem[] = [];
+        try {
+          const raw = localStorage.getItem('intellij_custom_jdks');
+          if (raw) customJdks = JSON.parse(raw);
+        } catch (e) {}
+
+        if (typeof window !== 'undefined' && ('__TAURI_INTERNALS__' in window || '__TAURI__' in window)) {
+          const detected = await invoke<JdkItem[]>('detect_installed_jdks');
+          if (detected && detected.length > 0) {
+            const map = new Map<string, JdkItem>();
+            detected.forEach(j => map.set(j.path.toLowerCase(), j));
+            customJdks.forEach(j => map.set(j.path.toLowerCase(), j));
+            const merged = Array.from(map.values());
+            setAvailableJdks(merged);
+            if (merged.length > 0) {
+              setSdk(merged[0].name);
+            }
+            return;
+          }
+        }
+
+        if (customJdks.length > 0) {
+          setAvailableJdks(prev => {
+            const map = new Map<string, JdkItem>();
+            prev.forEach(j => map.set(j.path.toLowerCase(), j));
+            customJdks.forEach(j => map.set(j.path.toLowerCase(), j));
+            return Array.from(map.values());
+          });
+        }
+      } catch (err) {
+        console.warn('Failed to detect installed JDKs:', err);
+      } finally {
+        setIsDetectingJdks(false);
+      }
+    };
+
+    detectJdks();
+  }, [isOpen]);
+
+  const handleAddJdk = async () => {
+    try {
+      const isTauri = typeof window !== 'undefined' && ('__TAURI_INTERNALS__' in window || '__TAURI__' in window);
+      if (isTauri) {
+        const selected = await invoke<string | null>('select_directory', { defaultPath: 'C:\\Program Files\\Java' });
+        if (selected) {
+          const parsed = await invoke<JdkItem>('validate_and_parse_jdk', { path: selected });
+          if (parsed) {
+            setAvailableJdks(prev => {
+              const updated = [parsed, ...prev.filter(j => j.path.toLowerCase() !== parsed.path.toLowerCase())];
+              try {
+                localStorage.setItem('intellij_custom_jdks', JSON.stringify(updated));
+              } catch (e) {}
+              return updated;
+            });
+            setSdk(parsed.name);
+          }
+        }
+      }
+    } catch (err) {
+      console.warn('Failed to add JDK from disk:', err);
+    }
+  };
+
+  const handleJdkDownloaded = (newJdk: JdkItem) => {
+    setAvailableJdks(prev => {
+      const updated = [newJdk, ...prev.filter(j => j.path.toLowerCase() !== newJdk.path.toLowerCase())];
+      try {
+        localStorage.setItem('intellij_custom_jdks', JSON.stringify(updated));
+      } catch (e) {}
+      return updated;
+    });
+    setSdk(newJdk.name);
+  };
 
   // Python specific state
   const [pythonEnvType, setPythonEnvType] = useState<'Virtualenv' | 'Poetry' | 'Conda' | 'Pipenv'>('Virtualenv');
@@ -434,21 +526,58 @@ export const NewProjectModal: React.FC<NewProjectModalProps> = ({
 
                   {/* JDK Selection */}
                   <div className="flex items-center">
-                    <label className="w-[110px] text-[#DFE1E5] font-normal flex-shrink-0">
-                      JDK:
+                    <label className="w-[110px] text-[#DFE1E5] font-normal flex-shrink-0 flex items-center gap-1.5">
+                      <Coffee size={14} className="text-[#EDA200]" />
+                      <span>JDK:</span>
                     </label>
-                    <div className="flex-1">
+                    <div className="flex-1 flex items-center gap-1.5">
                       <select
                         value={sdk}
-                        onChange={(e) => setSdk(e.target.value)}
-                        className="w-full bg-[#1E1F22] border border-[#393B40] focus:border-[#3574F0] rounded px-3 py-1.5 text-[#DFE1E5] text-[12px] outline-none"
+                        onChange={(e) => {
+                          const val = e.target.value;
+                          if (val === '__download__') {
+                            setIsDownloadJdkOpen(true);
+                          } else if (val === '__add__') {
+                            handleAddJdk();
+                          } else {
+                            setSdk(val);
+                          }
+                        }}
+                        className="flex-1 bg-[#1E1F22] border border-[#393B40] focus:border-[#3574F0] rounded px-3 py-1.5 text-[#DFE1E5] text-[12px] outline-none"
                       >
-                        <option value="corretto-17 (Amazon Corretto 17.0.12)">corretto-17 Amazon Corretto 17.0.12</option>
-                        <option value="openjdk-21">openjdk-21 Oracle OpenJDK 21.0.2</option>
-                        <option value="temurin-17">Eclipse Temurin 17.0.10</option>
-                        <option value="download">Download JDK...</option>
-                        <option value="add">Add JDK...</option>
+                        <optgroup label="Detected & Configured JDKs">
+                          {availableJdks.map(j => (
+                            <option key={j.id} value={j.name}>
+                              {j.name} {j.path ? `[${j.path}]` : ''}
+                            </option>
+                          ))}
+                        </optgroup>
+                        <optgroup label="Actions">
+                          <option value="__download__">📥 Download JDK...</option>
+                          <option value="__add__">📁 Add JDK from Disk...</option>
+                        </optgroup>
                       </select>
+
+                      {/* Quick Action Buttons */}
+                      <button
+                        type="button"
+                        onClick={() => setIsDownloadJdkOpen(true)}
+                        title="Download JDK from vendor (Adoptium, Corretto, Oracle)..."
+                        className="flex items-center gap-1 px-2.5 py-1.5 bg-[#1E1F22] hover:bg-[#35373B] border border-[#393B40] text-[#DFE1E5] hover:text-white rounded text-[11.5px] transition-colors flex-shrink-0"
+                      >
+                        <Download size={12} className="text-[#3574F0]" />
+                        <span>Download...</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={handleAddJdk}
+                        title="Browse and add JDK from computer..."
+                        className="flex items-center gap-1 px-2.5 py-1.5 bg-[#1E1F22] hover:bg-[#35373B] border border-[#393B40] text-[#DFE1E5] hover:text-white rounded text-[11.5px] transition-colors flex-shrink-0"
+                      >
+                        <Plus size={12} className="text-[#59A869]" />
+                        <span>Add...</span>
+                      </button>
                     </div>
                   </div>
 
@@ -855,6 +984,12 @@ export const NewProjectModal: React.FC<NewProjectModalProps> = ({
             </div>
           </div>
         </div>
+        {/* Download JDK Dialog */}
+        <DownloadJdkModal
+          isOpen={isDownloadJdkOpen}
+          onClose={() => setIsDownloadJdkOpen(false)}
+          onDownloaded={handleJdkDownloaded}
+        />
       </div>
     </div>
   );

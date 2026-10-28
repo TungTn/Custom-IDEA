@@ -10,5 +10,18 @@ export default defineConfig({
     watch: {
       ignored: ['**/src-tauri/**']
     }
+  },
+  build: {
+    chunkSizeWarningLimit: 600,
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          'vendor-react': ['react', 'react-dom'],
+          'vendor-monaco': ['@monaco-editor/react'],
+          'vendor-xterm': ['@xterm/xterm', '@xterm/addon-fit', '@xterm/addon-search'],
+          'vendor-icons': ['lucide-react'],
+        }
+      }
+    }
   }
 });

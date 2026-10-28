@@ -5,7 +5,11 @@ import {
   Bookmark, 
   Layers,
   Terminal,
+  Play,
   PlaySquare,
+  Bug,
+  AlertCircle,
+  Search,
   Settings as SettingsIcon,
   HelpCircle
 } from 'lucide-react';
@@ -20,6 +24,10 @@ export interface ActivityBarProps {
   bottomTab?: 'run' | 'debug' | 'terminal' | 'problems' | 'find' | 'git' | 'tests';
   isBottomOpen?: boolean;
   onToggleBottomTab?: (tabId: 'run' | 'debug' | 'terminal' | 'problems' | 'find' | 'git' | 'tests') => void;
+  isRunning?: boolean;
+  hasFindResult?: boolean;
+  errorCount?: number;
+  warningCount?: number;
 
   // Quick Action Callbacks
   onOpenCommit?: () => void;
@@ -29,9 +37,9 @@ export interface ActivityBarProps {
 }
 
 /**
- * Authentic IntelliJ IDEA New UI - Left Tool Window Stripe
- * Displays primary tool window toggles (Project, Commit, Bookmarks, Structure)
- * and bottom configuration (Terminal, Run, Settings).
+ * Authentic IntelliJ IDEA New UI - Left Tool Window Stripe (Activity Bar)
+ * - Top Group: Project (1), Commit (0), Bookmarks (2), Structure (7)
+ * - Bottom Group: Git (9), Terminal (F12), Run (4), Debug (5), Problems (6), Find, Settings
  */
 export const ActivityBar: React.FC<ActivityBarProps> = ({ 
   activeSideTab,
@@ -40,10 +48,14 @@ export const ActivityBar: React.FC<ActivityBarProps> = ({
   bottomTab,
   isBottomOpen,
   onToggleBottomTab,
+  isRunning = false,
+  hasFindResult = false,
+  errorCount = 0,
+  warningCount = 0,
   onOpenCommit,
   onOpenPlugins,
 }) => {
-  const stripeItems = [
+  const topStripeItems = [
     { 
       id: 'project', 
       label: 'Project', 
@@ -82,11 +94,74 @@ export const ActivityBar: React.FC<ActivityBarProps> = ({
     },
   ];
 
+  const bottomToolItems = [
+    {
+      id: 'git' as const,
+      label: 'Git',
+      badge: '9',
+      shortcut: 'Alt+9',
+      icon: GitBranch,
+      iconColor: 'text-[#3574F0]',
+      isActive: isBottomOpen && bottomTab === 'git',
+      onClick: () => onToggleBottomTab?.('git'),
+    },
+    {
+      id: 'terminal' as const,
+      label: 'Terminal',
+      badge: 'F12',
+      shortcut: 'Alt+F12',
+      icon: Terminal,
+      iconColor: 'text-[#DFE1E5]',
+      isActive: isBottomOpen && bottomTab === 'terminal',
+      onClick: () => onToggleBottomTab?.('terminal'),
+    },
+    {
+      id: 'run' as const,
+      label: 'Run',
+      badge: '4',
+      shortcut: 'Alt+4',
+      icon: Play,
+      iconColor: isRunning ? 'text-[#3574F0] fill-[#3574F0] animate-pulse' : 'text-[#59A869]',
+      isActive: isBottomOpen && bottomTab === 'run',
+      onClick: () => onToggleBottomTab?.('run'),
+    },
+    {
+      id: 'debug' as const,
+      label: 'Debug',
+      badge: '5',
+      shortcut: 'Alt+5',
+      icon: Bug,
+      iconColor: 'text-[#E55353]',
+      isActive: isBottomOpen && bottomTab === 'debug',
+      onClick: () => onToggleBottomTab?.('debug'),
+    },
+    {
+      id: 'problems' as const,
+      label: errorCount > 0 ? `Problems (${errorCount})` : 'Problems',
+      badge: '6',
+      shortcut: 'Alt+6',
+      icon: AlertCircle,
+      iconColor: errorCount > 0 ? 'text-[#E05555]' : warningCount > 0 ? 'text-[#EDA200]' : 'text-[#59A869]',
+      isActive: isBottomOpen && bottomTab === 'problems',
+      onClick: () => onToggleBottomTab?.('problems'),
+    },
+    ...(hasFindResult || bottomTab === 'find' ? [{
+      id: 'find' as const,
+      label: 'Find',
+      badge: '3',
+      shortcut: 'Alt+3',
+      icon: Search,
+      iconColor: 'text-[#3574F0]',
+      isActive: isBottomOpen && bottomTab === 'find',
+      onClick: () => onToggleBottomTab?.('find'),
+    }] : []),
+  ];
+
   return (
     <div className="w-10 bg-[#1E1F22] border-r border-[#2B2D30] flex flex-col justify-between py-2 select-none z-10 flex-shrink-0">
-      {/* Top Left Tool Window Buttons (Project 1, Commit 0, Bookmarks 2, Structure 7) */}
+      {/* ─── Top Left Tool Window Buttons (Project, Commit, Bookmarks, Structure) ─── */}
       <div className="flex flex-col items-center gap-1">
-        {stripeItems.map((item) => {
+        {topStripeItems.map((item) => {
           const Icon = item.icon;
           return (
             <button
@@ -115,40 +190,39 @@ export const ActivityBar: React.FC<ActivityBarProps> = ({
         })}
       </div>
 
-      {/* Bottom Stripe Buttons (Terminal, Run, Settings) */}
+      {/* ─── Bottom Tool Window Buttons (Git, Terminal, Run, Debug, Problems, Settings) ─── */}
       <div className="flex flex-col items-center gap-1">
-        {onToggleBottomTab && (
-          <>
+        {bottomToolItems.map((item) => {
+          const Icon = item.icon;
+          return (
             <button
-              onClick={() => onToggleBottomTab('terminal')}
-              title="Terminal (Alt+F12)"
-              className={`w-8 h-8 rounded flex items-center justify-center transition-colors relative cursor-pointer ${
-                isBottomOpen && bottomTab === 'terminal'
-                  ? 'bg-[#2B2D30] text-[#3574F0]'
+              key={item.id}
+              onClick={item.onClick}
+              title={`${item.label} (${item.shortcut})`}
+              className={`w-8 h-8 rounded flex items-center justify-center transition-all relative group cursor-pointer ${
+                item.isActive
+                  ? 'bg-[#2B2D30] text-[#DFE1E5]'
                   : 'text-[#868A91] hover:text-[#DFE1E5] hover:bg-[#2B2D30]/60'
               }`}
             >
-              <Terminal size={15} />
-              {isBottomOpen && bottomTab === 'terminal' && (
+              <Icon size={15} className={item.isActive ? '' : item.iconColor} />
+
+              {/* Authentic IntelliJ active indicator stripe */}
+              {item.isActive && (
                 <div className="absolute left-0 top-1.5 bottom-1.5 w-[3px] bg-[#3574F0] rounded-r" />
               )}
+
+              {/* Number Badge tooltip hint */}
+              <span className="absolute -bottom-0.5 right-0.5 text-[8px] font-bold text-[#868A91] group-hover:text-white pointer-events-none opacity-80">
+                {item.badge}
+              </span>
             </button>
-            <button
-              onClick={() => onToggleBottomTab('run')}
-              title="Run (Alt+4)"
-              className={`w-8 h-8 rounded flex items-center justify-center transition-colors relative cursor-pointer ${
-                isBottomOpen && bottomTab === 'run'
-                  ? 'bg-[#2B2D30] text-[#59A869]'
-                  : 'text-[#868A91] hover:text-[#DFE1E5] hover:bg-[#2B2D30]/60'
-              }`}
-            >
-              <PlaySquare size={15} />
-              {isBottomOpen && bottomTab === 'run' && (
-                <div className="absolute left-0 top-1.5 bottom-1.5 w-[3px] bg-[#3574F0] rounded-r" />
-              )}
-            </button>
-          </>
-        )}
+          );
+        })}
+
+        <div className="w-5 h-[1px] bg-[#2B2D30] my-0.5" />
+
+        {/* Settings button */}
         <button
           onClick={() => onOpenPlugins?.()}
           title="Settings (Ctrl+Alt+S)"
@@ -160,4 +234,3 @@ export const ActivityBar: React.FC<ActivityBarProps> = ({
     </div>
   );
 };
-

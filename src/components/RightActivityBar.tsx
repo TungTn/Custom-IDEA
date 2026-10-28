@@ -27,8 +27,10 @@ import {
 } from 'lucide-react';
 
 import { DataSourceConnection } from '../types/database';
-import { DatabaseExplorer } from './database/DatabaseExplorer';
+const DatabaseExplorer = React.lazy(() => import('./database/DatabaseExplorer').then(m => ({ default: m.DatabaseExplorer })));
 import { BuildToolsPanel } from './BuildToolsPanel';
+import { MavenPanel, MavenIcon } from './MavenPanel';
+import { GradlePanel, GradleIcon } from './GradlePanel';
 
 export interface NotificationEntry {
   id: string;
@@ -106,9 +108,11 @@ export const RightActivityBar: React.FC<RightActivityBarProps> = ({
   }, [initialAiPrompt]);
 
   const topItems = [
-    { id: 'ai', label: 'AI Assistant', icon: Sparkles, color: 'text-[#9876AA]' },
+    { id: 'maven', label: 'Maven', icon: MavenIcon, color: 'text-[#E06C75]' },
+    { id: 'gradle', label: 'Gradle', icon: GradleIcon, color: 'text-[#00DE7A]' },
     { id: 'database', label: 'Database', icon: Database, color: 'text-[#3574F0]' },
     { id: 'cargo', label: 'Cargo / Build Tools', icon: Package, color: 'text-[#E5B567]' },
+    { id: 'ai', label: 'AI Assistant', icon: Sparkles, color: 'text-[#9876AA]' },
   ];
 
   const bottomItems = [
@@ -218,6 +222,18 @@ export const RightActivityBar: React.FC<RightActivityBarProps> = ({
           {/* Header */}
           <div className="h-9 bg-[#1E1F22] border-b border-[#2B2D30] px-3 flex items-center justify-between text-[#DFE1E5]">
             <div className="flex items-center gap-2 font-semibold">
+              {activeRightPanel === 'maven' && (
+                <>
+                  <MavenIcon size={14} />
+                  <span>Maven</span>
+                </>
+              )}
+              {activeRightPanel === 'gradle' && (
+                <>
+                  <GradleIcon size={14} />
+                  <span>Gradle</span>
+                </>
+              )}
               {activeRightPanel === 'ai' && (
                 <>
                   <Sparkles size={14} className="text-[#9876AA]" />
@@ -367,17 +383,45 @@ export const RightActivityBar: React.FC<RightActivityBarProps> = ({
               </div>
             )}
 
+            {/* Maven Tool Window (Java BE) */}
+            {activeRightPanel === 'maven' && (
+              <div className="h-full">
+                <MavenPanel
+                  projectPath={projectPath}
+                  onExecuteTask={onExecuteBuildTask || ((tool, task, cmd) => onShowToast?.('Maven Task', `Running: ${cmd}`, 'info'))}
+                  onExecuteCustomGoal={onExecuteCustomGoal || ((cmd) => onShowToast?.('Maven Goal', `Running: ${cmd}`, 'info'))}
+                  onShowToast={onShowToast}
+                  onClose={() => onToggleRightPanel(null)}
+                />
+              </div>
+            )}
+
+            {/* Gradle Tool Window (Java BE) */}
+            {activeRightPanel === 'gradle' && (
+              <div className="h-full">
+                <GradlePanel
+                  projectPath={projectPath}
+                  onExecuteTask={onExecuteBuildTask || ((tool, task, cmd) => onShowToast?.('Gradle Task', `Running: ${cmd}`, 'info'))}
+                  onExecuteCustomGoal={onExecuteCustomGoal || ((cmd) => onShowToast?.('Gradle Goal', `Running: ${cmd}`, 'info'))}
+                  onShowToast={onShowToast}
+                  onClose={() => onToggleRightPanel(null)}
+                />
+              </div>
+            )}
+
             {/* 2. Database Panel (DataGrip) */}
             {activeRightPanel === 'database' && (
               <div className="h-full">
-                <DatabaseExplorer
-                  dataSources={dataSources}
-                  onOpenTableData={onOpenTableData || (() => {})}
-                  onOpenSqlConsole={onOpenSqlConsole || (() => {})}
-                  onAddNewDataSource={onAddNewDataSource || (() => {})}
-                  onRemoveDataSource={onRemoveDataSource}
-                  onShowToast={onShowToast}
-                />
+                <React.Suspense fallback={<div className="p-4 text-xs text-[#868A91]">Loading Database Explorer...</div>}>
+                  <DatabaseExplorer
+                    dataSources={dataSources}
+                    onOpenTableData={onOpenTableData || (() => {})}
+                    onOpenSqlConsole={onOpenSqlConsole || (() => {})}
+                    onAddNewDataSource={onAddNewDataSource || (() => {})}
+                    onRemoveDataSource={onRemoveDataSource}
+                    onShowToast={onShowToast}
+                  />
+                </React.Suspense>
               </div>
             )}
 

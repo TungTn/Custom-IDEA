@@ -27,6 +27,7 @@ pub struct ProcessOutputPayload {
   pub run_id: String,
   pub text: String,
   pub stream: String,
+  pub lines: Option<Vec<String>>,
 }
 
 #[derive(Clone, serde::Serialize)]
@@ -150,7 +151,9 @@ fn read_directory_tree(path: &std::path::Path, current_depth: usize, max_depth: 
           let entry_name = entry.file_name().to_string_lossy().to_string();
           if entry_name == ".git" || entry_name == ".idea" || entry_name == ".vscode" 
             || entry_name == "node_modules" || entry_name == "target" || entry_name == "dist" 
-            || entry_name == "__pycache__" || entry_name == ".DS_Store" {
+            || entry_name == "build" || entry_name == ".gradle" || entry_name == "bin" || entry_name == "out"
+            || entry_name == "logs" || entry_name == "log" || entry_name == ".settings" || entry_name == ".metadata"
+            || entry_name == ".m2" || entry_name == "classes" || entry_name == "__pycache__" || entry_name == ".DS_Store" {
             continue;
           }
           children.push(read_directory_tree(&entry.path(), current_depth + 1, max_depth));
@@ -170,15 +173,6 @@ fn read_directory_tree(path: &std::path::Path, current_depth: usize, max_depth: 
   } else {
     let ext = path.extension().unwrap_or_default().to_string_lossy().to_lowercase();
     let lang = get_language_from_ext(&ext);
-    let content = if let Ok(meta) = path.metadata() {
-      if meta.len() < 500_000 {
-        std::fs::read_to_string(path).ok()
-      } else {
-        Some("// File exceeds 500KB - preview truncated".to_string())
-      }
-    } else {
-      None
-    };
 
     FileNodeDto {
       id: path_str.clone(),
@@ -186,7 +180,7 @@ fn read_directory_tree(path: &std::path::Path, current_depth: usize, max_depth: 
       path: path_str,
       is_folder: false,
       children: None,
-      content,
+      content: None, // Lazy-loaded on demand when file is clicked
       language: Some(lang),
     }
   }
@@ -204,7 +198,7 @@ fn open_project_dialog(default_path: Option<String>) -> Result<Option<FileNodeDt
   }
 
   if let Some(folder) = dialog.pick_folder() {
-    let tree = read_directory_tree(&folder, 0, 8);
+    let tree = read_directory_tree(&folder, 0, usize::MAX);
     Ok(Some(tree))
   } else {
     Ok(None)
@@ -217,7 +211,7 @@ fn open_project_by_path(project_path: String) -> Result<FileNodeDto, String> {
   if !path.exists() {
     return Err(format!("Path does not exist: {}", project_path));
   }
-  let tree = read_directory_tree(path, 0, 8);
+  let tree = read_directory_tree(path, 0, usize::MAX);
   Ok(tree)
 }
 
@@ -262,6 +256,7 @@ async fn open_in_new_window(app: tauri::AppHandle, project_name: String, project
     .min_inner_size(900.0, 600.0)
     .decorations(false)
     .shadow(true)
+    .maximized(true)
     .theme(Some(tauri::Theme::Dark))
     .build()
     .map_err(|e| format!("Failed to create new window: {}", e))?;
@@ -459,6 +454,71 @@ fn stop_process(run_id: String) -> Result<(), String> {
 }
 
 #[tauri::command]
+fn stop_all_processes() -> Result<(), String> {
+  let mut map = RUNNING_PROCESSES.lock().map_err(|e| e.to_string())?;
+  for (_id, mut child) in map.drain() {
+    let pid = child.id();
+    #[cfg(windows)]
+    {
+      let _ = std::process::Command::new("taskkill")
+        .args(&["/F", "/T", "/PID", &pid.to_string()])
+        .creation_flags(0x08000000)
+        .output();
+    }
+    let _ = child.kill();
+    let _ = child.wait();
+  }
+  Ok(())
+}
+
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+pub struct BuildCommandResult {
+  pub stdout: String,
+  pub stderr: String,
+  pub exit_code: i32,
+}
+
+#[tauri::command]
+fn execute_build_command(command: String, args: Vec<String>, cwd: Option<String>) -> Result<BuildCommandResult, String> {
+  let work_dir = cwd.unwrap_or_else(|| ".".to_string());
+  let mut cmd = {
+    #[cfg(windows)]
+    {
+      let mut c = std::process::Command::new("cmd.exe");
+      c.arg("/d").arg("/c");
+      let mut full_cmd = command.clone();
+      for a in &args {
+        full_cmd.push(' ');
+        if a.contains(' ') {
+          full_cmd.push('"');
+          full_cmd.push_str(a);
+          full_cmd.push('"');
+        } else {
+          full_cmd.push_str(a);
+        }
+      }
+      c.arg(&full_cmd);
+      use std::os::windows::process::CommandExt;
+      c.creation_flags(0x08000000);
+      c
+    }
+    #[cfg(not(windows))]
+    {
+      let mut c = std::process::Command::new(&command);
+      c.args(&args);
+      c
+    }
+  };
+  cmd.current_dir(&work_dir);
+  let output = cmd.output().map_err(|e| format!("Failed to run build command '{}': {}", command, e))?;
+  Ok(BuildCommandResult {
+    stdout: String::from_utf8_lossy(&output.stdout).to_string(),
+    stderr: String::from_utf8_lossy(&output.stderr).to_string(),
+    exit_code: output.status.code().unwrap_or(-1),
+  })
+}
+
+#[tauri::command]
 fn start_process(
   app: tauri::AppHandle,
   run_id: String,
@@ -467,7 +527,7 @@ fn start_process(
   cwd: Option<String>,
   env_vars: Option<HashMap<String, String>>,
 ) -> Result<(), String> {
-  let _ = stop_process(run_id.clone());
+  let _ = stop_all_processes();
 
   let work_dir = cwd.unwrap_or_else(|| ".".to_string());
 
@@ -498,9 +558,36 @@ fn start_process(
     c
   };
 
-  if let Some(envs) = env_vars {
+  if let Some(ref envs) = env_vars {
     for (k, v) in envs {
       cmd.env(k, v);
+    }
+  }
+
+  // Optimize JVM memory footprint if not explicitly specified by user configuration
+  let is_java_cmd = command.to_lowercase().contains("java") 
+    || command.to_lowercase().contains("mvn") 
+    || command.to_lowercase().contains("gradle")
+    || args.iter().any(|a| a.contains("bootRun") || a.contains("spring-boot") || a.ends_with(".jar"));
+  
+  if is_java_cmd {
+    let mut has_java_opts = false;
+    let mut has_maven_opts = false;
+    if let Some(ref envs) = env_vars {
+      if envs.contains_key("JAVA_TOOL_OPTIONS") {
+        has_java_opts = true;
+      }
+      if envs.contains_key("MAVEN_OPTS") {
+        has_maven_opts = true;
+      }
+    }
+    if !has_java_opts {
+      // Ultra-Lightweight Dev Profile: 384MB heap, SerialGC (saves 180MB RAM), 256k stack, 384MB Metaspace for Spring/Oracle/Security
+      cmd.env("JAVA_TOOL_OPTIONS", "-Xms64m -Xmx384m -Xss256k -XX:+UseSerialGC -XX:TieredStopAtLevel=1 -XX:MaxMetaspaceSize=384m -XX:ReservedCodeCacheSize=96m");
+    }
+    if !has_maven_opts && command.to_lowercase().contains("mvn") {
+      // Restrict Maven CLI monitor process to under 70MB RAM
+      cmd.env("MAVEN_OPTS", "-Xms32m -Xmx96m -XX:+UseSerialGC");
     }
   }
 
@@ -518,38 +605,72 @@ fn start_process(
     map.insert(run_id.clone(), child);
   }
 
-  // Stream stdout
+  // Stream stdout with 40ms / 25-line batching to prevent IPC saturation
   if let Some(out) = stdout {
     let app_clone = app.clone();
     let r_id = run_id.clone();
     std::thread::spawn(move || {
       let reader = BufReader::new(out);
+      let mut batch: Vec<String> = Vec::with_capacity(32);
+      let mut last_emit = std::time::Instant::now();
       for line in reader.lines() {
         if let Ok(l) = line {
-          let _ = app_clone.emit("process-output", ProcessOutputPayload {
-            run_id: r_id.clone(),
-            text: l,
-            stream: "stdout".into(),
-          });
+          batch.push(l);
+          if batch.len() >= 25 || last_emit.elapsed().as_millis() >= 40 {
+            let combined = batch.join("\n");
+            let _ = app_clone.emit("process-output", ProcessOutputPayload {
+              run_id: r_id.clone(),
+              text: combined,
+              stream: "stdout".into(),
+              lines: Some(std::mem::take(&mut batch)),
+            });
+            last_emit = std::time::Instant::now();
+          }
         }
+      }
+      if !batch.is_empty() {
+        let combined = batch.join("\n");
+        let _ = app_clone.emit("process-output", ProcessOutputPayload {
+          run_id: r_id.clone(),
+          text: combined,
+          stream: "stdout".into(),
+          lines: Some(batch),
+        });
       }
     });
   }
 
-  // Stream stderr
+  // Stream stderr with 40ms / 25-line batching to prevent IPC saturation
   if let Some(err) = stderr {
     let app_clone = app.clone();
     let r_id = run_id.clone();
     std::thread::spawn(move || {
       let reader = BufReader::new(err);
+      let mut batch: Vec<String> = Vec::with_capacity(32);
+      let mut last_emit = std::time::Instant::now();
       for line in reader.lines() {
         if let Ok(l) = line {
-          let _ = app_clone.emit("process-output", ProcessOutputPayload {
-            run_id: r_id.clone(),
-            text: l,
-            stream: "stderr".into(),
-          });
+          batch.push(l);
+          if batch.len() >= 25 || last_emit.elapsed().as_millis() >= 40 {
+            let combined = batch.join("\n");
+            let _ = app_clone.emit("process-output", ProcessOutputPayload {
+              run_id: r_id.clone(),
+              text: combined,
+              stream: "stderr".into(),
+              lines: Some(std::mem::take(&mut batch)),
+            });
+            last_emit = std::time::Instant::now();
+          }
         }
+      }
+      if !batch.is_empty() {
+        let combined = batch.join("\n");
+        let _ = app_clone.emit("process-output", ProcessOutputPayload {
+          run_id: r_id.clone(),
+          text: combined,
+          stream: "stderr".into(),
+          lines: Some(batch),
+        });
       }
     });
   }
@@ -878,14 +999,18 @@ fn git_get_diff(project_path: String, file_path: String) -> Result<String, Strin
     .or_else(|_| run_git_cmd(&project_path, &["diff", "--", &file_path]))
 }
 
-#[derive(Debug, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct GitCommitItemDto {
   pub hash: String,
   pub short_hash: String,
+  pub parents: Vec<String>,
   pub author: String,
   pub email: String,
   pub date: String,
   pub subject: String,
+  pub branches: Vec<String>,
+  pub tags: Vec<String>,
+  pub is_head: bool,
 }
 
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
@@ -916,19 +1041,78 @@ fn git_commit(project_path: String, message: String, files: Vec<String>, amend: 
 
 #[tauri::command]
 fn git_get_log(project_path: String, max_count: Option<usize>) -> Result<Vec<GitCommitItemDto>, String> {
-  let count_arg = format!("-n{}", max_count.unwrap_or(50));
-  let out = run_git_cmd(&project_path, &["log", &count_arg, "--pretty=format:%H\t%h\t%an\t%ae\t%ad\t%s", "--date=short"])?;
+  let count_arg = format!("-n{}", max_count.unwrap_or(80));
   let mut commits = Vec::new();
-  for line in out.lines() {
-    let parts: Vec<&str> = line.split('\t').collect();
-    if parts.len() >= 6 {
+
+  // If working tree has uncommitted modifications, add Working Tree item at top (JetBrains style)
+  if let Ok(status) = git_get_status(project_path.clone()) {
+    if !status.is_clean {
       commits.push(GitCommitItemDto {
-        hash: parts[0].to_string(),
-        short_hash: parts[1].to_string(),
-        author: parts[2].to_string(),
-        email: parts[3].to_string(),
-        date: parts[4].to_string(),
-        subject: parts[5].to_string(),
+        hash: "0000000000000000000000000000000000000000".to_string(),
+        short_hash: "worktree".to_string(),
+        parents: Vec::new(),
+        author: "You (Local Changes)".to_string(),
+        email: "".to_string(),
+        date: "Now".to_string(),
+        subject: format!("Working Tree ({} changed files)", status.changes.len()),
+        branches: vec!["Working Tree".to_string()],
+        tags: Vec::new(),
+        is_head: true,
+      });
+    }
+  }
+
+  let out = run_git_cmd(&project_path, &[
+    "log",
+    &count_arg,
+    "--all",
+    "--date=short",
+    "--pretty=format:%H\x1f%h\x1f%P\x1f%an\x1f%ae\x1f%ad\x1f%s\x1f%D",
+  ])?;
+  for line in out.lines() {
+    let parts: Vec<&str> = line.split('\x1f').collect();
+    if parts.len() >= 7 {
+      let hash = parts[0].to_string();
+      let short_hash = parts[1].to_string();
+      let parents: Vec<String> = if !parts[2].trim().is_empty() {
+        parts[2].split_whitespace().map(|s| s.to_string()).collect()
+      } else {
+        Vec::new()
+      };
+      let author = parts[3].to_string();
+      let email = parts[4].to_string();
+      let date = parts[5].to_string();
+      let subject = parts[6].to_string();
+      let mut branches = Vec::new();
+      let mut tags = Vec::new();
+      let mut is_head = false;
+      if parts.len() >= 8 && !parts[7].trim().is_empty() {
+        for ref_item in parts[7].split(',') {
+          let r = ref_item.trim();
+          if r.starts_with("HEAD -> ") {
+            is_head = true;
+            branches.push(r[8..].to_string());
+          } else if r == "HEAD" {
+            is_head = true;
+          } else if r.starts_with("tag: ") {
+            tags.push(r[5..].to_string());
+          } else if !r.is_empty() {
+            branches.push(r.to_string());
+          }
+        }
+      }
+
+      commits.push(GitCommitItemDto {
+        hash,
+        short_hash,
+        parents,
+        author,
+        email,
+        date,
+        subject,
+        branches,
+        tags,
+        is_head,
       });
     }
   }
@@ -937,6 +1121,19 @@ fn git_get_log(project_path: String, max_count: Option<usize>) -> Result<Vec<Git
 
 #[tauri::command]
 fn git_get_commit_details(project_path: String, commit_hash: String) -> Result<GitCommitDetailsDto, String> {
+  // Handle Working Tree (uncommitted changes)
+  if commit_hash.starts_with("0000000") || commit_hash == "worktree" {
+    let status = git_get_status(project_path)?;
+    return Ok(GitCommitDetailsDto {
+      hash: "0000000000000000000000000000000000000000".to_string(),
+      author: "You (Local Changes)".to_string(),
+      email: "".to_string(),
+      date: "Now".to_string(),
+      message: "Uncommitted changes in local working tree".to_string(),
+      files: status.changes,
+    });
+  }
+
   let meta_out = run_git_cmd(&project_path, &["show", "-s", "--pretty=format:%H\t%an\t%ae\t%ad\t%B", "--date=short", &commit_hash])?;
   let parts: Vec<&str> = meta_out.splitn(5, '\t').collect();
   let (hash, author, email, date, message) = if parts.len() >= 5 {
@@ -1093,6 +1290,19 @@ fn git_get_file_content_at_head(project_path: String, file_path: String) -> Resu
 }
 
 #[tauri::command]
+fn git_get_file_content_at_revision(project_path: String, revision: String, file_path: String) -> Result<String, String> {
+  let clean_path = file_path.replace('\\', "/");
+  let trimmed = clean_path.trim_start_matches('/').trim_start_matches("./");
+  if revision == "WORKING_TREE" {
+    let full_path = std::path::Path::new(&project_path).join(trimmed);
+    std::fs::read_to_string(&full_path).map_err(|e| format!("Failed to read file: {}", e))
+  } else {
+    let target = format!("{}:{}", revision, trimmed);
+    run_git_cmd(&project_path, &["show", &target])
+  }
+}
+
+#[tauri::command]
 fn git_rollback_file(project_path: String, file_path: String) -> Result<String, String> {
   run_git_cmd(&project_path, &["checkout", "HEAD", "--", &file_path])
     .or_else(|_| run_git_cmd(&project_path, &["restore", &file_path]))
@@ -1113,20 +1323,70 @@ fn git_push(project_path: String) -> Result<String, String> {
   run_git_cmd(&project_path, &["push"])
 }
 
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct GitBranchInfoDto {
+  pub name: String,
+  pub short_name: String,
+  pub is_current: bool,
+  pub is_remote: bool,
+  pub upstream: Option<String>,
+}
+
 #[tauri::command]
-fn git_list_branches(project_path: String) -> Result<Vec<String>, String> {
-  let out = run_git_cmd(&project_path, &["branch", "--list"])?;
+fn git_list_branches(project_path: String) -> Result<Vec<GitBranchInfoDto>, String> {
+  let out = run_git_cmd(&project_path, &[
+    "for-each-ref",
+    "--format=%(refname)|%(refname:short)|%(HEAD)|%(upstream:short)",
+    "refs/heads/",
+    "refs/remotes/",
+  ])?;
   let mut list = Vec::new();
   for line in out.lines() {
-    let clean = line.replace('*', "").trim().to_string();
-    if !clean.is_empty() && !list.contains(&clean) {
-      list.push(clean);
+    let parts: Vec<&str> = line.split('|').collect();
+    if parts.len() >= 3 {
+      let refname = parts[0].trim();
+      let short_name = parts[1].trim().to_string();
+      let is_current = parts[2].trim() == "*";
+      let upstream = if parts.len() >= 4 && !parts[3].trim().is_empty() {
+        Some(parts[3].trim().to_string())
+      } else {
+        None
+      };
+      let is_remote = refname.starts_with("refs/remotes/");
+      
+      if short_name.ends_with("/HEAD") || short_name == "origin" {
+        continue;
+      }
+
+      list.push(GitBranchInfoDto {
+        name: short_name.clone(),
+        short_name,
+        is_current,
+        is_remote,
+        upstream,
+      });
     }
   }
   if list.is_empty() {
-    list.push("main".to_string());
+    list.push(GitBranchInfoDto {
+      name: "main".to_string(),
+      short_name: "main".to_string(),
+      is_current: true,
+      is_remote: false,
+      upstream: None,
+    });
   }
   Ok(list)
+}
+
+#[tauri::command]
+fn git_get_tags(project_path: String) -> Result<Vec<String>, String> {
+  let out = run_git_cmd(&project_path, &["tag", "--list", "--sort=-creatordate"])?;
+  let tags: Vec<String> = out.lines()
+    .map(|l| l.trim().to_string())
+    .filter(|l| !l.is_empty())
+    .collect();
+  Ok(tags)
 }
 
 #[tauri::command]
@@ -1280,13 +1540,60 @@ fn git_create_tag(project_path: String, tag_name: String, commit_hash: Option<St
   }
 }
 
+#[tauri::command]
+fn git_create_branch_from(project_path: String, new_branch: String, start_point: String, checkout: bool) -> Result<String, String> {
+  if checkout {
+    run_git_cmd(&project_path, &["checkout", "-b", &new_branch, &start_point])
+  } else {
+    run_git_cmd(&project_path, &["branch", &new_branch, &start_point])
+  }
+}
+
+#[tauri::command]
+fn git_delete_branch(project_path: String, branch: String, force: bool) -> Result<String, String> {
+  let flag = if force { "-D" } else { "-d" };
+  run_git_cmd(&project_path, &["branch", flag, &branch])
+}
+
+#[tauri::command]
+fn git_rename_branch(project_path: String, old_name: String, new_name: String) -> Result<String, String> {
+  run_git_cmd(&project_path, &["branch", "-m", &old_name, &new_name])
+}
+
+#[tauri::command]
+fn git_merge_branch(project_path: String, branch: String) -> Result<String, String> {
+  run_git_cmd(&project_path, &["merge", &branch])
+}
+
+#[tauri::command]
+fn git_rebase_branch(project_path: String, upstream: String) -> Result<String, String> {
+  run_git_cmd(&project_path, &["rebase", &upstream])
+}
+
+#[tauri::command]
+fn git_create_patch(project_path: String, commit_hash: String) -> Result<String, String> {
+  run_git_cmd(&project_path, &["format-patch", "-1", "--stdout", &commit_hash])
+}
+
 
 fn is_ignored_path(path: &std::path::Path) -> bool {
   for comp in path.components() {
     let s = comp.as_os_str().to_string_lossy();
     if s == ".git" || s == "node_modules" || s == "target" || s == "dist" 
       || s == "build" || s == ".idea" || s == ".vscode" || s == "__pycache__" 
-      || s == ".DS_Store" {
+      || s == ".DS_Store" || s == "_mf_temp" || s == ".vite" || s == ".next"
+      || s == ".nuxt" || s == ".turbo" || s == ".output" || s == ".cache"
+      || s == "temp" || s == "tmp" || s == ".scannerwork" || s == ".sonartmp"
+      || s == ".gradle" || s == "bin" || s == "out" || s == "logs" || s == "log"
+      || s == ".m2" || s == ".settings" || s == ".metadata" || s == ".project" 
+      || s == ".classpath" || s == "classes" {
+      return true;
+    }
+  }
+  if let Some(ext) = path.extension() {
+    let ext_s = ext.to_string_lossy().to_lowercase();
+    if ext_s == "class" || ext_s == "jar" || ext_s == "war" || ext_s == "log" 
+      || ext_s == "lock" || ext_s == "tmp" || ext_s == "swp" || ext_s == "hprof" {
       return true;
     }
   }
@@ -1455,6 +1762,187 @@ fn watch_project_directory(app: tauri::AppHandle, project_path: String) -> Resul
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
+
+#[derive(Debug, serde::Serialize, serde::Deserialize, Clone)]
+pub struct JdkItemDto {
+  pub id: String,
+  pub name: String,
+  pub version: String,
+  pub vendor: String,
+  pub path: String,
+  pub is_valid: bool,
+}
+
+#[tauri::command]
+fn detect_installed_jdks() -> Vec<JdkItemDto> {
+  let mut jdks = Vec::new();
+  let mut checked_paths = std::collections::HashSet::new();
+  let mut search_dirs = Vec::new();
+
+  // 1. Check JAVA_HOME & JDK_HOME
+  if let Ok(jh) = std::env::var("JAVA_HOME") {
+    search_dirs.push(std::path::PathBuf::from(jh));
+  }
+  if let Ok(jh) = std::env::var("JDK_HOME") {
+    search_dirs.push(std::path::PathBuf::from(jh));
+  }
+
+  // 2. Program Files common locations
+  let pf_roots = [
+    std::path::PathBuf::from("C:\\Program Files"),
+    std::path::PathBuf::from("C:\\Program Files (x86)"),
+  ];
+
+  for pf in &pf_roots {
+    for vendor in &["Java", "Eclipse Adoptium", "AdoptOpenJDK", "Amazon Corretto", "Zulu", "Microsoft", "BellSoft", "Semeru"] {
+      let vendor_path = pf.join(vendor);
+      if vendor_path.exists() {
+        if let Ok(entries) = std::fs::read_dir(&vendor_path) {
+          for entry in entries.flatten() {
+            let p = entry.path();
+            if p.is_dir() {
+              search_dirs.push(p);
+            }
+          }
+        }
+      }
+    }
+  }
+
+  // 3. User directory ~/.jdks
+  if let Ok(userprofile) = std::env::var("USERPROFILE") {
+    let dot_jdks = std::path::PathBuf::from(userprofile).join(".jdks");
+    if dot_jdks.exists() {
+      if let Ok(entries) = std::fs::read_dir(&dot_jdks) {
+        for entry in entries.flatten() {
+          let p = entry.path();
+          if p.is_dir() {
+            search_dirs.push(p);
+          }
+        }
+      }
+    }
+  }
+
+  for dir in search_dirs {
+    let canonical = dir.canonicalize().unwrap_or_else(|_| dir.clone());
+    let path_str = canonical.to_string_lossy().to_string();
+    if checked_paths.contains(&path_str) {
+      continue;
+    }
+    checked_paths.insert(path_str.clone());
+
+    let java_bin = dir.join("bin").join("java.exe");
+    let release_file = dir.join("release");
+
+    if java_bin.exists() || release_file.exists() {
+      let mut version = String::new();
+      let mut vendor = "OpenJDK".to_string();
+
+      if let Ok(content) = std::fs::read_to_string(&release_file) {
+        for line in content.lines() {
+          if line.starts_with("JAVA_VERSION=") {
+            version = line.replace("JAVA_VERSION=", "").replace('\"', "").trim().to_string();
+          }
+          if line.starts_with("IMPLEMENTOR=") {
+            vendor = line.replace("IMPLEMENTOR=", "").replace('\"', "").trim().to_string();
+          }
+        }
+      }
+
+      let folder_name = dir.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| "JDK".to_string());
+      if version.is_empty() {
+        version = folder_name.clone();
+      }
+
+      let name = if !vendor.is_empty() && vendor != "OpenJDK" {
+        format!("{} ({})", folder_name, vendor)
+      } else {
+        folder_name.clone()
+      };
+
+      let id = format!("jdk-{}", path_str.replace('\\', "-").replace('/', "-").replace(':', ""));
+
+      jdks.push(JdkItemDto {
+        id,
+        name,
+        version,
+        vendor,
+        path: path_str,
+        is_valid: true,
+      });
+    }
+  }
+
+  jdks
+}
+
+#[tauri::command]
+fn validate_and_parse_jdk(path: String) -> Result<JdkItemDto, String> {
+  let dir = std::path::PathBuf::from(&path);
+  if !dir.exists() {
+    return Err("Directory does not exist".to_string());
+  }
+
+  let java_bin = dir.join("bin").join("java.exe");
+  let release_file = dir.join("release");
+
+  let mut version = String::new();
+  let mut vendor = "Custom JDK".to_string();
+
+  if release_file.exists() {
+    if let Ok(content) = std::fs::read_to_string(&release_file) {
+      for line in content.lines() {
+        if line.starts_with("JAVA_VERSION=") {
+          version = line.replace("JAVA_VERSION=", "").replace('\"', "").trim().to_string();
+        }
+        if line.starts_with("IMPLEMENTOR=") {
+          vendor = line.replace("IMPLEMENTOR=", "").replace('\"', "").trim().to_string();
+        }
+      }
+    }
+  }
+
+  let folder_name = dir.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| "JDK".to_string());
+  if version.is_empty() {
+    version = folder_name.clone();
+  }
+
+  let name = format!("{} ({})", folder_name, vendor);
+  let id = format!("jdk-custom-{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis());
+
+  Ok(JdkItemDto {
+    id,
+    name,
+    version,
+    vendor,
+    path,
+    is_valid: java_bin.exists() || release_file.exists(),
+  })
+}
+
+#[tauri::command]
+fn create_downloaded_jdk_placeholder(target_dir: String, vendor: String, version: String) -> Result<JdkItemDto, String> {
+  let dir = std::path::PathBuf::from(&target_dir);
+  std::fs::create_dir_all(dir.join("bin")).map_err(|e| format!("Failed to create JDK folder: {}", e))?;
+  
+  let release_content = format!("IMPLEMENTOR=\"{}\";\nJAVA_VERSION=\"{}\";\nJAVA_RUNTIME_VERSION=\"{}+0\";\nLIBC=\"default\";\n", vendor, version, version);
+
+  std::fs::write(dir.join("release"), release_content).map_err(|e| format!("Failed to write release: {}", e))?;
+
+  let name = format!("{}-{} ({})", vendor.to_lowercase().replace(' ', "-"), version, vendor);
+  let id = format!("jdk-downloaded-{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis());
+
+  Ok(JdkItemDto {
+    id,
+    name,
+    version,
+    vendor,
+    path: target_dir,
+    is_valid: true,
+  })
+}
+
 pub fn run() {
   tauri::Builder::default()
     .invoke_handler(tauri::generate_handler![
@@ -1468,10 +1956,15 @@ pub fn run() {
       get_window_initial_project,
       test_git_executable,
       detect_toolchains,
+      detect_installed_jdks,
+      validate_and_parse_jdk,
+      create_downloaded_jdk_placeholder,
       fetch_marketplace_plugins,
       fetch_plugin_details,
+      execute_build_command,
       start_process,
       stop_process,
+      stop_all_processes,
       terminal_spawn,
       terminal_write,
       terminal_resize,
@@ -1485,10 +1978,12 @@ pub fn run() {
       git_get_log,
       git_get_commit_details,
       git_get_file_content_at_head,
+      git_get_file_content_at_revision,
       git_rollback_file,
       git_fetch,
       git_pull,
       git_list_branches,
+      git_get_tags,
       git_checkout_branch,
       git_clone,
       git_get_stash_list,
@@ -1502,6 +1997,12 @@ pub fn run() {
       git_cherry_pick,
       git_revert_commit,
       git_create_tag,
+      git_create_branch_from,
+      git_delete_branch,
+      git_rename_branch,
+      git_merge_branch,
+      git_rebase_branch,
+      git_create_patch,
       search_project_files,
       search_project_text,
       watch_project_directory,
@@ -1512,6 +2013,10 @@ pub fn run() {
       app_start_dragging
     ])
     .setup(|app| {
+      use tauri::Manager;
+      if let Some(win) = app.get_webview_window("main") {
+        let _ = win.maximize();
+      }
       if cfg!(debug_assertions) {
         app.handle().plugin(
           tauri_plugin_log::Builder::default()

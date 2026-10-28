@@ -143,14 +143,37 @@ export const DatabaseExplorer: React.FC<DatabaseExplorerProps> = ({
               >
                 <div className="flex items-center gap-1.5 truncate">
                   {isDsExpanded ? <ChevronDown size={12} className="text-[#868A91]" /> : <ChevronRight size={12} className="text-[#868A91]" />}
-                  <Database 
-                    size={13} 
-                    className={
-                      ds.engine === 'postgresql' ? 'text-[#3574F0]' :
-                      ds.engine === 'mysql' ? 'text-[#E5B567]' :
-                      ds.engine === 'duckdb' ? 'text-[#F1A23A]' : 'text-[#59A869]'
-                    } 
-                  />
+                  <span 
+                    className="w-4 h-4 rounded flex items-center justify-center text-[8.5px] font-bold text-white flex-shrink-0 shadow-sm"
+                    style={{
+                      backgroundColor: 
+                        ds.engine === 'postgresql' ? '#3574F0' :
+                        ds.engine === 'mysql' ? '#E5B567' :
+                        ds.engine === 'mariadb' ? '#003545' :
+                        ds.engine === 'oracle' ? '#F80000' :
+                        ds.engine === 'sqlserver' ? '#0078D4' :
+                        ds.engine === 'redis' ? '#DC382D' :
+                        ds.engine === 'mongodb' ? '#13AA52' :
+                        ds.engine === 'clickhouse' ? '#FFAE00' :
+                        ds.engine === 'duckdb' ? '#F1A23A' :
+                        ds.engine === 'h2' ? '#43853D' :
+                        ds.engine === 'cassandra' ? '#1287B1' :
+                        ds.engine === 'snowflake' ? '#29B5E8' : '#59A869'
+                    }}
+                  >
+                    {ds.engine === 'postgresql' ? 'PG' :
+                     ds.engine === 'mysql' ? 'MY' :
+                     ds.engine === 'mariadb' ? 'MA' :
+                     ds.engine === 'oracle' ? 'ORA' :
+                     ds.engine === 'sqlserver' ? 'MS' :
+                     ds.engine === 'redis' ? 'RD' :
+                     ds.engine === 'mongodb' ? 'MG' :
+                     ds.engine === 'clickhouse' ? 'CH' :
+                     ds.engine === 'duckdb' ? 'DK' :
+                     ds.engine === 'h2' ? 'H2' :
+                     ds.engine === 'cassandra' ? 'CA' :
+                     ds.engine === 'snowflake' ? 'SF' : 'SL'}
+                  </span>
                   <span className="font-sans font-semibold text-[#DFE1E5] truncate">{ds.name}</span>
                 </div>
                 <div className="flex items-center gap-1.5">

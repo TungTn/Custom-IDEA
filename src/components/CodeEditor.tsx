@@ -33,8 +33,10 @@ import {
   AlertTriangle,
   Info,
   Table,
-  Terminal
+  Terminal,
+  GitCompare
 } from 'lucide-react';
+const DiffViewerModal = React.lazy(() => import('./DiffViewerModal').then(m => ({ default: m.DiffViewerModal })));
 import { OpenTab, Breakpoint, ProblemItem } from '../types';
 import { DataSourceConnection } from '../types/database';
 import { SurroundType } from './SurroundWithModal';
@@ -109,6 +111,26 @@ const getBlameDataForFile = (fileName: string, totalLines: number): BlameEntry[]
   return result;
 };
 
+const getCommitColor = (hash: string) => {
+  if (!hash || hash.startsWith('0000000') || hash.toLowerCase() === 'worktree') return '#59A869';
+  const PALETTE = [
+    '#3574F0', // Blue
+    '#E5B567', // Amber
+    '#AF7AC5', // Violet
+    '#48C9B0', // Teal
+    '#E67E22', // Orange
+    '#5DADE2', // Sky
+    '#F1948A', // Coral
+    '#58D68D', // Emerald
+  ];
+  let h = 0;
+  for (let i = 0; i < hash.length; i++) {
+    h = (h << 5) - h + hash.charCodeAt(i);
+    h |= 0;
+  }
+  return PALETTE[Math.abs(h) % PALETTE.length];
+};
+
 interface CodeEditorProps {
   projectPath?: string;
   tabs: OpenTab[];
@@ -143,6 +165,7 @@ interface CodeEditorProps {
   dataSources?: DataSourceConnection[];
   onUpdateTableData?: (dataSourceId: string, schema: string, tableName: string, newRows: Record<string, any>[]) => void;
   onRunTestAtLine?: (lineNumber: number, testName?: string) => void;
+  onOpenGitCommit?: (commitHash: string) => void;
 }
 
 export const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ projectPath = 'D:\\IDE',
@@ -178,10 +201,60 @@ export const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ proje
   onUpdateBreakpoint,
   onRemoveBreakpoint,
   onRunTestAtLine,
+  onOpenGitCommit,
 }, ref) => {
   const activeTab = tabs.find(t => t.id === activeTabId);
   const editorRef = useRef<any>(null);
   const monacoRef = useRef<Monaco | null>(null);
+  // Split Editor States (Split Right / Split Down)
+  const [splitMode, setSplitMode] = useState<'none' | 'vertical' | 'horizontal'>('none');
+  const [secondaryTabId, setSecondaryTabId] = useState<string | null>(null);
+  const [splitRatio, setSplitRatio] = useState<number>(50); // percentage
+  const [isResizingSplit, setIsResizingSplit] = useState(false);
+  const splitContainerRef = useRef<HTMLDivElement>(null);
+
+  const secondaryTab = useMemo(() => {
+    if (splitMode === 'none') return null;
+    if (secondaryTabId) {
+      const found = tabs.find(t => t.id === secondaryTabId);
+      if (found) return found;
+    }
+    // Default to the first different tab, or same tab if only 1 tab
+    const other = tabs.find(t => t.id !== activeTabId);
+    return other || activeTab || null;
+  }, [splitMode, secondaryTabId, tabs, activeTabId, activeTab]);
+
+  const handleStartSplitResize = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    setIsResizingSplit(true);
+  }, []);
+
+  useEffect(() => {
+    if (!isResizingSplit) return;
+    const handleMouseMove = (e: MouseEvent) => {
+      if (!splitContainerRef.current) return;
+      const rect = splitContainerRef.current.getBoundingClientRect();
+      if (splitMode === 'vertical') {
+        const newRatio = ((e.clientX - rect.left) / rect.width) * 100;
+        setSplitRatio(Math.max(20, Math.min(80, newRatio)));
+      } else if (splitMode === 'horizontal') {
+        const newRatio = ((e.clientY - rect.top) / rect.height) * 100;
+        setSplitRatio(Math.max(20, Math.min(80, newRatio)));
+      }
+    };
+    const handleMouseUp = () => {
+      setIsResizingSplit(false);
+      setTimeout(() => {
+        editorRef.current?.layout();
+      }, 50);
+    };
+    window.addEventListener('mousemove', handleMouseMove);
+    window.addEventListener('mouseup', handleMouseUp);
+    return () => {
+      window.removeEventListener('mousemove', handleMouseMove);
+      window.removeEventListener('mouseup', handleMouseUp);
+    };
+  }, [isResizingSplit, splitMode]);
 
   // Gutter & Blame States
   const [isGitBlameActive, setIsGitBlameActive] = useState(false);
@@ -270,6 +343,175 @@ export const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ proje
   } | null>(null);
   const [activeEditorSubmenu, setActiveEditorSubmenu] = useState<string | null>(null);
   const editorMenuRef = useRef<HTMLDivElement>(null);
+  const gutterMenuRef = useRef<HTMLDivElement>(null);
+  const conditionPopupRef = useRef<HTMLDivElement>(null);
+  const mnemonicPopupRef = useRef<HTMLDivElement>(null);
+  const blameColumnRef = useRef<HTMLDivElement>(null);
+  const blameScrollContentRef = useRef<HTMLDivElement>(null);
+  const lastDuplicateTimeRef = useRef<number>(0);
+  const commandsRegisteredRef = useRef<boolean>(false);
+
+  // Blame Width & Resizing
+  const [blameWidth, setBlameWidth] = useState<number>(260);
+  const isResizingBlameRef = useRef(false);
+
+  const handleBlameMouseDown = (e: React.MouseEvent) => {
+    e.preventDefault();
+    isResizingBlameRef.current = true;
+    const startX = e.clientX;
+    const startW = blameWidth;
+
+    const onMouseMove = (moveEvent: MouseEvent) => {
+      if (!isResizingBlameRef.current) return;
+      const delta = moveEvent.clientX - startX;
+      setBlameWidth(Math.max(180, Math.min(520, startW + delta)));
+    };
+
+    const onMouseUp = () => {
+      isResizingBlameRef.current = false;
+      window.removeEventListener('mousemove', onMouseMove);
+      window.removeEventListener('mouseup', onMouseUp);
+    };
+
+    window.addEventListener('mousemove', onMouseMove);
+    window.addEventListener('mouseup', onMouseUp);
+  };
+
+  // Blame Diff Viewer State
+  const [diffModalFile, setDiffModalFile] = useState<string | null>(null);
+  const [diffModalBase, setDiffModalBase] = useState<string>('');
+  const [diffModalLocal, setDiffModalLocal] = useState<string>('');
+  const [diffModalBaseTitle, setDiffModalBaseTitle] = useState<string>('');
+  const [diffModalLocalTitle, setDiffModalLocalTitle] = useState<string>('');
+  const [isDiffOpen, setIsDiffOpen] = useState(false);
+
+  const handleShowBlameDiff = async (entry: BlameEntry) => {
+    if (!activeTab) return;
+    setDiffModalFile(activeTab.title);
+    setIsDiffOpen(true);
+    setDiffModalBase('Loading...');
+    setDiffModalLocal('Loading...');
+
+    const commitHash = entry.commitHash;
+    const isWorktree = !commitHash || commitHash.startsWith('0000000') || commitHash.toLowerCase() === 'worktree';
+    const shortHash = isWorktree ? 'Working Tree' : commitHash.substring(0, 7);
+    const parentRev = isWorktree ? 'HEAD' : `${commitHash}~1`;
+
+    setDiffModalBaseTitle(isWorktree ? 'HEAD (Committed)' : `${shortHash}~1 (Previous)`);
+    setDiffModalLocalTitle(isWorktree ? 'Working Tree' : `${shortHash} (${entry.author})`);
+
+    try {
+      let base = '';
+      try {
+        base = await invoke<string>('git_get_file_content_at_revision', {
+          projectPath,
+          revision: parentRev,
+          filePath: activeTab.path || activeTab.title,
+        });
+      } catch {
+        base = '';
+      }
+
+      let local = '';
+      if (isWorktree) {
+        local = activeTab.content;
+      } else {
+        try {
+          local = await invoke<string>('git_get_file_content_at_revision', {
+            projectPath,
+            revision: commitHash,
+            filePath: activeTab.path || activeTab.title,
+          });
+        } catch {
+          local = activeTab.content;
+        }
+      }
+
+      setDiffModalBase(base);
+      setDiffModalLocal(local);
+    } catch (err) {
+      console.warn('Failed to load blame diff:', err);
+      setDiffModalBase('');
+      setDiffModalLocal(activeTab.content);
+    }
+  };
+
+  // Synchronize mouse wheel scrolling on Git Blame column with Monaco editor
+  useEffect(() => {
+    const el = blameColumnRef.current;
+    if (!el || !isGitBlameActive) return;
+
+    const handleWheel = (e: WheelEvent) => {
+      if (!editorRef.current) return;
+      e.preventDefault();
+
+      let deltaY = e.deltaY;
+      if (e.deltaMode === 1) {
+        deltaY *= (lineHeightPx || 20);
+      } else if (e.deltaMode === 2) {
+        deltaY *= (window.innerHeight || 600);
+      }
+
+      let deltaX = e.deltaX;
+      if (e.deltaMode === 1) {
+        deltaX *= 20;
+      } else if (e.deltaMode === 2) {
+        deltaX *= (window.innerWidth || 800);
+      }
+
+      if (deltaY) {
+        const currentScrollTop = editorRef.current.getScrollTop();
+        editorRef.current.setScrollTop(Math.max(0, currentScrollTop + deltaY));
+      }
+
+      if (deltaX) {
+        const currentScrollLeft = editorRef.current.getScrollLeft();
+        editorRef.current.setScrollLeft(Math.max(0, currentScrollLeft + deltaX));
+      }
+    };
+
+    el.addEventListener('wheel', handleWheel, { passive: false });
+    return () => {
+      el.removeEventListener('wheel', handleWheel);
+    };
+  }, [isGitBlameActive, lineHeightPx]);
+
+  const [isRecordingTime, setIsRecordingTime] = useState(false);
+  const [showMethodSeparators, setShowMethodSeparators] = useState(false);
+  const [showCodeLens, setShowCodeLens] = useState(false);
+  const [isGutterIconsConfigOpen, setIsGutterIconsConfigOpen] = useState(false);
+  const [mnemonicBookmarks, setMnemonicBookmarks] = useState<Map<number, string>>(new Map());
+  const [mnemonicPopup, setMnemonicPopup] = useState<{ lineNumber: number; x: number; y: number } | null>(null);
+
+  // Internal Fallback Breakpoints State (guarantees Breakpoints always work even if parent doesn't provide state)
+  const [localBreakpoints, setLocalBreakpoints] = useState<Breakpoint[]>([]);
+  const effectiveBreakpoints = useMemo(() => {
+    return (breakpoints && breakpoints.length > 0) ? breakpoints : localBreakpoints;
+  }, [breakpoints, localBreakpoints]);
+
+  const handleToggleBreakpoint = useCallback((lineNumber: number) => {
+    if (onToggleBreakpoint) {
+      onToggleBreakpoint(lineNumber);
+    }
+    setLocalBreakpoints(prev => {
+      const existing = prev.find(
+        bp => bp.lineNumber === lineNumber && (bp.filePath === activeTab?.path || bp.fileName === activeTab?.title || (!bp.filePath && !bp.fileName))
+      );
+      if (existing) {
+        onShowToast?.('Breakpoint Removed', `Line ${lineNumber}`, 'info');
+        return prev.filter(b => b.id !== existing.id);
+      } else {
+        onShowToast?.('Breakpoint Added', `Line ${lineNumber}`, 'success');
+        return [...prev, {
+          id: `bp-${Date.now()}-${Math.random()}`,
+          filePath: activeTab?.path || '',
+          fileName: activeTab?.title || '',
+          lineNumber,
+          enabled: true,
+        }];
+      }
+    });
+  }, [onToggleBreakpoint, activeTab, onShowToast]);
 
   // JetBrains Authentic Tab Context Menu State (media_1792661560023.png)
   const [tabMenu, setTabMenu] = useState<{
@@ -596,6 +838,13 @@ export const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ proje
   }, [problems, activeTab]);
 
   const duplicateLineOrSelection = useCallback((editor: any, monaco: Monaco) => {
+    const now = Date.now();
+    // Guard against duplicated key events or multiple triggers: allow at most one duplication per 250ms
+    if (now - lastDuplicateTimeRef.current < 250) {
+      return;
+    }
+    lastDuplicateTimeRef.current = now;
+
     const selection = editor.getSelection();
     const model = editor.getModel();
     if (!selection || !model) return;
@@ -1198,10 +1447,10 @@ export const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ proje
       const targetType = e.target?.type;
       if (e.event?.leftButton && (targetType === 2 || targetType === 3)) {
         const line = e.target?.position?.lineNumber;
-        if (line && onToggleBreakpoint) {
+        if (line) {
           e.event?.preventDefault?.();
           e.event?.stopPropagation?.();
-          onToggleBreakpoint(line);
+          handleToggleBreakpoint(line);
         }
       }
     });
@@ -1218,12 +1467,26 @@ export const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ proje
 
     editor.onDidScrollChange((e: any) => {
       setScrollTop(e.scrollTop);
+      if (blameScrollContentRef.current) {
+        blameScrollContentRef.current.style.transform = `translateY(-${e.scrollTop}px)`;
+      }
     });
 
     // Intercept right-click on Monaco editor (gutter vs code)
     editor.onContextMenu((e: any) => {
-      e.event?.preventDefault?.();
-      e.event?.stopPropagation?.();
+      if (e.event?.browserEvent) {
+        e.event.browserEvent.preventDefault();
+        e.event.browserEvent.stopPropagation();
+      }
+      if (e.event?.preventDefault) {
+        e.event.preventDefault();
+      }
+      if (e.event?.stopPropagation) {
+        e.event.stopPropagation();
+      }
+
+      const clientX = e.event?.posx ?? e.event?.browserEvent?.clientX ?? 100;
+      const clientY = e.event?.posy ?? e.event?.browserEvent?.clientY ?? 100;
 
       const targetType = e.target?.type;
       const isGutter = targetType === 2 || targetType === 3 || targetType === 4 ||
@@ -1236,18 +1499,22 @@ export const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ proje
       if (isGutter) {
         setEditorMenu(null);
         setGutterMenu({
-          x: e.event.posx,
-          y: e.event.posy,
+          x: clientX,
+          y: clientY,
           lineNumber: line,
         });
         setActiveGutterSubmenu(null);
       } else {
+        // Ensure cursor is placed at right-clicked location so actions work on target symbol
+        if (line && col) {
+          editor.setPosition({ lineNumber: line, column: col });
+        }
         setGutterMenu(null);
         const estimatedHeight = 650;
         const estimatedWidth = 260;
-        let posX = Math.min(e.event.posx, window.innerWidth - estimatedWidth - 16);
-        let posY = e.event.posy;
-        if (e.event.posy + estimatedHeight > window.innerHeight - 16) {
+        let posX = Math.min(clientX, window.innerWidth - estimatedWidth - 16);
+        let posY = clientY;
+        if (clientY + estimatedHeight > window.innerHeight - 16) {
           posY = Math.max(8, window.innerHeight - estimatedHeight - 16);
         }
         setEditorMenu({
@@ -1265,16 +1532,25 @@ export const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ proje
   useEffect(() => {
     if (!editorMenu && !gutterMenu && !tabMenu) return;
     const handleOutsideDown = (e: MouseEvent) => {
-      if (editorMenuRef.current && !editorMenuRef.current.contains(e.target as Node)) {
+      const target = e.target as Node;
+      if (editorMenuRef.current && !editorMenuRef.current.contains(target)) {
         setEditorMenu(null);
         setActiveEditorSubmenu(null);
       }
-      if (tabMenuRef.current && !tabMenuRef.current.contains(e.target as Node)) {
+      if (tabMenuRef.current && !tabMenuRef.current.contains(target)) {
         setTabMenu(null);
         setActiveTabSubmenu(null);
       }
-      setGutterMenu(null);
-      setActiveGutterSubmenu(null);
+      if (gutterMenuRef.current && !gutterMenuRef.current.contains(target)) {
+        setGutterMenu(null);
+        setActiveGutterSubmenu(null);
+      }
+      if (conditionPopupRef.current && !conditionPopupRef.current.contains(target)) {
+        setConditionPopup(null);
+      }
+      if (mnemonicPopupRef.current && !mnemonicPopupRef.current.contains(target)) {
+        setMnemonicPopup(null);
+      }
     };
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
@@ -1294,11 +1570,11 @@ export const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ proje
     };
   }, [editorMenu, gutterMenu, tabMenu]);
 
-  // Update Monaco decorations for bookmarks
+  // Update Monaco decorations for bookmarks & mnemonic bookmarks
   useEffect(() => {
     if (!editorRef.current || !monacoRef.current) return;
     try {
-      const decorations = Array.from(bookmarks).map(line => ({
+      const standardBookmarks = Array.from(bookmarks).map(line => ({
         range: new monacoRef.current!.Range(line, 1, line, 1),
         options: {
           isWholeLine: false,
@@ -1306,11 +1582,21 @@ export const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ proje
           glyphMarginHoverMessage: { value: `**Bookmark** on line ${line}` },
         }
       }));
-      editorRef.current.createDecorationsCollection?.(decorations);
+
+      const mnemonicDecs = Array.from(mnemonicBookmarks.entries()).map(([line, char]) => ({
+        range: new monacoRef.current!.Range(line, 1, line, 1),
+        options: {
+          isWholeLine: false,
+          glyphMarginClassName: 'monaco-bookmark-indicator',
+          glyphMarginHoverMessage: { value: `**Mnemonic Bookmark [ ${char} ]** on line ${line}` },
+        }
+      }));
+
+      editorRef.current.createDecorationsCollection?.([...standardBookmarks, ...mnemonicDecs]);
     } catch (err) {
       // ignore
     }
-  }, [bookmarks]);
+  }, [bookmarks, mnemonicBookmarks]);
 
 
   // ─── Test Gutter Icons & Detection ───
@@ -1378,7 +1664,7 @@ export const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ proje
   useEffect(() => {
     if (!editorRef.current || !monacoRef.current || !activeTab) return;
     try {
-      const fileBreakpoints = breakpoints.filter(
+      const fileBreakpoints = effectiveBreakpoints.filter(
         bp => bp.filePath === activeTab.path || bp.fileName === activeTab.title || activeTab.path.endsWith(bp.fileName)
       );
 
@@ -1401,7 +1687,7 @@ export const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ proje
     } catch (err) {
       // ignore
     }
-  }, [breakpoints, activeTab]);
+  }, [effectiveBreakpoints, activeTab]);
 
   // Update Monaco decorations for Active Debug Execution Line
   useEffect(() => {
@@ -1655,11 +1941,27 @@ export const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ proje
             <History size={13} />
           </button>
           <button 
-            onClick={() => onShowToast?.('Editor Split', 'Split view toggled', 'info')}
-            title="Split Right" 
-            className="p-1 hover:bg-[#2B2D30] hover:text-[#DFE1E5] rounded transition-colors cursor-pointer"
+            onClick={() => {
+              if (splitMode === 'none') {
+                setSplitMode('vertical');
+                // Select an alternate tab if available
+                const other = tabs.find(t => t.id !== activeTabId);
+                if (other) setSecondaryTabId(other.id);
+                onShowToast?.('Editor Split', 'Split Right activated', 'info');
+              } else {
+                setSplitMode('none');
+                onShowToast?.('Editor Split', 'Split view closed (Unsplit)', 'info');
+              }
+              setTimeout(() => editorRef.current?.layout(), 50);
+            }}
+            title={splitMode !== 'none' ? "Unsplit Editor" : "Split Right"} 
+            className={`p-1 rounded transition-colors cursor-pointer ${
+              splitMode !== 'none' 
+                ? 'bg-[#3574F0] text-white shadow-sm' 
+                : 'hover:bg-[#2B2D30] hover:text-[#DFE1E5]'
+            }`}
           >
-            <Split size={13} />
+            <Split size={13} className={splitMode === 'horizontal' ? 'rotate-90' : ''} />
           </button>
           <button 
             onClick={() => {
@@ -1735,104 +2037,183 @@ export const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ proje
           />
         </div>
       ) : (
-        <div className="flex-1 flex overflow-hidden relative">
-        {/* Git Blame Annotation Column (Annotate with Git Blame) */}
-        {isGitBlameActive && (
+        <div 
+          ref={splitContainerRef}
+          className={`flex-1 flex overflow-hidden relative ${
+            splitMode === 'horizontal' ? 'flex-col' : 'flex-row'
+          }`}
+        >
+          {/* Primary Editor Pane Container */}
           <div 
-            className="w-56 bg-[#212225] border-r border-[#393B40] flex flex-col select-none relative overflow-hidden text-[11px] font-mono z-10 flex-shrink-0"
-            onContextMenu={(e) => {
-              e.preventDefault();
-              e.stopPropagation();
-              const rect = e.currentTarget.getBoundingClientRect();
-              const relativeY = e.clientY - rect.top - 24 + scrollTop;
-              const totalLines = activeTab.content.split('\n').length || 1;
-              const clickedLine = Math.max(1, Math.min(Math.floor(relativeY / lineHeightPx) + 1, totalLines));
-              setGutterMenu({
-                x: e.clientX,
-                y: e.clientY,
-                lineNumber: clickedLine,
-              });
+            style={{ 
+              flex: splitMode !== 'none' ? `0 0 ${splitRatio}%` : '1 1 0%',
+              maxWidth: splitMode === 'vertical' ? `${splitRatio}%` : '100%',
+              maxHeight: splitMode === 'horizontal' ? `${splitRatio}%` : '100%' 
             }}
+            className="flex-1 flex overflow-hidden relative min-w-0 min-h-0"
           >
-            {/* Blame Header */}
-            <div className="h-6 bg-[#2B2D30] border-b border-[#393B40] px-2 flex items-center justify-between text-[10px] text-[#868A91] font-sans">
-              <span className="font-semibold text-[#DFE1E5] truncate">Git Blame: {activeTab.title}</span>
-              <button 
-                onClick={() => {
-                  setIsGitBlameActive(false);
-                  onShowToast?.('Git Blame', 'Annotation closed', 'info');
-                }}
-                className="hover:text-white px-1 text-sm leading-none"
-                title="Close Annotations"
-              >
-                ×
-              </button>
-            </div>
+          {/* Git Blame Annotation Column (Annotate with Git Blame) */}
+          {isGitBlameActive && (() => {
+          const allBlameEntries = (realBlameData && realBlameData.length > 0)
+            ? realBlameData 
+            : getBlameDataForFile(activeTab.title, activeTab.content.split('\n').length || 1);
+          
+          const totalBlameLines = allBlameEntries.length;
+          const viewportH = editorRef.current?.getLayoutInfo()?.height || 800;
+          const overscan = 15;
+          const startIndex = Math.max(0, Math.floor(scrollTop / lineHeightPx) - overscan);
+          const endIndex = Math.min(totalBlameLines, Math.ceil((scrollTop + viewportH) / lineHeightPx) + overscan);
+          const visibleEntries = allBlameEntries.slice(startIndex, endIndex);
+          const topSpacerH = startIndex * lineHeightPx;
+          const bottomSpacerH = Math.max(0, (totalBlameLines - endIndex) * lineHeightPx);
 
-            {/* Scrolling Lines */}
-            <div className="flex-1 relative overflow-hidden">
-              <div 
-                className="absolute left-0 right-0 top-0 will-change-transform"
-                style={{ transform: `translateY(-${scrollTop}px)` }}
-              >
-                {(realBlameData && realBlameData.length > 0 ? realBlameData : getBlameDataForFile(activeTab.title, activeTab.content.split('\n').length || 1)).map((entry) => {
-                  const isBookmarked = bookmarks.has(entry.line);
-                  const isHovered = hoveredBlameLine === entry.line;
-                  return (
-                    <div
-                      key={entry.line}
-                      onMouseEnter={() => setHoveredBlameLine(entry.line)}
-                      onMouseLeave={() => setHoveredBlameLine(null)}
-                      style={{ height: `${lineHeightPx}px` }}
-                      className={`flex items-center justify-between px-2 text-[11px] cursor-pointer transition-colors relative group ${
-                        isHovered ? 'bg-[#2E436E] text-white' : 'text-[#868A91] hover:text-[#DFE1E5]'
-                      }`}
-                    >
-                      <div className="flex items-center gap-1.5 overflow-hidden">
-                        {isBookmarked && (
-                          <Bookmark size={10} className="text-[#3574F0] fill-[#3574F0] flex-shrink-0" />
-                        )}
-                        <span className="text-[#A8ADBD] font-medium text-[10px] w-12 truncate flex-shrink-0">{entry.relativeTime}</span>
-                        <span className="truncate max-w-[80px]">{entry.author}</span>
-                      </div>
-                      <span className="text-[10px] text-[#59A869] font-mono opacity-70 group-hover:opacity-100 flex-shrink-0">
-                        {entry.commitHash.substring(0, 7)}
-                      </span>
+          return (
+            <div 
+              ref={blameColumnRef}
+              style={{ width: `${blameWidth}px`, minWidth: '180px', maxWidth: '520px' }}
+              className="bg-[#212225] border-r border-[#393B40] flex flex-col select-none relative overflow-hidden text-[11px] font-mono z-10 flex-shrink-0"
+              onContextMenu={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                const rect = e.currentTarget.getBoundingClientRect();
+                const relativeY = e.clientY - rect.top - 24 + scrollTop;
+                const totalLines = activeTab.content.split('\n').length || 1;
+                const clickedLine = Math.max(1, Math.min(Math.floor(relativeY / lineHeightPx) + 1, totalLines));
+                setGutterMenu({
+                  x: e.clientX,
+                  y: e.clientY,
+                  lineNumber: clickedLine,
+                });
+              }}
+            >
+              {/* Blame Column Resize Handle */}
+              <div
+                onMouseDown={handleBlameMouseDown}
+                onDoubleClick={() => setBlameWidth(prev => prev === 260 ? 380 : 260)}
+                className="absolute top-0 right-0 bottom-0 w-1.5 cursor-col-resize hover:bg-[#3574F0] z-30 transition-colors"
+                title="Drag to resize Git Blame column, double-click to toggle width"
+              />
 
-                      {/* JetBrains Commit Info Tooltip Balloon */}
-                      {isHovered && (
-                        <div 
-                          className="fixed ml-2 w-72 bg-[#2B2D30] border border-[#393B40] rounded shadow-2xl p-2.5 z-50 text-xs font-sans text-[#DFE1E5] pointer-events-none"
-                          style={{
-                            left: `${gutterMenu ? gutterMenu.x : 280}px`,
-                            top: `${Math.min(window.innerHeight - 150, Math.max(100, entry.line * lineHeightPx - scrollTop + 80))}px`,
-                          }}
-                        >
-                          <div className="flex items-center justify-between mb-1 text-[11px]">
-                            <span className="text-[#3574F0] font-semibold">Commit {entry.commitHash}</span>
-                            <span className="text-[#868A91] text-[10px]">{entry.dateStr}</span>
-                          </div>
-                          <div className="text-[11px] text-[#A8ADBD] mb-1">
-                            Author: <span className="text-white font-medium">{entry.author}</span> &lt;{entry.email}&gt;
-                          </div>
-                          <div className="text-[11px] text-[#DFE1E5] bg-[#1E1F22] p-1.5 rounded border border-[#393B40]/50 my-1 font-mono text-[10.5px]">
-                            {entry.message}
-                          </div>
-                          <div className="text-[10px] text-[#868A91] italic mt-1">
-                            Right-click gutter to configure annotations
-                          </div>
+              {/* Blame Header */}
+              <div className="h-6 bg-[#2B2D30] border-b border-[#393B40] px-2 flex items-center justify-between text-[10px] text-[#868A91] font-sans flex-shrink-0">
+                <span className="font-semibold text-[#DFE1E5] truncate">Git Blame: {activeTab.title}</span>
+                <button 
+                  onClick={() => {
+                    setIsGitBlameActive(false);
+                    onShowToast?.('Git Blame', 'Annotation closed', 'info');
+                  }}
+                  className="hover:text-white px-1 text-sm leading-none cursor-pointer"
+                  title="Close Annotations"
+                >
+                  ×
+                </button>
+              </div>
+
+              {/* Scrolling Lines */}
+              <div className="flex-1 relative overflow-hidden">
+                <div 
+                  ref={blameScrollContentRef}
+                  className="absolute left-0 right-0 top-0 will-change-transform"
+                  style={{ transform: `translateY(-${scrollTop}px)` }}
+                >
+                  {topSpacerH > 0 && <div style={{ height: `${topSpacerH}px` }} />}
+                  {visibleEntries.map((entry) => {
+                    const isBookmarked = bookmarks.has(entry.line);
+                    const isHovered = hoveredBlameLine === entry.line;
+                    const commitColor = getCommitColor(entry.commitHash);
+
+                    return (
+                      <div
+                        key={entry.line}
+                        onClick={() => {
+                          if (editorRef.current) {
+                            editorRef.current.setPosition({ lineNumber: entry.line, column: 1 });
+                            editorRef.current.focus();
+                            editorRef.current.revealLineInCenterIfOutsideViewport(entry.line);
+                          }
+                          if (entry.commitHash && onOpenGitCommit) {
+                            onOpenGitCommit(entry.commitHash);
+                          }
+                        }}
+                        onMouseEnter={() => setHoveredBlameLine(entry.line)}
+                        onMouseLeave={() => setHoveredBlameLine(null)}
+                        style={{ 
+                          height: `${lineHeightPx}px`,
+                          borderLeft: `3px solid ${commitColor}`
+                        }}
+                        className={`flex items-center justify-between px-2 text-[11px] cursor-pointer transition-colors relative group select-none ${
+                          isHovered ? 'bg-[#2E436E] text-white' : 'text-[#868A91] hover:text-[#DFE1E5]'
+                        }`}
+                      >
+                        <div className="flex items-center gap-1.5 overflow-hidden truncate mr-1">
+                          {isBookmarked && (
+                            <Bookmark size={10} className="text-[#3574F0] fill-[#3574F0] flex-shrink-0" />
+                          )}
+                          <span className="text-[#A8ADBD] font-medium text-[10px] w-12 truncate flex-shrink-0">{entry.relativeTime}</span>
+                          <span className="truncate max-w-[95px] text-[#DFE1E5] font-sans text-[11px]">{entry.author}</span>
                         </div>
-                      )}
-                    </div>
-                  );
-                })}
+
+                        <div className="flex items-center gap-1 flex-shrink-0">
+                          <span 
+                            className="text-[10px] font-mono px-1 py-0.2 rounded font-medium"
+                            style={{ color: commitColor, backgroundColor: `${commitColor}18` }}
+                          >
+                            {entry.commitHash.substring(0, 7)}
+                          </span>
+
+                          {/* Show Diff Action Icon */}
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleShowBlameDiff(entry);
+                            }}
+                            className="opacity-0 group-hover:opacity-100 p-0.5 hover:bg-[#3574F0] hover:text-white rounded text-[#868A91] transition-opacity cursor-pointer"
+                            title={`Show Diff for ${entry.commitHash.substring(0, 7)} with previous revision`}
+                          >
+                            <GitCompare size={12} />
+                          </button>
+                        </div>
+
+                        {/* JetBrains Commit Info Tooltip Balloon */}
+                        {isHovered && (
+                          <div 
+                            className="fixed ml-2 w-72 bg-[#2B2D30] border border-[#393B40] rounded shadow-2xl p-2.5 z-50 text-xs font-sans text-[#DFE1E5] pointer-events-none"
+                            style={{
+                              left: `${gutterMenu ? gutterMenu.x : blameWidth + 20}px`,
+                              top: `${Math.min(window.innerHeight - 150, Math.max(100, entry.line * lineHeightPx - scrollTop + 80))}px`,
+                            }}
+                          >
+                            <div className="flex items-center justify-between mb-1 text-[11px]">
+                              <span className="font-semibold" style={{ color: commitColor }}>Commit {entry.commitHash.substring(0, 8)}</span>
+                              <span className="text-[#868A91] text-[10px]">{entry.dateStr}</span>
+                            </div>
+                            <div className="text-[11px] text-[#A8ADBD] mb-1">
+                              Author: <span className="text-white font-medium">{entry.author}</span> &lt;{entry.email}&gt;
+                            </div>
+                            <div className="text-[11px] text-[#DFE1E5] bg-[#1E1F22] p-1.5 rounded border border-[#393B40]/50 my-1 font-mono text-[10.5px]">
+                              {entry.message}
+                            </div>
+                            <div className="text-[10px] text-[#3574F0] flex items-center gap-1 mt-1 font-medium">
+                              <GitCompare size={11} />
+                              <span>Click diff icon to view changes</span>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                  {bottomSpacerH > 0 && <div style={{ height: `${bottomSpacerH}px` }} />}
+                </div>
               </div>
             </div>
-          </div>
-        )}
+          );
+        })()}
 
         {/* Monaco Editor Core */}
-        <div className="flex-1 relative h-full">
+        <div 
+          className="flex-1 relative h-full"
+          onContextMenu={(e) => e.preventDefault()}
+        >
           <Editor
             height="100%"
             language={effectiveLanguage}
@@ -1997,11 +2378,102 @@ export const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ proje
           />
         </div>
       </div>
+
+      {/* ─── Secondary Split Editor Pane (Rendered if splitMode !== 'none' and secondaryTab exists) ─── */}
+      {splitMode !== 'none' && secondaryTab && (
+        <>
+          {/* Draggable Divider between Primary and Secondary Panes */}
+          <div
+            onMouseDown={handleStartSplitResize}
+            className={`flex-shrink-0 select-none z-30 transition-colors ${
+              splitMode === 'vertical'
+                ? 'w-1.5 cursor-col-resize hover:bg-[#3574F0] bg-[#2B2D30] border-x border-[#393B40]'
+                : 'h-1.5 cursor-row-resize hover:bg-[#3574F0] bg-[#2B2D30] border-y border-[#393B40]'
+            }`}
+          />
+
+          {/* Secondary Editor Pane Container */}
+          <div 
+            style={{ 
+              flex: `0 0 ${100 - splitRatio}%`,
+              maxWidth: splitMode === 'vertical' ? `${100 - splitRatio}%` : '100%',
+              maxHeight: splitMode === 'horizontal' ? `${100 - splitRatio}%` : '100%' 
+            }}
+            className="flex flex-col bg-[#1E1F22] overflow-hidden min-w-0 min-h-0 relative border-l border-[#2B2D30]"
+          >
+            {/* Secondary Header Tab Bar */}
+            <div className="h-[30px] bg-[#222427] border-b border-[#2B2D30] px-2 flex items-center justify-between select-none">
+              <div className="flex items-center gap-1.5 text-xs text-[#DFE1E5] font-medium truncate">
+                {getTabIcon(secondaryTab.title)}
+                <span className="truncate">{secondaryTab.title}</span>
+                {secondaryTab.isDirty && <span className="w-1.5 h-1.5 rounded-full bg-[#3574F0]" />}
+              </div>
+
+              {/* Secondary Controls: Switch tab dropdown & Close Split button */}
+              <div className="flex items-center gap-1">
+                {tabs.length > 1 && (
+                  <select
+                    value={secondaryTab.id}
+                    onChange={(e) => setSecondaryTabId(e.target.value)}
+                    className="bg-[#1E1F22] border border-[#393B40] text-[#DFE1E5] text-[11px] rounded px-1.5 py-0.5 outline-none cursor-pointer"
+                  >
+                    {tabs.map(t => (
+                      <option key={t.id} value={t.id}>{t.title}</option>
+                    ))}
+                  </select>
+                )}
+                <button
+                  onClick={() => {
+                    setSplitMode('none');
+                    setTimeout(() => editorRef.current?.layout(), 50);
+                    onShowToast?.('Editor Split', 'Split view closed', 'info');
+                  }}
+                  title="Close Split (Unsplit)"
+                  className="p-1 rounded hover:bg-[#2B2D30] text-[#868A91] hover:text-[#DFE1E5] cursor-pointer"
+                >
+                  <X size={12} />
+                </button>
+              </div>
+            </div>
+
+            {/* Secondary Monaco Editor Core */}
+            <div 
+              className="flex-1 relative h-full"
+              onContextMenu={(e) => e.preventDefault()}
+            >
+              <Editor
+                height="100%"
+                language={secondaryTab.language || 'typescript'}
+                value={secondaryTab.content}
+                theme={theme}
+                onChange={(value) => onChangeContent(secondaryTab.id, value || '')}
+                options={{
+                  readOnly: isReadOnly,
+                  fontSize,
+                  tabSize,
+                  fontFamily,
+                  lineHeight: lineHeightPx,
+                  fontLigatures,
+                  minimap: { enabled: false },
+                  lineNumbers: showLineNumbers ? 'on' : 'off',
+                  wordWrap: softWrap ? 'on' : 'off',
+                  renderWhitespace: showWhitespaces ? 'all' : 'none',
+                  glyphMargin: false,
+                  scrollBeyondLastLine: false,
+                  automaticLayout: true,
+                }}
+              />
+            </div>
+          </div>
+        </>
+      )}
+      </div>
       )}
 
       {/* ─── JetBrains Gutter Context Menu (media_1792658742200.png) ─── */}
       {gutterMenu && (
         <div 
+          ref={gutterMenuRef}
           className="fixed bg-[#2B2D30] border border-[#393B40] rounded-md shadow-2xl py-1 z-50 text-[12px] text-[#DFE1E5] w-64 select-none"
           style={{ 
             top: `${Math.max(10, Math.min(gutterMenu.y, window.innerHeight - 340))}px`, 
@@ -2035,7 +2507,7 @@ export const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ proje
 
           {/* Breakpoint Actions */}
           {(() => {
-            const existingBp = activeTab ? breakpoints.find(
+            const existingBp = activeTab ? effectiveBreakpoints.find(
               bp => (bp.filePath === activeTab.path || bp.fileName === activeTab.title || activeTab.path.endsWith(bp.fileName)) && 
                     bp.lineNumber === gutterMenu.lineNumber
             ) : undefined;
@@ -2044,7 +2516,7 @@ export const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ proje
               <>
                 <div 
                   onClick={() => {
-                    onToggleBreakpoint?.(gutterMenu.lineNumber);
+                    handleToggleBreakpoint(gutterMenu.lineNumber);
                     setGutterMenu(null);
                   }}
                   onMouseEnter={() => setActiveGutterSubmenu(null)}
@@ -2080,10 +2552,15 @@ export const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ proje
 
                     <div 
                       onClick={() => {
-                        onUpdateBreakpoint?.({
+                        const updatedBp = {
                           ...existingBp,
                           enabled: !existingBp.enabled,
-                        });
+                        };
+                        if (onUpdateBreakpoint) {
+                          onUpdateBreakpoint(updatedBp);
+                        }
+                        setLocalBreakpoints(prev => prev.map(b => b.id === updatedBp.id ? updatedBp : b));
+                        onShowToast?.(updatedBp.enabled ? 'Breakpoint Enabled' : 'Breakpoint Disabled', `Line ${updatedBp.lineNumber}`, 'info');
                         setGutterMenu(null);
                       }}
                       onMouseEnter={() => setActiveGutterSubmenu(null)}
@@ -2118,16 +2595,64 @@ export const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ proje
             </div>
           </div>
 
-          {/* 2. Disable Recording Time with Run to Cursor */}
+          {/* Git Blame Extended Actions */}
+          {isGitBlameActive && (() => {
+            const allBlame = (realBlameData && realBlameData.length > 0)
+              ? realBlameData 
+              : getBlameDataForFile(activeTab.title, activeTab.content.split('\n').length || 1);
+            const matched = allBlame.find(e => e.line === gutterMenu.lineNumber);
+            if (!matched) return null;
+            return (
+              <>
+                <div 
+                  onClick={() => {
+                    handleShowBlameDiff(matched);
+                    setGutterMenu(null);
+                  }}
+                  className="px-3 py-1.5 hover:bg-[#3574F0] hover:text-white cursor-pointer flex items-center gap-2 pl-8 font-semibold text-[#3574F0] hover:text-white"
+                >
+                  <GitCompare size={13} />
+                  <span>Show Diff for Line ({matched.commitHash.substring(0, 7)})</span>
+                </div>
+
+                <div 
+                  onClick={() => {
+                    navigator.clipboard.writeText(matched.commitHash);
+                    onShowToast?.('Revision Number', `Copied ${matched.commitHash.substring(0, 7)}`, 'success');
+                    setGutterMenu(null);
+                  }}
+                  className="px-3 py-1.5 hover:bg-[#3574F0] hover:text-white cursor-pointer pl-8"
+                >
+                  <span>Copy Revision Number</span>
+                </div>
+
+                {onOpenGitCommit && (
+                  <div 
+                    onClick={() => {
+                      onOpenGitCommit(matched.commitHash);
+                      setGutterMenu(null);
+                    }}
+                    className="px-3 py-1.5 hover:bg-[#3574F0] hover:text-white cursor-pointer pl-8"
+                  >
+                    <span>Show in Git Log</span>
+                  </div>
+                )}
+              </>
+            );
+          })()}
+
+          {/* 2. Disable/Enable Recording Time with Run to Cursor */}
           <div 
             onClick={() => {
-              onShowToast?.('Run to Cursor', 'Recording time disabled', 'info');
+              const nextVal = !isRecordingTime;
+              setIsRecordingTime(nextVal);
+              onShowToast?.('Run to Cursor', nextVal ? 'Recording time enabled' : 'Recording time disabled', 'info');
               setGutterMenu(null);
             }}
             onMouseEnter={() => setActiveGutterSubmenu(null)}
             className="px-3 py-1.5 hover:bg-[#3574F0] hover:text-white cursor-pointer pl-8 text-[#A8ADBD] hover:text-white"
           >
-            <span>Disable Recording Time with Run to Cursor</span>
+            <span>{isRecordingTime ? 'Disable Recording Time with Run to Cursor' : 'Enable Recording Time with Run to Cursor'}</span>
           </div>
 
           <div className="border-t border-[#393B40] my-1" />
@@ -2157,13 +2682,17 @@ export const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ proje
           {/* 4. Add Mnemonic Bookmark... Ctrl+F11 */}
           <div 
             onClick={() => {
-              onShowToast?.('Mnemonic Bookmark', `Set mnemonic bookmark on line ${gutterMenu.lineNumber}`, 'info');
+              setMnemonicPopup({
+                lineNumber: gutterMenu.lineNumber,
+                x: gutterMenu.x,
+                y: gutterMenu.y,
+              });
               setGutterMenu(null);
             }}
             onMouseEnter={() => setActiveGutterSubmenu(null)}
             className="px-3 py-1.5 hover:bg-[#3574F0] hover:text-white cursor-pointer flex items-center justify-between pl-8 group"
           >
-            <span>Add Mnemonic Bookmark...</span>
+            <span>{mnemonicBookmarks.has(gutterMenu.lineNumber) ? `Edit Mnemonic [${mnemonicBookmarks.get(gutterMenu.lineNumber)}]...` : 'Add Mnemonic Bookmark...'}</span>
             <span className="text-[10px] text-[#868A91] group-hover:text-white">Ctrl+F11</span>
           </div>
 
@@ -2267,21 +2796,31 @@ export const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ proje
 
                 <div 
                   onClick={() => {
-                    onShowToast?.('Method Separators', 'Method separators toggled', 'info');
+                    const nextVal = !showMethodSeparators;
+                    setShowMethodSeparators(nextVal);
+                    onShowToast?.('Method Separators', nextVal ? 'Enabled method separators' : 'Disabled method separators', 'info');
                     setGutterMenu(null);
                   }}
-                  className="px-3 py-1.5 hover:bg-[#3574F0] hover:text-white cursor-pointer pl-7"
+                  className="px-3 py-1.5 hover:bg-[#3574F0] hover:text-white cursor-pointer flex items-center gap-2 group"
                 >
+                  <span className="w-3 text-center text-[#3574F0] group-hover:text-white font-bold">
+                    {showMethodSeparators ? '✓' : ''}
+                  </span>
                   <span>Show Method Separators</span>
                 </div>
 
                 <div 
                   onClick={() => {
-                    onShowToast?.('Code Lens', 'Code Lens references enabled', 'info');
+                    const nextVal = !showCodeLens;
+                    setShowCodeLens(nextVal);
+                    onShowToast?.('Code Lens', nextVal ? 'Enabled references and implementations' : 'Disabled Code Lens', 'info');
                     setGutterMenu(null);
                   }}
-                  className="px-3 py-1.5 hover:bg-[#3574F0] hover:text-white cursor-pointer pl-7"
+                  className="px-3 py-1.5 hover:bg-[#3574F0] hover:text-white cursor-pointer flex items-center gap-2 group"
                 >
+                  <span className="w-3 text-center text-[#3574F0] group-hover:text-white font-bold">
+                    {showCodeLens ? '✓' : ''}
+                  </span>
                   <span>Show Code Lens</span>
                 </div>
               </div>
@@ -2291,7 +2830,7 @@ export const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ proje
           {/* 8. Configure Gutter Icons... */}
           <div 
             onClick={() => {
-              onShowToast?.('Gutter Icons', 'All gutter icons enabled (run, tests, breakpoints, bookmarks)', 'info');
+              setIsGutterIconsConfigOpen(true);
               setGutterMenu(null);
             }}
             onMouseEnter={() => setActiveGutterSubmenu(null)}
@@ -2305,6 +2844,7 @@ export const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ proje
       {/* ─── IntelliJ Breakpoint Condition Balloon Popup ─── */}
       {conditionPopup && (
         <div 
+          ref={conditionPopupRef}
           className="fixed bg-[#2B2D30] border border-[#393B40] rounded-lg shadow-2xl p-3 z-50 text-[12px] text-[#DFE1E5] w-80 select-none animate-in fade-in zoom-in-95 duration-100"
           style={{
             top: `${Math.max(10, Math.min(conditionPopup.y - 40, window.innerHeight - 200))}px`,
@@ -2344,11 +2884,16 @@ export const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ proje
               onChange={(e) => setConditionPopup(prev => prev ? { ...prev, conditionText: e.target.value } : null)}
               onKeyDown={(e) => {
                 if (e.key === 'Enter') {
-                  onUpdateBreakpoint?.({
+                  const updated = {
                     ...conditionPopup.bp,
                     enabled: conditionPopup.isEnabled,
                     condition: conditionPopup.conditionText.trim() || undefined,
-                  });
+                  };
+                  if (onUpdateBreakpoint) {
+                    onUpdateBreakpoint(updated);
+                  }
+                  setLocalBreakpoints(prev => prev.map(b => b.id === updated.id ? updated : b));
+                  onShowToast?.('Breakpoint Updated', `Condition: ${updated.condition || 'None'}`, 'success');
                   setConditionPopup(null);
                 } else if (e.key === 'Escape') {
                   setConditionPopup(null);
@@ -3235,7 +3780,9 @@ export const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ proje
           {/* 8. Split Right / Move Right / Split Down / Move Down */}
           <div 
             onClick={() => {
-              onShowToast?.('Split Right', `Split ${tabMenu.tab.title} right`, 'info');
+              setSplitMode('vertical');
+              setSecondaryTabId(tabMenu.tab.id);
+              onShowToast?.('Split Right', `Split view activated with ${tabMenu.tab.title}`, 'info');
               setTabMenu(null);
             }}
             onMouseEnter={() => setActiveTabSubmenu(null)}
@@ -3246,6 +3793,8 @@ export const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ proje
           </div>
           <div 
             onClick={() => {
+              setSplitMode('vertical');
+              setSecondaryTabId(tabMenu.tab.id);
               onShowToast?.('Split and Move Right', `Moved ${tabMenu.tab.title} to right split`, 'info');
               setTabMenu(null);
             }}
@@ -3256,7 +3805,9 @@ export const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ proje
           </div>
           <div 
             onClick={() => {
-              onShowToast?.('Split Down', `Split ${tabMenu.tab.title} down`, 'info');
+              setSplitMode('horizontal');
+              setSecondaryTabId(tabMenu.tab.id);
+              onShowToast?.('Split Down', `Split view down activated with ${tabMenu.tab.title}`, 'info');
               setTabMenu(null);
             }}
             onMouseEnter={() => setActiveTabSubmenu(null)}
@@ -3267,7 +3818,9 @@ export const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ proje
           </div>
           <div 
             onClick={() => {
-              onShowToast?.('Split and Move Down', `Moved ${tabMenu.tab.title} down`, 'info');
+              setSplitMode('horizontal');
+              setSecondaryTabId(tabMenu.tab.id);
+              onShowToast?.('Split and Move Down', `Moved ${tabMenu.tab.title} to bottom split`, 'info');
               setTabMenu(null);
             }}
             onMouseEnter={() => setActiveTabSubmenu(null)}
@@ -3606,6 +4159,140 @@ export const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ proje
             <span>Create Gist...</span>
           </div>
         </div>
+      )}
+    
+      {/* ─── Authentic JetBrains Mnemonic Bookmark Picker (Ctrl+F11) ─── */}
+      {mnemonicPopup && (
+        <div 
+          ref={mnemonicPopupRef}
+          className="fixed bg-[#2B2D30] border border-[#393B40] rounded-lg shadow-2xl p-3 z-50 text-[12px] text-[#DFE1E5] w-72 select-none animate-in fade-in zoom-in-95 duration-100"
+          style={{
+            top: `${Math.max(10, Math.min(mnemonicPopup.y, window.innerHeight - 250))}px`,
+            left: `${Math.min(mnemonicPopup.x + 20, window.innerWidth - 300)}px`
+          }}
+          onClick={(e) => e.stopPropagation()}
+        >
+          <div className="flex items-center justify-between pb-2 border-b border-[#393B40] mb-2 font-medium">
+            <span className="text-[#3574F0] font-semibold">Mnemonic Bookmark: Line ${mnemonicPopup.lineNumber}</span>
+            <button 
+              onClick={() => setMnemonicPopup(null)}
+              className="text-[#868A91] hover:text-white text-xs px-1 cursor-pointer"
+            >
+              ✕
+            </button>
+          </div>
+          <div className="text-[11px] text-[#868A91] mb-2">Select a number (0-9) or letter (A-Z):</div>
+          <div className="grid grid-cols-5 gap-1.5 mb-3 font-mono">
+            {['1','2','3','4','5','6','7','8','9','0','A','B','C','D','E'].map(char => (
+              <button
+                key={char}
+                onClick={() => {
+                  setMnemonicBookmarks(prev => {
+                    const next = new Map(prev);
+                    next.set(mnemonicPopup.lineNumber, char);
+                    return next;
+                  });
+                  onShowToast?.('Mnemonic Bookmark', `Bookmark [${char}] set on line ${mnemonicPopup.lineNumber}`, 'success');
+                  setMnemonicPopup(null);
+                }}
+                className="p-1.5 rounded bg-[#1E1F22] hover:bg-[#3574F0] hover:text-white text-center font-bold border border-[#393B40] transition-colors cursor-pointer"
+              >
+                {char}
+              </button>
+            ))}
+          </div>
+          {mnemonicBookmarks.has(mnemonicPopup.lineNumber) && (
+            <button
+              onClick={() => {
+                setMnemonicBookmarks(prev => {
+                  const next = new Map(prev);
+                  next.delete(mnemonicPopup.lineNumber);
+                  return next;
+                });
+                onShowToast?.('Bookmark Removed', `Removed mnemonic bookmark on line ${mnemonicPopup.lineNumber}`, 'info');
+                setMnemonicPopup(null);
+              }}
+              className="w-full py-1 text-center text-xs text-[#E05555] hover:bg-[#E05555]/10 rounded border border-[#E05555]/30 cursor-pointer"
+            >
+              Remove Mnemonic Bookmark
+            </button>
+          )}
+        </div>
+      )}
+
+      {/* ─── Configure Gutter Icons Modal ─── */}
+      {isGutterIconsConfigOpen && (
+        <div 
+          className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center select-none"
+          onClick={() => setIsGutterIconsConfigOpen(false)}
+        >
+          <div 
+            className="bg-[#2B2D30] border border-[#393B40] rounded-lg shadow-2xl p-4 w-96 text-xs text-[#DFE1E5]"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between pb-2 border-b border-[#393B40] mb-3">
+              <span className="font-semibold text-sm">Configure Gutter Icons</span>
+              <button 
+                onClick={() => setIsGutterIconsConfigOpen(false)}
+                className="text-[#868A91] hover:text-white cursor-pointer"
+              >
+                ✕
+              </button>
+            </div>
+            <div className="space-y-2.5 mb-4">
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input type="checkbox" defaultChecked className="accent-[#3574F0] rounded" />
+                <span>Line Breakpoints (🔴)</span>
+              </label>
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input type="checkbox" defaultChecked className="accent-[#3574F0] rounded" />
+                <span>Bookmarks &amp; Mnemonics (🔖)</span>
+              </label>
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input type="checkbox" defaultChecked className="accent-[#3574F0] rounded" />
+                <span>Run / Debug Test Triangles (▶)</span>
+              </label>
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input type="checkbox" checked={isGitBlameActive} onChange={(e) => setIsGitBlameActive(e.target.checked)} className="accent-[#3574F0] rounded" />
+                <span>Git Blame Annotations</span>
+              </label>
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input type="checkbox" checked={showMethodSeparators} onChange={(e) => setShowMethodSeparators(e.target.checked)} className="accent-[#3574F0] rounded" />
+                <span>Method Separators</span>
+              </label>
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input type="checkbox" checked={showCodeLens} onChange={(e) => setShowCodeLens(e.target.checked)} className="accent-[#3574F0] rounded" />
+                <span>Code Lens References</span>
+              </label>
+            </div>
+            <div className="flex justify-end gap-2 pt-2 border-t border-[#393B40]">
+              <button
+                onClick={() => {
+                  onShowToast?.('Gutter Icons', 'Gutter icon configuration saved', 'success');
+                  setIsGutterIconsConfigOpen(false);
+                }}
+                className="px-3 py-1.5 bg-[#3574F0] text-white rounded hover:bg-[#3574F0]/90 font-medium cursor-pointer"
+              >
+                OK
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Git Blame Diff Viewer Modal */}
+      {isDiffOpen && diffModalFile && (
+        <React.Suspense fallback={null}>
+          <DiffViewerModal
+            isOpen={isDiffOpen}
+            onClose={() => setIsDiffOpen(false)}
+            fileName={diffModalFile}
+            baseContent={diffModalBase}
+            localContent={diffModalLocal}
+            baseTitle={diffModalBaseTitle}
+            localTitle={diffModalLocalTitle}
+          />
+        </React.Suspense>
       )}
     </div>
   );

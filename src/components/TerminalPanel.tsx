@@ -7,6 +7,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { 
   Plus, 
+  AlertTriangle,
   Trash2, 
   Columns, 
   Rows, 
@@ -59,7 +60,7 @@ interface PaneViewProps {
   pane: TerminalPaneItem;
   isActive: boolean;
   isSplit: boolean;
-  cwd?: string;
+  initialCwd?: string;
   onFocus: () => void;
   onClosePane?: () => void;
   searchQuery: string;
@@ -70,7 +71,7 @@ const TerminalPaneView: React.FC<PaneViewProps> = ({
   pane,
   isActive,
   isSplit,
-  cwd,
+  initialCwd,
   onFocus,
   onClosePane,
   searchQuery,
@@ -141,7 +142,7 @@ const TerminalPaneView: React.FC<PaneViewProps> = ({
 
     const startSession = async () => {
       let isSpawned = false;
-      const targetDir = cwd || 'D:\\IDE';
+      const targetDir = initialCwd || 'D:\\IDE';
 
       try {
         const cols = term.cols || 80;
@@ -260,7 +261,7 @@ const TerminalPaneView: React.FC<PaneViewProps> = ({
       }
       term.dispose();
     };
-  }, [pane.sessionId, pane.shell, pane.shellName, cwd]);
+  }, [pane.sessionId, pane.shell, pane.shellName]);
 
   // Handle focus and fit
   useEffect(() => {
@@ -308,8 +309,7 @@ const TerminalPaneView: React.FC<PaneViewProps> = ({
           )}
         </div>
       )}
-      <div ref={containerRef} onClick={() => xtermRef.current?.focus()} className="flex-1 p-2 overflow-hidden cursor-text" />
-    </div>
+      <div ref={containerRef} onClick={() => xtermRef.current?.focus()} className="flex-1 p-2 overflow-hidden cursor-text" /></div>
   );
 };
 
@@ -347,6 +347,30 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
   });
 
   const [activeTabId, setActiveTabId] = useState<string>('tab-1');
+  const [exitedSessions, setExitedSessions] = useState<Set<string>>(new Set());
+  const [tabToTerminate, setTabToTerminate] = useState<TerminalTabItem | null>(null);
+  const [closeAction, setCloseAction] = useState<'single' | 'all'>('single');
+  const [doNotAskAgain, setDoNotAskAgain] = useState(false);
+
+  // Listen to terminal exit events to track which processes finished
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    const setupExitTracker = async () => {
+      if (typeof window !== 'undefined' && ('__TAURI_INTERNALS__' in window || '__TAURI__' in window)) {
+        try {
+          unlisten = await listen<{ session_id: string }>('terminal-exit', (e) => {
+            setExitedSessions(prev => new Set(prev).add(e.payload.session_id));
+          });
+        } catch (err) {
+          console.warn('Failed to listen to terminal-exit:', err);
+        }
+      }
+    };
+    setupExitTracker();
+    return () => {
+      if (unlisten) unlisten();
+    };
+  }, []);
   const [isSearchOpen, setIsSearchOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [searchTrigger, setSearchTrigger] = useState<{ count: number; dir: 'next' | 'prev' }>({ count: 0, dir: 'next' });
@@ -434,11 +458,16 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
     setAddMenuPos(null);
   };
 
-  // Close tab
-  const handleCloseTab = (tabId: string, e?: React.MouseEvent) => {
-    if (e) e.stopPropagation();
+  // Perform actual close of tab and kill its process
+  const performCloseTab = (tabId: string) => {
+    const targetTab = tabs.find(t => t.id === tabId);
+    if (targetTab && typeof window !== 'undefined' && ('__TAURI_INTERNALS__' in window || '__TAURI__' in window)) {
+      targetTab.panes.forEach(p => {
+        invoke('terminal_kill', { sessionId: p.sessionId }).catch(() => {});
+      });
+    }
+
     if (tabs.length <= 1) {
-      // Re-initialize tab 1 with fresh session
       const newSessionId = `term-${Date.now()}`;
       setTabs([
         {
@@ -467,8 +496,30 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
     }
   };
 
-  // Close all tabs (IntelliJ shortcut Ctrl+Shift+W)
-  const handleCloseAllTabs = () => {
+  // Close tab with confirmation if process is running
+  const handleCloseTab = (tabId: string, e?: React.MouseEvent) => {
+    if (e) e.stopPropagation();
+    const targetTab = tabs.find(t => t.id === tabId);
+    if (!targetTab) return;
+
+    const hasRunningProcess = targetTab.panes.some(p => !exitedSessions.has(p.sessionId));
+    const skipPrompt = localStorage.getItem('ij_confirm_terminal_kill') === 'false';
+
+    if (hasRunningProcess && !skipPrompt) {
+      setTabToTerminate(targetTab);
+      setCloseAction('single');
+      return;
+    }
+
+    performCloseTab(tabId);
+  };
+
+  const performCloseAllTabs = () => {
+    if (typeof window !== 'undefined' && ('__TAURI_INTERNALS__' in window || '__TAURI__' in window)) {
+      tabs.forEach(t => t.panes.forEach(p => {
+        invoke('terminal_kill', { sessionId: p.sessionId }).catch(() => {});
+      }));
+    }
     const newSessionId = `term-${Date.now()}`;
     setTabs([
       {
@@ -487,6 +538,32 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
       }
     ]);
     setActiveTabId('tab-1');
+  };
+
+  // Close all tabs (IntelliJ shortcut Ctrl+Shift+W)
+  const handleCloseAllTabs = () => {
+    const hasAnyRunning = tabs.some(t => t.panes.some(p => !exitedSessions.has(p.sessionId)));
+    const skipPrompt = localStorage.getItem('ij_confirm_terminal_kill') === 'false';
+    if (hasAnyRunning && !skipPrompt) {
+      setTabToTerminate(tabs[0]);
+      setCloseAction('all');
+      return;
+    }
+    performCloseAllTabs();
+  };
+
+  const handleConfirmTerminate = () => {
+    if (doNotAskAgain) {
+      try {
+        localStorage.setItem('ij_confirm_terminal_kill', 'false');
+      } catch (e) {}
+    }
+    if (closeAction === 'single' && tabToTerminate) {
+      performCloseTab(tabToTerminate.id);
+    } else if (closeAction === 'all') {
+      performCloseAllTabs();
+    }
+    setTabToTerminate(null);
   };
 
   // Split active tab horizontally or vertically
@@ -790,27 +867,34 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
 
       {/* ─── Terminal Body (Panes with Split Layout) ─── */}
       <div className="flex-1 overflow-hidden relative flex">
-        {activeTab && (
-          <div className={`flex-1 h-full flex ${
-            activeTab.layout === 'vertical' ? 'flex-col' : 'flex-row'
-          }`}>
-            {activeTab.panes.map((pane) => (
-              <TerminalPaneView
-                key={`${pane.id}-${cwd || 'root'}`}
-                pane={pane}
-                isActive={pane.id === activeTab.activePaneId}
-                isSplit={activeTab.panes.length > 1}
-                cwd={cwd}
-                onFocus={() => {
-                  setTabs(prev => prev.map(t => t.id === activeTab.id ? { ...t, activePaneId: pane.id } : t));
-                }}
-                onClosePane={() => handleClosePane(activeTab.id, pane.id)}
-                searchQuery={searchQuery}
-                searchTrigger={searchTrigger}
-              />
-            ))}
-          </div>
-        )}
+        {tabs.map((tab) => {
+          const isTabActive = tab.id === activeTabId;
+          return (
+            <div
+              key={tab.id}
+              className={`flex-1 h-full flex ${
+                tab.layout === 'vertical' ? 'flex-col' : 'flex-row'
+              } ${isTabActive ? '' : 'hidden'}`}
+              style={{ display: isTabActive ? 'flex' : 'none' }}
+            >
+              {tab.panes.map((pane) => (
+                <TerminalPaneView
+                  key={pane.id}
+                  pane={pane}
+                  isActive={isTabActive && pane.id === tab.activePaneId}
+                  isSplit={tab.panes.length > 1}
+                  initialCwd={cwd}
+                  onFocus={() => {
+                    setTabs(prev => prev.map(t => t.id === tab.id ? { ...t, activePaneId: pane.id } : t));
+                  }}
+                  onClosePane={() => handleClosePane(tab.id, pane.id)}
+                  searchQuery={searchQuery}
+                  searchTrigger={searchTrigger}
+                />
+              ))}
+            </div>
+          );
+        })}
       </div>
 
       {/* ─── Floating Menus Backdrop (Universal Click Dismiss) ─── */}
@@ -1067,7 +1151,83 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
           </div>
         </div>
       )}
+
+      {/* ─── Terminate Process Confirmation Modal (Authentic IntelliJ IDEA) ─── */}
+      {tabToTerminate && (
+        <div 
+          className="fixed inset-0 bg-black/65 backdrop-blur-[2px] flex items-center justify-center z-[100] select-none animate-in fade-in duration-100"
+          onClick={() => setTabToTerminate(null)}
+        >
+          <div 
+            className="w-[450px] bg-[#2B2D30] border border-[#43454A] rounded-lg shadow-2xl overflow-hidden flex flex-col text-[12.5px] font-sans"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Title Bar */}
+            <div className="h-9 bg-[#26282B] border-b border-[#393B40] flex items-center justify-between px-3.5 flex-shrink-0">
+              <span className="font-medium text-[#DFE1E5]">
+                {closeAction === 'all' ? 'Terminate All Processes' : 'Terminate Process'}
+              </span>
+              <button 
+                onClick={() => setTabToTerminate(null)} 
+                className="p-1 hover:bg-[#35373B] rounded text-[#868A91] hover:text-[#DFE1E5] transition-colors"
+              >
+                <X size={14} />
+              </button>
+            </div>
+
+            {/* Body */}
+            <div className="p-4 space-y-3.5">
+              <div className="flex items-start gap-3">
+                <div className="w-8 h-8 rounded-full bg-[#E05555]/15 text-[#E05555] flex items-center justify-center flex-shrink-0 mt-0.5">
+                  <AlertTriangle size={18} />
+                </div>
+                <div className="space-y-1">
+                  <div className="font-medium text-[#DFE1E5]">
+                    {closeAction === 'all' 
+                      ? 'Processes in open terminal sessions are still running.'
+                      : `Process '${tabToTerminate.title}' is still running.`
+                    }
+                  </div>
+                  <div className="text-[#868A91] text-[12px] leading-relaxed">
+                    Do you want to terminate the process? Any active tasks (such as dev servers or long-running commands) will be stopped.
+                  </div>
+                </div>
+              </div>
+
+              {/* Do not ask again checkbox */}
+              <div className="pt-2 border-t border-[#393B40]/60 flex items-center">
+                <label className="flex items-center gap-2 cursor-pointer text-[#868A91] hover:text-[#DFE1E5] text-[11.5px]">
+                  <input
+                    type="checkbox"
+                    checked={doNotAskAgain}
+                    onChange={(e) => setDoNotAskAgain(e.target.checked)}
+                    className="accent-[#3574F0] w-3.5 h-3.5 rounded cursor-pointer"
+                  />
+                  <span>Do not ask again</span>
+                </label>
+              </div>
+            </div>
+
+            {/* Footer */}
+            <div className="h-11 bg-[#26282B] border-t border-[#393B40] flex items-center justify-end px-3.5 gap-2 flex-shrink-0">
+              <button
+                type="button"
+                onClick={() => setTabToTerminate(null)}
+                className="px-3.5 py-1.5 hover:bg-[#35373B] text-[#DFE1E5] rounded text-xs transition-colors cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmTerminate}
+                className="px-4 py-1.5 bg-[#E05555] hover:bg-[#C74040] text-white rounded text-xs font-medium transition-colors shadow-sm cursor-pointer"
+              >
+                Terminate
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
-

@@ -35,7 +35,8 @@ import {
   Activity,
   Pin,
   Crosshair,
-  Sliders
+  Sliders,
+  AlertTriangle
 } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
 import { MenuDropdown } from './MenuDropdown';
@@ -107,6 +108,7 @@ export const TopBar: React.FC<TopBarProps> = ({
   const [selectedRunTarget, setSelectedRunTarget] = useState('Current File');
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [isMaximized, setIsMaximized] = useState(false);
+  const [isConfirmExitOpen, setIsConfirmExitOpen] = useState(false);
 
   const mainMenuRef = useRef<HTMLDivElement>(null);
   const projectDropdownRef = useRef<HTMLDivElement>(null);
@@ -248,6 +250,19 @@ export const TopBar: React.FC<TopBarProps> = ({
 
   const handleClose = async (e: React.MouseEvent) => {
     e.stopPropagation();
+    if (isRunning) {
+      setIsConfirmExitOpen(true);
+      return;
+    }
+    try {
+      await invoke('app_close_window');
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  const handleConfirmExit = async () => {
+    setIsConfirmExitOpen(false);
     try {
       await invoke('app_close_window');
     } catch (err) {
@@ -435,6 +450,20 @@ export const TopBar: React.FC<TopBarProps> = ({
         onDoubleClick={(e) => e.stopPropagation()}
         data-tauri-drag-region="false"
       >
+        {/* Reload / Sync All from Disk (Ctrl+Alt+Y) */}
+        <button
+          onClick={handleRefreshClick}
+          disabled={isRefreshing}
+          title="Reload All from Disk (Ctrl+Alt+Y)"
+          className={`p-1.5 rounded transition-all cursor-pointer ${
+            isRefreshing 
+              ? 'bg-[#3574F0]/20 text-[#3574F0]' 
+              : 'hover:bg-[#2B2D30] text-[#868A91] hover:text-[#DFE1E5]'
+          }`}
+        >
+          <RotateCw size={13} className={isRefreshing ? 'animate-spin text-[#3574F0]' : ''} />
+        </button>
+
         {/* Target Selector Pill */}
         <div className="relative" ref={runConfigRef}>
           <button
@@ -872,6 +901,57 @@ export const TopBar: React.FC<TopBarProps> = ({
           </button>
         </div>
       </div>
+      {/* Confirm Exit Modal */}
+      {isConfirmExitOpen && (
+        <div 
+          className="fixed inset-0 bg-black/65 backdrop-blur-[2px] flex items-center justify-center z-[100] select-none text-[12.5px]"
+          onClick={() => setIsConfirmExitOpen(false)}
+        >
+          <div 
+            className="w-[440px] bg-[#2B2D30] border border-[#43454A] rounded-lg shadow-2xl overflow-hidden flex flex-col text-[#DFE1E5]"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="h-9 bg-[#26282B] border-b border-[#393B40] flex items-center justify-between px-3.5 flex-shrink-0">
+              <span className="font-medium text-[#DFE1E5]">Confirm Exit</span>
+              <button 
+                onClick={() => setIsConfirmExitOpen(false)} 
+                className="p-1 hover:bg-[#35373B] rounded text-[#868A91] hover:text-[#DFE1E5] transition-colors"
+              >
+                <X size={14} />
+              </button>
+            </div>
+            <div className="p-4 space-y-3">
+              <div className="flex items-start gap-3">
+                <div className="w-8 h-8 rounded-full bg-[#E05555]/15 text-[#E05555] flex items-center justify-center flex-shrink-0 mt-0.5">
+                  <AlertTriangle size={18} />
+                </div>
+                <div className="space-y-1">
+                  <div className="font-medium text-[#DFE1E5]">Processes are still running.</div>
+                  <div className="text-[#868A91] text-[12px] leading-relaxed">
+                    A background build or run process is still active. If you exit now, running processes will be terminated.
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div className="h-11 bg-[#26282B] border-t border-[#393B40] flex items-center justify-end px-3.5 gap-2 flex-shrink-0">
+              <button
+                type="button"
+                onClick={() => setIsConfirmExitOpen(false)}
+                className="px-3 py-1.5 hover:bg-[#35373B] text-[#DFE1E5] rounded text-xs transition-colors cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmExit}
+                className="px-4 py-1.5 bg-[#E05555] hover:bg-[#C74040] text-white rounded text-xs font-medium transition-colors cursor-pointer shadow-sm"
+              >
+                Terminate and Exit
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

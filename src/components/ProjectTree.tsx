@@ -145,11 +145,11 @@ export const ProjectTree: React.FC<ProjectTreeProps> = ({
     }
   }, [contextMenu, menuPos]);
 
-  const toggleFolder = (id: string, e: React.MouseEvent) => {
+  const toggleFolder = (id: string, isCurrentlyExpanded: boolean, e: React.MouseEvent) => {
     e.stopPropagation();
     setExpandedFolders(prev => ({ 
       ...prev, 
-      [id]: prev[id] !== undefined ? !prev[id] : false 
+      [id]: !isCurrentlyExpanded 
     }));
   };
 
@@ -267,7 +267,7 @@ export const ProjectTree: React.FC<ProjectTreeProps> = ({
             <div
               className={`flex items-center gap-1.5 py-1 px-2 hover:bg-[#2B2D30] cursor-pointer text-[12px] text-[#DFE1E5] select-none transition-colors group`}
               style={{ paddingLeft: `${depth * 14 + 8}px` }}
-              onClick={(e) => toggleFolder(node.id, e)}
+              onClick={(e) => toggleFolder(node.id, isExpanded, e)}
               onContextMenu={(e) => handleContextMenu(e, node)}
             >
               <span className="text-[#868A91] hover:text-white">
@@ -296,7 +296,10 @@ export const ProjectTree: React.FC<ProjectTreeProps> = ({
               : 'text-[#DFE1E5] hover:bg-[#2B2D30]'
           }`}
           style={{ paddingLeft: `${depth * 14 + 20}px` }}
-          onClick={() => onFileSelect(node)}
+          onClick={(e) => {
+            e.stopPropagation();
+            onFileSelect(node);
+          }}
           onContextMenu={(e) => handleContextMenu(e, node)}
         >
           {getFileIcon(node.name)}

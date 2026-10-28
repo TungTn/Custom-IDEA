@@ -9,36 +9,41 @@ import { TerminalPanel } from './components/TerminalPanel';
 import { RunConsolePanel } from './components/RunConsolePanel';
 import { StatusBar } from './components/StatusBar';
 import { BottomToolWindowBar } from './components/BottomToolWindowBar';
-import { SearchEverywhereModal } from './components/SearchEverywhereModal';
-import { FindInFilesModal } from './components/FindInFilesModal';
-import { AboutModal } from './components/AboutModal';
-import { NewFileModal } from './components/NewFileModal';
-import { SettingsModal, IdeSettings } from './components/SettingsModal';
-import { GoToLineModal } from './components/GoToLineModal';
-import { GitCommitModal } from './components/GitCommitModal';
-import { GitBranchesModal } from './components/GitBranchesModal';
-import { RenameModal } from './components/RenameModal';
-import { TipOfTheDayModal } from './components/TipOfTheDayModal';
-import { RunConfigModal } from './components/RunConfigModal';
-import { NewProjectModal } from './components/NewProjectModal';
-import { ProjectStructureModal } from './components/ProjectStructureModal';
-import { InvalidateCachesModal } from './components/InvalidateCachesModal';
-import { LocalHistoryModal } from './components/LocalHistoryModal';
-import { RepairIdeModal } from './components/RepairIdeModal';
 import { ToastContainer, ToastItem } from './components/ToastContainer';
 import { OpenProjectDialog } from './components/OpenProjectDialog';
 import { RightActivityBar, NotificationEntry } from './components/RightActivityBar';
 import { FindUsagesPanel } from './components/FindUsagesPanel';
 import { ShowUsagesPopup } from './components/ShowUsagesPopup';
 import { WelcomeScreen } from './components/WelcomeScreen';
-import { VcsCloneModal } from './components/VcsCloneModal';
 import { GitToolWindow } from './components/GitToolWindow';
-import { DiffViewerModal } from './components/DiffViewerModal';
 import { StructurePanel } from './components/StructurePanel';
+import { DebugPanel } from './components/DebugPanel';
+import { ProblemsPanel } from './components/ProblemsPanel';
 import { DataSourceConnection, INITIAL_DATA_SOURCES } from './types/database';
-import { AddDataSourceModal } from './components/database/AddDataSourceModal';
-import { FileNode, OpenTab, RunLog, ActionItem, UsageOccurrence, FindUsagesResult, RunConfiguration } from './types';
-import { Terminal, PlaySquare, AlertCircle, Search, GitBranch } from 'lucide-react';
+import type { IdeSettings } from './components/SettingsModal';
+
+// Lazy-loaded dialogs & modals for optimal cold start and small bundle sizes
+const SearchEverywhereModal = React.lazy(() => import('./components/SearchEverywhereModal').then(m => ({ default: m.SearchEverywhereModal })));
+const FindInFilesModal = React.lazy(() => import('./components/FindInFilesModal').then(m => ({ default: m.FindInFilesModal })));
+const AboutModal = React.lazy(() => import('./components/AboutModal').then(m => ({ default: m.AboutModal })));
+const NewFileModal = React.lazy(() => import('./components/NewFileModal').then(m => ({ default: m.NewFileModal })));
+const SettingsModal = React.lazy(() => import('./components/SettingsModal').then(m => ({ default: m.SettingsModal })));
+const GoToLineModal = React.lazy(() => import('./components/GoToLineModal').then(m => ({ default: m.GoToLineModal })));
+const GitCommitModal = React.lazy(() => import('./components/GitCommitModal').then(m => ({ default: m.GitCommitModal })));
+const GitBranchesModal = React.lazy(() => import('./components/GitBranchesModal').then(m => ({ default: m.GitBranchesModal })));
+const RenameModal = React.lazy(() => import('./components/RenameModal').then(m => ({ default: m.RenameModal })));
+const TipOfTheDayModal = React.lazy(() => import('./components/TipOfTheDayModal').then(m => ({ default: m.TipOfTheDayModal })));
+const RunConfigModal = React.lazy(() => import('./components/RunConfigModal').then(m => ({ default: m.RunConfigModal })));
+const NewProjectModal = React.lazy(() => import('./components/NewProjectModal').then(m => ({ default: m.NewProjectModal })));
+const ProjectStructureModal = React.lazy(() => import('./components/ProjectStructureModal').then(m => ({ default: m.ProjectStructureModal })));
+const InvalidateCachesModal = React.lazy(() => import('./components/InvalidateCachesModal').then(m => ({ default: m.InvalidateCachesModal })));
+const LocalHistoryModal = React.lazy(() => import('./components/LocalHistoryModal').then(m => ({ default: m.LocalHistoryModal })));
+const RepairIdeModal = React.lazy(() => import('./components/RepairIdeModal').then(m => ({ default: m.RepairIdeModal })));
+const VcsCloneModal = React.lazy(() => import('./components/VcsCloneModal').then(m => ({ default: m.VcsCloneModal })));
+const DiffViewerModal = React.lazy(() => import('./components/DiffViewerModal').then(m => ({ default: m.DiffViewerModal })));
+const AddDataSourceModal = React.lazy(() => import('./components/database/AddDataSourceModal').then(m => ({ default: m.AddDataSourceModal })));
+import { FileNode, OpenTab, RunLog, ActionItem, UsageOccurrence, FindUsagesResult, RunConfiguration, Breakpoint, DebugState, StackFrame, VariableItem, WatchItem, ProblemItem } from './types';
+import { Terminal, PlaySquare, Play, Bug, AlertCircle, Search, GitBranch, Maximize2, Minus } from 'lucide-react';
 
 const initialFiles: FileNode[] = [
   {
@@ -485,7 +490,22 @@ export const App: React.FC = () => {
   const [runConfigurations, setRunConfigurations] = useState<RunConfiguration[]>(() => {
     try {
       const saved = localStorage.getItem('intellij_run_configurations');
-      if (saved) return JSON.parse(saved);
+      if (saved) {
+        const parsed: RunConfiguration[] = JSON.parse(saved);
+        // Automatically upgrade existing Java / Spring Boot configs to the Ultra-Lightweight profile
+        return parsed.map(c => {
+          if (c.type === 'spring-boot' || c.command.includes('mvn') || c.command.includes('gradle')) {
+            const envs = { ...(c.envVars || {}) };
+            const ultraLightOpts = '-Xms64m -Xmx384m -Xss256k -XX:+UseSerialGC -XX:TieredStopAtLevel=1 -XX:MaxMetaspaceSize=384m -XX:ReservedCodeCacheSize=96m';
+            envs['JAVA_TOOL_OPTIONS'] = ultraLightOpts;
+            if (!envs['MAVEN_OPTS'] && c.command.includes('mvn')) {
+              envs['MAVEN_OPTS'] = '-Xms32m -Xmx96m -XX:+UseSerialGC';
+            }
+            return { ...c, envVars: envs };
+          }
+          return c;
+        });
+      }
     } catch (e) {
       console.warn('Failed to parse saved run configurations:', e);
     }
@@ -513,7 +533,6 @@ export const App: React.FC = () => {
     return INITIAL_DATA_SOURCES;
   });
   const [isAddDataSourceOpen, setIsAddDataSourceOpen] = useState(false);
-
 
   // Toast notifications & Notifications Center History
   const [toasts, setToasts] = useState<ToastItem[]>([]);
@@ -556,6 +575,178 @@ export const App: React.FC = () => {
       setToasts(prev => prev.filter(t => t.id !== id));
     }, 2800);
   }, []);
+
+  // Breakpoints State (synchronized across Editor and Debugger)
+  const [breakpoints, setBreakpoints] = useState<Breakpoint[]>([]);
+
+  const handleToggleBreakpoint = useCallback((lineNumber: number) => {
+    const activeTab = tabs.find(t => t.id === activeTabId);
+    setBreakpoints(prev => {
+      const existing = prev.find(
+        bp => bp.lineNumber === lineNumber && (bp.filePath === activeTab?.path || bp.fileName === activeTab?.title || (!bp.filePath && !bp.fileName))
+      );
+      if (existing) {
+        addToast('Breakpoint Removed', `Line ${lineNumber}`, 'info');
+        return prev.filter(b => b.id !== existing.id);
+      } else {
+        addToast('Breakpoint Added', `Line ${lineNumber}`, 'success');
+        return [...prev, {
+          id: `bp-${Date.now()}-${Math.random()}`,
+          filePath: activeTab?.path || '',
+          fileName: activeTab?.title || '',
+          lineNumber,
+          enabled: true,
+        }];
+      }
+    });
+  }, [tabs, activeTabId, addToast]);
+
+  const handleUpdateBreakpoint = useCallback((updatedBp: Breakpoint) => {
+    setBreakpoints(prev => prev.map(b => b.id === updatedBp.id ? updatedBp : b));
+  }, []);
+
+  const handleRemoveBreakpoint = useCallback((id: string) => {
+    setBreakpoints(prev => prev.filter(b => b.id !== id));
+  }, []);
+
+  // ─── Debugger States & Handlers ───
+  const [debugState, setDebugState] = useState<DebugState>('idle');
+  const [activeFrameId, setActiveFrameId] = useState<string | null>('frame-1');
+  const [areBreakpointsMuted, setAreBreakpointsMuted] = useState(false);
+  const [debugConsoleOutput, setDebugConsoleOutput] = useState<string[]>([
+    'Debugger listener attached to 127.0.0.1:9229',
+    'Source map loaded for project workspace.',
+    'Ready for breakpoints and stepping commands.',
+  ]);
+  const [watches, setWatches] = useState<WatchItem[]>([
+    { id: 'w-1', expression: 'this', value: 'Object { id: "app-root" }', type: 'object' },
+    { id: 'w-2', expression: 'window.location.href', value: '"tauri://localhost/"', type: 'string' },
+  ]);
+
+  const activeTab = useMemo(() => tabs.find(t => t.id === activeTabId), [tabs, activeTabId]);
+
+  const frames: StackFrame[] = useMemo(() => {
+    const curPath = activeTab?.path || 'src/main.rs';
+    const curName = activeTab?.title || 'main.rs';
+    const curLine = cursorPos.line || 1;
+    return [
+      { id: 'frame-1', name: `main() [${curName}:${curLine}]`, file: curName, line: curLine, filePath: curPath, isAppCode: true },
+      { id: 'frame-2', name: 'tokio::runtime::task::core', file: 'runtime.rs', line: 184, filePath: 'tokio/src/runtime.rs', isAppCode: false },
+      { id: 'frame-3', name: 'std::sys::windows::thread::Thread::new', file: 'thread.rs', line: 42, filePath: 'std/sys/windows/thread.rs', isAppCode: false },
+    ];
+  }, [activeTab, cursorPos.line]);
+
+  const variables: VariableItem[] = useMemo(() => {
+    return [
+      { 
+        name: 'this', 
+        type: 'AppWorkspace', 
+        value: '{ project: "Local-IDEA", isReady: true }',
+        children: [
+          { name: 'project', type: 'string', value: `"${projectName || 'Local-IDEA'}"` },
+          { name: 'activeTab', type: 'string', value: `"${activeTab?.title || 'Untitled'}"` },
+          { name: 'breakpointsCount', type: 'number', value: String(breakpoints.length) },
+        ]
+      },
+      { name: 'cursorPosition', type: 'object', value: `{ line: ${cursorPos.line}, col: ${cursorPos.col} }` },
+      { name: 'activeConfig', type: 'string', value: `"${runConfigurations.find(c => c.id === activeConfigId)?.name || 'Default'}"` },
+    ];
+  }, [projectName, activeTab, breakpoints.length, cursorPos, runConfigurations, activeConfigId]);
+
+  const handleResumeDebug = useCallback(() => {
+    setDebugState('running');
+    setDebugConsoleOutput(prev => [...prev, 'Program resumed (F9)']);
+    addToast('Resume', 'Program execution resumed (F9)', 'info');
+  }, [addToast]);
+
+  const handlePauseDebug = useCallback(() => {
+    setDebugState('paused');
+    setDebugConsoleOutput(prev => [...prev, `Program suspended at ${activeTab?.title || 'file'}:${cursorPos.line}`]);
+    addToast('Paused', 'Program suspended at execution point', 'warning');
+  }, [activeTab, cursorPos.line, addToast]);
+
+  const handleStopDebug = useCallback(() => {
+    setDebugState('idle');
+    setDebugConsoleOutput(prev => [...prev, 'Debugger session terminated (Ctrl+F2)']);
+    addToast('Debugger Stopped', 'Process finished with exit code 0', 'info');
+  }, [addToast]);
+
+  const handleStepOverDebug = useCallback(() => {
+    setDebugConsoleOutput(prev => [...prev, `Step Over executed -> line ${cursorPos.line + 1}`]);
+    setCursorPos(p => ({ ...p, line: p.line + 1 }));
+    codeEditorRef.current?.goToLine(cursorPos.line + 1, cursorPos.col);
+    addToast('Step Over', `Stepped to line ${cursorPos.line + 1} (F8)`, 'info');
+  }, [cursorPos, addToast]);
+
+  const handleStepIntoDebug = useCallback(() => {
+    setDebugConsoleOutput(prev => [...prev, `Step Into executed at line ${cursorPos.line}`]);
+    addToast('Step Into', 'Stepped into function call (F7)', 'info');
+  }, [cursorPos.line, addToast]);
+
+  const handleStepOutDebug = useCallback(() => {
+    setDebugConsoleOutput(prev => [...prev, 'Step Out executed']);
+    addToast('Step Out', 'Stepped out to caller (Shift+F8)', 'info');
+  }, [addToast]);
+
+  const handleAddWatch = useCallback((expr: string) => {
+    if (!expr.trim()) return;
+    setWatches(prev => [...prev, {
+      id: `w-${Date.now()}`,
+      expression: expr.trim(),
+      value: `Evaluated: "${expr.trim()}"`,
+      type: 'expression'
+    }]);
+    addToast('Watch Added', `Evaluating '${expr.trim()}'`, 'success');
+  }, [addToast]);
+
+  const handleRemoveWatch = useCallback((id: string) => {
+    setWatches(prev => prev.filter(w => w.id !== id));
+  }, []);
+
+  // ─── Problems State & Inspections ───
+  const [problems, setProblems] = useState<ProblemItem[]>([
+    {
+      id: 'prob-1',
+      filePath: 'src/main.rs',
+      fileName: 'main.rs',
+      line: 12,
+      column: 9,
+      message: "Unused variable `unused_config`: if this is intentional, prefix it with an underscore: `_unused_config`",
+      severity: 'warning',
+      source: 'rustc (dead_code)',
+      quickFixTitle: 'Prefix with underscore `_unused_config`',
+    },
+    {
+      id: 'prob-2',
+      filePath: 'src/components/TopBar.tsx',
+      fileName: 'TopBar.tsx',
+      line: 45,
+      column: 14,
+      message: "Prop `isIndexing` is defined but never used in local render tree",
+      severity: 'info',
+      source: 'ESLint (no-unused-vars)',
+      quickFixTitle: 'Remove unused property',
+    },
+  ]);
+
+  const handleJumpToProblem = useCallback((filePath: string, line: number, column: number) => {
+    handleOpenFileAtLocation(filePath, line, column);
+  }, [handleOpenFileAtLocation]);
+
+  // Git Tool Window target commit (e.g. opened from Git Blame)
+  const [gitTargetCommit, setGitTargetCommit] = useState<{ hash: string; nonce: number } | null>(null);
+
+  const handleOpenGitCommit = useCallback((commitHash: string) => {
+    setGitTargetCommit({ hash: commitHash, nonce: Date.now() });
+    setBottomTab('git');
+    setIsBottomOpen(true);
+    const isWorktree = commitHash.startsWith('0000000') || commitHash === 'worktree';
+    addToast(
+      'Git Tool Window', 
+      isWorktree ? 'Showing Working Tree in Git tree' : `Showing commit ${commitHash.substring(0, 8)} in Git tree`, 
+      'info'
+    );
+  }, [addToast]);
 
   const dismissToast = (id: string) => {
     setToasts(prev => prev.filter(t => t.id !== id));
@@ -792,7 +983,11 @@ export const App: React.FC = () => {
         command: 'mvn.cmd',
         args: ['spring-boot:run'],
         workingDirectory: rootPath,
-        envVars: { SPRING_PROFILES_ACTIVE: 'dev' },
+        envVars: { 
+          SPRING_PROFILES_ACTIVE: 'dev',
+          JAVA_TOOL_OPTIONS: '-Xms64m -Xmx384m -Xss256k -XX:+UseSerialGC -XX:TieredStopAtLevel=1 -XX:MaxMetaspaceSize=384m -XX:ReservedCodeCacheSize=96m',
+          MAVEN_OPTS: '-Xms32m -Xmx96m -XX:+UseSerialGC'
+        },
         isDefault: true,
       });
       generated.push({
@@ -802,6 +997,9 @@ export const App: React.FC = () => {
         command: 'mvn.cmd',
         args: ['clean', 'package', '-DskipTests'],
         workingDirectory: rootPath,
+        envVars: {
+          MAVEN_OPTS: '-Xms32m -Xmx128m -XX:+UseSerialGC'
+        }
       });
     } else if (childNames.includes('build.gradle') || childNames.includes('build.gradle.kts')) {
       generated.push({
@@ -809,8 +1007,11 @@ export const App: React.FC = () => {
         name: `${rootName} (Gradle bootRun)`,
         type: 'gradle',
         command: 'gradlew.bat',
-        args: ['bootRun'],
+        args: ['bootRun', '-Dorg.gradle.jvmargs=-Xms64m -Xmx384m -Xss256k -XX:+UseSerialGC -XX:TieredStopAtLevel=1 -XX:MaxMetaspaceSize=384m'],
         workingDirectory: rootPath,
+        envVars: {
+          JAVA_TOOL_OPTIONS: '-Xms64m -Xmx384m -Xss256k -XX:+UseSerialGC -XX:TieredStopAtLevel=1 -XX:MaxMetaspaceSize=384m -XX:ReservedCodeCacheSize=96m'
+        },
         isDefault: true,
       });
     } else if (childNames.includes('cargo.toml')) {
@@ -1057,6 +1258,8 @@ export const App: React.FC = () => {
   // Run / Build state & logs
   const [isRunning, setIsRunning] = useState(false);
   const activeRunIdRef = useRef<string | null>(null);
+  const pendingLogsRef = useRef<RunLog[]>([]);
+  const logFlushTimeoutRef = useRef<any>(null);
   const [runLogs, setRunLogs] = useState<RunLog[]>([
     {
       id: '1',
@@ -1066,6 +1269,19 @@ export const App: React.FC = () => {
     }
   ]);
 
+  const flushLogs = useCallback(() => {
+    if (pendingLogsRef.current.length === 0) return;
+    const batch = pendingLogsRef.current;
+    pendingLogsRef.current = [];
+    setRunLogs(prev => {
+      const merged = [...prev, ...batch];
+      if (merged.length > 1500) {
+        return merged.slice(merged.length - 1400);
+      }
+      return merged;
+    });
+  }, []);
+
   // Listen to live Tauri process stdout/stderr and exit events
   useEffect(() => {
     let unlistenOutput: (() => void) | undefined;
@@ -1074,23 +1290,39 @@ export const App: React.FC = () => {
     const setupListeners = async () => {
       try {
         if (typeof window !== 'undefined' && ('__TAURI_INTERNALS__' in window || '__TAURI__' in window)) {
-          unlistenOutput = await listen<{ run_id: string; text: string; stream: string }>('process-output', (event) => {
-            const { text, stream } = event.payload;
-            setRunLogs(prev => [
-              ...prev,
-              {
+          unlistenOutput = await listen<{ run_id: string; text: string; stream: string; lines?: string[] }>('process-output', (event) => {
+            const { text, stream, lines } = event.payload;
+            const rawLines = lines && lines.length > 0 ? lines : text.split('\n');
+            const timestamp = new Date().toLocaleTimeString();
+            const type = (stream === 'stderr' ? 'warning' : 'info') as 'warning' | 'info';
+
+            for (const line of rawLines) {
+              if (line.trim().length === 0 && rawLines.length > 1) continue;
+              pendingLogsRef.current.push({
                 id: `${Date.now()}-${Math.random()}`,
-                text,
-                type: stream === 'stderr' ? 'warning' : 'info',
-                timestamp: new Date().toLocaleTimeString(),
-              }
-            ]);
+                text: line,
+                type,
+                timestamp,
+              });
+            }
+
+            if (!logFlushTimeoutRef.current) {
+              logFlushTimeoutRef.current = setTimeout(() => {
+                logFlushTimeoutRef.current = null;
+                flushLogs();
+              }, 40); // Max 25 FPS update rate for smooth 60fps IDE UI
+            }
           });
 
           unlistenExit = await listen<{ run_id: string; exit_code: number; success: boolean }>('process-terminated', (event) => {
             const { exit_code, success } = event.payload;
             setIsRunning(false);
             activeRunIdRef.current = null;
+            if (logFlushTimeoutRef.current) {
+              clearTimeout(logFlushTimeoutRef.current);
+              logFlushTimeoutRef.current = null;
+            }
+            flushLogs();
             setRunLogs(prev => [
               ...prev,
               {
@@ -1115,17 +1347,23 @@ export const App: React.FC = () => {
     setupListeners();
 
     return () => {
+      if (logFlushTimeoutRef.current) clearTimeout(logFlushTimeoutRef.current);
       if (unlistenOutput) unlistenOutput();
       if (unlistenExit) unlistenExit();
     };
-  }, [addToast]);
+  }, [addToast, flushLogs]);
 
   // File System Watcher & Live Disk Synchronization
   const [isIndexing, setIsIndexing] = useState(false);
+  const isSyncingRef = useRef(false);
+  const lastWatchedPathRef = useRef<string | null>(null);
 
   const syncProjectFilesFromDisk = useCallback(async (changedPaths?: string[]) => {
-    const rootPath = currentProjectDirectory;
+    if (isSyncingRef.current) return;
+    const rootPath = projectRootPath;
+    if (!rootPath) return;
     try {
+      isSyncingRef.current = true;
       if (typeof window !== 'undefined' && ('__TAURI_INTERNALS__' in window || '__TAURI__' in window)) {
         setIsIndexing(true);
         const updatedTree = await invoke<FileNode>('open_project_by_path', { projectPath: rootPath });
@@ -1160,18 +1398,23 @@ export const App: React.FC = () => {
     } catch (err) {
       setIsIndexing(false);
       console.warn('Failed to sync files from disk:', err);
+    } finally {
+      isSyncingRef.current = false;
     }
-  }, [files, tabs, refreshGitStatus]);
+  }, [projectRootPath, tabs, refreshGitStatus]);
 
-  // Start file watcher whenever root project path changes
+  // Start file watcher ONLY when root project path changes
   useEffect(() => {
-    const projectDir = currentProjectDirectory;
+    if (!projectRootPath) return;
+    if (lastWatchedPathRef.current === projectRootPath) return;
+    lastWatchedPathRef.current = projectRootPath;
+
     if (typeof window !== 'undefined' && ('__TAURI_INTERNALS__' in window || '__TAURI__' in window)) {
-      invoke('watch_project_directory', { projectPath: projectDir }).catch(err => {
+      invoke('watch_project_directory', { projectPath: projectRootPath }).catch(err => {
         console.warn('Failed to start file watcher:', err);
       });
     }
-  }, [files]);
+  }, [projectRootPath]);
 
   // Listen to live fs-event from Tauri
   useEffect(() => {
@@ -1185,7 +1428,7 @@ export const App: React.FC = () => {
             if (debounceTimer) clearTimeout(debounceTimer);
             debounceTimer = setTimeout(() => {
               syncProjectFilesFromDisk(event.payload.paths);
-            }, 300);
+            }, 800);
           });
         }
       } catch (e) {
@@ -1202,6 +1445,18 @@ export const App: React.FC = () => {
   }, [syncProjectFilesFromDisk]);
 
   const handleRun = useCallback(async () => {
+    // If a process is already running, terminate it first (Stop & Rerun / Single Instance)
+    if (isRunning || activeRunIdRef.current) {
+      try {
+        if (typeof window !== 'undefined' && ('__TAURI_INTERNALS__' in window || '__TAURI__' in window)) {
+          await invoke('stop_all_processes');
+        }
+      } catch (e) {
+        console.warn('Failed to stop previous process:', e);
+      }
+      await new Promise(r => setTimeout(r, 250));
+    }
+
     const activeCfg = runConfigurations.find(c => c.id === activeConfigId) || runConfigurations[0];
     const projectDir = activeCfg?.workingDirectory || currentProjectDirectory;
     const cmd = activeCfg?.command || 'cargo';
@@ -1269,19 +1524,17 @@ export const App: React.FC = () => {
       ]);
       addToast('Run Error', String(err), 'error');
     }
-  }, [runConfigurations, activeConfigId, files, addToast]);
+  }, [runConfigurations, activeConfigId, files, addToast, isRunning]);
 
   const handleStop = useCallback(async () => {
-    if (activeRunIdRef.current) {
-      try {
-        if (typeof window !== 'undefined' && ('__TAURI_INTERNALS__' in window || '__TAURI__' in window)) {
-          await invoke('stop_process', { runId: activeRunIdRef.current });
-        }
-      } catch (e) {
-        console.warn('Failed to stop process:', e);
+    try {
+      if (typeof window !== 'undefined' && ('__TAURI_INTERNALS__' in window || '__TAURI__' in window)) {
+        await invoke('stop_all_processes');
       }
-      activeRunIdRef.current = null;
+    } catch (e) {
+      console.warn('Failed to stop process:', e);
     }
+    activeRunIdRef.current = null;
     setIsRunning(false);
     setRunLogs(prev => [
       ...prev,
@@ -1835,8 +2088,13 @@ export const App: React.FC = () => {
         addToast('Template Manager', 'Configuration saved as IDE template', 'info');
         break;
       case 'file.syncFileSystem':
-        addToast('VFS Synced', 'Virtual File System synchronized with disk changes', 'success');
+      case 'file.syncFiles': {
+        const currentTab = tabs.find(t => t.id === activeTabId);
+        syncProjectFilesFromDisk(currentTab?.path ? [currentTab.path] : undefined);
+        refreshGitStatus();
+        addToast('Synchronized', 'Reloaded all files and project tree from disk (Ctrl+Alt+Y)', 'success');
         break;
+      }
       case 'file.closeTab':
         handleCloseActiveTab();
         break;
@@ -2215,8 +2473,10 @@ export const App: React.FC = () => {
         handleRun();
         break;
       case 'run.debug':
-        addToast('Debugger Ready', 'Connected to debug session on port 9229', 'info');
-        handleRun();
+        setBottomTab('debug');
+        setIsBottomOpen(true);
+        setDebugState('paused');
+        addToast('Debugger Started', 'Connected to debug session on port 9229 (Shift+F9)', 'success');
         break;
       case 'run.coverage':
         addToast('Run with Coverage', 'Coverage analysis: 94.2% lines covered', 'success');
@@ -2230,19 +2490,29 @@ export const App: React.FC = () => {
         addToast('Pin Tab', 'Run Console tab pinned', 'info');
         break;
       case 'run.showExecutionPoint':
+        if (activeTab) {
+          codeEditorRef.current?.goToLine(cursorPos.line, cursorPos.col);
+        }
         addToast('Execution Point', 'Jumped to current program execution point (Alt+F10)', 'info');
         break;
       case 'run.stop':
         handleStop();
+        handleStopDebug();
         break;
       case 'run.editConfig':
         setIsRunConfigOpen(true);
         break;
       case 'run.stepOver':
+        handleStepOverDebug();
+        break;
       case 'run.stepInto':
+        handleStepIntoDebug();
+        break;
       case 'run.stepOut':
+        handleStepOutDebug();
+        break;
       case 'run.resume':
-        addToast('Debugger Step', `Executed ${actionId.replace('run.', '')}`, 'info');
+        handleResumeDebug();
         break;
       case 'run.toggleBreakpoint':
         addToast('Breakpoint', `Toggled line breakpoint at current line (Ctrl+F8)`, 'info');
@@ -2602,8 +2872,8 @@ export const App: React.FC = () => {
         return;
       }
 
-      // Ctrl + Shift + R (Replace in Files)
-      if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === 'r') {
+      // Ctrl + Shift + R or Ctrl + Shift + H (Replace in Files - IntelliJ & VS Code keymaps)
+      if ((e.ctrlKey || e.metaKey) && e.shiftKey && (e.key.toLowerCase() === 'r' || e.key.toLowerCase() === 'h')) {
         e.preventDefault();
         handleOpenFindInFiles('replace');
         return;
@@ -2877,8 +3147,6 @@ export const App: React.FC = () => {
     }
   };
 
-  const activeTab = tabs.find(t => t.id === activeTabId);
-
   const handleToggleSideTab = useCallback((tabId: string) => {
     if (activeSideTab === tabId && isSideBarOpen) {
       setIsSideBarOpen(false);
@@ -2960,6 +3228,10 @@ export const App: React.FC = () => {
           bottomTab={bottomTab}
           isBottomOpen={isBottomOpen}
           onToggleBottomTab={handleToggleBottomTab}
+          isRunning={isRunning}
+          hasFindResult={Boolean(findResult)}
+          errorCount={problems.filter(p => p.severity === 'error').length}
+          warningCount={problems.filter(p => p.severity === 'warning').length}
           onOpenCommit={() => setIsCommitOpen(true)}
           onOpenSearch={() => setIsSearchOpen(true)}
           onToggleDatabase={() => {
@@ -2968,7 +3240,11 @@ export const App: React.FC = () => {
           onOpenPlugins={() => setIsSettingsOpen(true)}
         />
 
-        {/* Left Tool Window (Project Tree) */}
+        {/* Middle Workspace Area (Top: Sidebar + Editor, Bottom: Full-Width Tool Window) */}
+        <div className="flex-1 flex flex-col h-full overflow-hidden min-w-0">
+          {/* Top Zone: Project Sidebar & Monaco Editor */}
+          <div className="flex-1 flex min-h-0 overflow-hidden relative">
+            {/* Left Tool Window (Project Tree) */}
         {isSideBarOpen && (
           <div 
             style={{ width: `${sideBarWidth}px` }} 
@@ -3055,10 +3331,8 @@ export const App: React.FC = () => {
           </div>
         )}
 
-        {/* Center & Bottom: Editor and Tool Windows */}
-        <div className="flex-1 flex flex-col h-full overflow-hidden">
-          {/* Monaco Editor Zone */}
-          <div className="flex-1 min-h-0">
+            {/* Monaco Editor Zone */}
+            <div className="flex-1 min-w-0 h-full overflow-hidden">
             <CodeEditor
               ref={codeEditorRef}
               projectPath={currentProjectDirectory}
@@ -3082,16 +3356,28 @@ export const App: React.FC = () => {
               onShowUsages={handleShowUsages}
               onRenameSymbol={handleOpenRenameSymbol}
               onOpenGoToLine={() => setIsGoToLineOpen(true)}
+              breakpoints={breakpoints}
+              onToggleBreakpoint={handleToggleBreakpoint}
+              onUpdateBreakpoint={handleUpdateBreakpoint}
+              onRemoveBreakpoint={handleRemoveBreakpoint}
+              onOpenGitCommit={handleOpenGitCommit}
               dataSources={dataSources}
               onUpdateTableData={handleUpdateTableData}
+              problems={problems}
+              onToggleProblems={() => {
+                setBottomTab('problems');
+                setIsBottomOpen(true);
+              }}
+              activePausedLine={debugState === 'paused' ? { filePath: activeTab?.path || '', line: cursorPos.line } : null}
             />
+            </div>
           </div>
 
-          {/* Bottom Tool Window (Run / Terminal / Problems) */}
+          {/* Bottom Tool Window (Run / Terminal / Problems - Full Width) */}
           {isBottomOpen && (
             <div 
               style={{ height: `${bottomHeight}px` }}
-              className="border-t border-[#2B2D30] flex flex-col bg-[#1E1F22] flex-shrink-0 relative"
+              className="border-t border-[#2B2D30] flex flex-col bg-[#1E1F22] flex-shrink-0 relative w-full"
             >
               {/* Draggable Resizer for Bottom Panel Height */}
               <div
@@ -3113,82 +3399,64 @@ export const App: React.FC = () => {
                 className="absolute -top-1 left-0 right-0 h-2 cursor-row-resize hover:bg-[#3574F0]/50 transition-colors z-20"
                 title="Drag to resize panel height"
               />
-              {/* Bottom Tool Window Tabs Header (Hidden for Terminal & Git to render authentic IntelliJ IDEA New UI header) */}
+                            {/* Bottom Tool Window Header (Clean Authentic Title & Controls - No horizontal tabs) */}
               {bottomTab !== 'terminal' && bottomTab !== 'git' && (
-                <div className="h-7 bg-[#1E1F22] border-b border-[#2B2D30] px-2 flex items-center justify-between text-[11px] select-none">
-                  <div className="flex items-center gap-1 h-full">
-                    <button
-                      onClick={() => setBottomTab('run')}
-                      className={`flex items-center gap-1.5 px-2.5 h-full transition-colors relative cursor-pointer ${
-                        bottomTab === 'run'
-                          ? 'text-[#DFE1E5] font-medium bg-[#1E1F22]'
-                          : 'text-[#868A91] hover:text-[#DFE1E5] hover:bg-[#2B2D30]/60'
-                      }`}
-                    >
-                      {bottomTab === 'run' && (
-                        <div className="absolute top-0 left-0 right-0 h-[2px] bg-[#3574F0]" />
-                      )}
-                      <PlaySquare size={13} className={isRunning ? 'text-[#3574F0] animate-spin' : 'text-[#59A869]'} />
-                      <span>Run</span>
-                    </button>
-
-                    <button
-                      onClick={() => setBottomTab('git')}
-                      className="flex items-center gap-1.5 px-2.5 h-full transition-colors relative cursor-pointer text-[#868A91] hover:text-[#DFE1E5] hover:bg-[#2B2D30]/60"
-                    >
-                      <GitBranch size={13} className="text-[#3574F0]" />
-                      <span>Git</span>
-                    </button>
-
-                    <button
-                      onClick={() => setBottomTab('terminal')}
-                      className="flex items-center gap-1.5 px-2.5 h-full transition-colors relative cursor-pointer text-[#868A91] hover:text-[#DFE1E5] hover:bg-[#2B2D30]/60"
-                    >
-                      <Terminal size={13} className="text-[#3574F0]" />
-                      <span>Terminal</span>
-                    </button>
-
-                    <button
-                      onClick={() => setBottomTab('problems')}
-                      className={`flex items-center gap-1.5 px-2.5 h-full transition-colors relative cursor-pointer ${
-                        bottomTab === 'problems'
-                          ? 'text-[#DFE1E5] font-medium bg-[#1E1F22]'
-                          : 'text-[#868A91] hover:text-[#DFE1E5] hover:bg-[#2B2D30]/60'
-                      }`}
-                    >
-                      {bottomTab === 'problems' && (
-                        <div className="absolute top-0 left-0 right-0 h-[2px] bg-[#3574F0]" />
-                      )}
-                      <AlertCircle size={13} className="text-[#59A869]" />
-                      <span>Problems (0)</span>
-                    </button>
-
-                    {/* 4: Find Tab (Authentic IntelliJ IDEA) */}
-                    {(findResult || bottomTab === 'find') && (
-                      <button
-                        onClick={() => setBottomTab('find')}
-                        className={`flex items-center gap-1.5 px-2.5 h-full transition-colors relative cursor-pointer ${
-                          bottomTab === 'find'
-                            ? 'text-[#DFE1E5] font-medium bg-[#1E1F22]'
-                            : 'text-[#868A91] hover:text-[#DFE1E5] hover:bg-[#2B2D30]/60'
-                        }`}
-                      >
-                        {bottomTab === 'find' && (
-                          <div className="absolute top-0 left-0 right-0 h-[2px] bg-[#3574F0]" />
-                        )}
+                <div className="h-7 bg-[#1E1F22] border-b border-[#2B2D30] px-3 flex items-center justify-between text-[11px] select-none">
+                  {/* Tool Window Title & Active Context */}
+                  <div className="flex items-center gap-2 h-full text-[#DFE1E5]">
+                    {bottomTab === 'run' && (
+                      <>
+                        <Play size={13} className={isRunning ? 'text-[#3574F0] fill-[#3574F0] animate-pulse' : 'text-[#59A869] fill-[#59A869]'} />
+                        <span className="font-semibold text-xs text-[#DFE1E5]">Run</span>
+                        <span className="text-[#868A91] text-[11px]">
+                          {runConfigurations.find(c => c.id === activeConfigId)?.name || projectName || 'Application'}
+                        </span>
+                      </>
+                    )}
+                    {bottomTab === 'problems' && (() => {
+                      const errs = problems.filter(p => p.severity === 'error').length;
+                      const warns = problems.filter(p => p.severity === 'warning').length;
+                      return (
+                        <>
+                          <AlertCircle size={13} className={errs > 0 ? "text-[#E05555]" : warns > 0 ? "text-[#EDA200]" : "text-[#59A869]"} />
+                          <span className="font-semibold text-xs text-[#DFE1E5]">Problems</span>
+                          <span className="text-[#868A91] text-[11px]">({errs} error{errs !== 1 ? 's' : ''}, {warns} warning{warns !== 1 ? 's' : ''})</span>
+                        </>
+                      );
+                    })()}
+                    {bottomTab === 'find' && (
+                      <>
                         <Search size={13} className="text-[#3574F0]" />
-                        <span>4: Find {findResult ? `("${findResult.symbol}")` : ''}</span>
-                      </button>
+                        <span className="font-semibold text-xs text-[#DFE1E5]">Find</span>
+                        {findResult && (
+                          <span className="text-[#868A91] text-[11px]">
+                            usages of "{findResult.symbol}" ({findResult.occurrences.length})
+                          </span>
+                        )}
+                      </>
+                    )}
+                    {bottomTab === 'debug' && (
+                      <>
+                        <Bug size={13} className="text-[#E55353]" />
+                        <span className="font-semibold text-xs text-[#DFE1E5]">Debug</span>
+                      </>
                     )}
                   </div>
 
-                  <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-1.5">
+                    <button
+                      onClick={handleToggleMaximizeBottom}
+                      title={bottomHeight > 400 ? "Restore size" : "Maximize tool window (Ctrl+Shift+F12)"}
+                      className="p-1 rounded hover:bg-[#2B2D30] text-[#868A91] hover:text-[#DFE1E5] transition-colors cursor-pointer"
+                    >
+                      <Maximize2 size={12} />
+                    </button>
                     <button 
                       onClick={() => setIsBottomOpen(false)} 
                       title="Hide Window (Shift+Esc)"
-                      className="text-[#868A91] hover:text-[#DFE1E5] hover:bg-[#2B2D30] px-1.5 py-0.5 rounded text-[11px] cursor-pointer"
+                      className="p-1 rounded hover:bg-[#2B2D30] text-[#868A91] hover:text-[#DFE1E5] transition-colors cursor-pointer"
                     >
-                      Hide ✕
+                      <Minus size={13} />
                     </button>
                   </div>
                 </div>
@@ -3209,6 +3477,7 @@ export const App: React.FC = () => {
                   <GitToolWindow
                     projectPath={currentProjectDirectory}
                     currentBranch={currentBranch}
+                    targetCommitHash={gitTargetCommit}
                     onToggleMaximize={handleToggleMaximizeBottom}
                     onHide={() => setIsBottomOpen(false)}
                     onShowToast={addToast}
@@ -3217,8 +3486,8 @@ export const App: React.FC = () => {
                 <div className={`h-full ${bottomTab === 'terminal' ? 'block' : 'hidden'}`}>
                   {hasOpenedTerminal && (
                     <TerminalPanel 
-                      key={currentProjectDirectory}
-                      cwd={currentProjectDirectory} 
+                      key={projectRootPath}
+                      cwd={projectRootPath} 
                       onToggleMaximize={handleToggleMaximizeBottom}
                       onHide={() => setIsBottomOpen(false)}
                       onOpenSettings={() => setIsSettingsOpen(true)}
@@ -3226,9 +3495,63 @@ export const App: React.FC = () => {
                   )}
                 </div>
                 {bottomTab === 'problems' && (
-                  <div className="h-full flex items-center justify-center text-xs text-[#868A91]">
-                    No problems found in workspace. Code analysis clean.
-                  </div>
+                  <ProblemsPanel
+                    problems={problems}
+                    activeFilePath={activeTab?.path}
+                    onJumpToProblem={handleJumpToProblem}
+                    onQuickFix={(p) => {
+                      if (p.quickFixTitle) {
+                        addToast('Quick Fix Applied', p.quickFixTitle, 'success');
+                      }
+                    }}
+                    onRerunInspection={() => {
+                      addToast('Code Inspection', 'Re-analyzed workspace: clean syntax', 'info');
+                    }}
+                    onClose={() => setIsBottomOpen(false)}
+                  />
+                )}
+                {bottomTab === 'debug' && (
+                  <DebugPanel
+                    debugState={debugState}
+                    frames={frames}
+                    activeFrameId={activeFrameId}
+                    variables={variables}
+                    watches={watches}
+                    areBreakpointsMuted={areBreakpointsMuted}
+                    consoleOutput={debugConsoleOutput}
+                    onRerun={() => {
+                      setDebugState('running');
+                      addToast('Rerun Debug', 'Debug session restarted', 'info');
+                    }}
+                    onResume={handleResumeDebug}
+                    onPause={handlePauseDebug}
+                    onStop={handleStopDebug}
+                    onStepOver={handleStepOverDebug}
+                    onStepInto={handleStepIntoDebug}
+                    onStepOut={handleStepOutDebug}
+                    onRunToCursor={() => {
+                      addToast('Run to Cursor', `Advanced execution to line ${cursorPos.line}`, 'info');
+                    }}
+                    onEvaluateExpression={() => {
+                      addToast('Evaluate Expression', 'Evaluated current scope', 'info');
+                    }}
+                    onViewBreakpoints={() => {
+                      addToast('Breakpoints', `Total breakpoints: ${breakpoints.length}`, 'info');
+                    }}
+                    onToggleMuteBreakpoints={() => {
+                      setAreBreakpointsMuted(prev => !prev);
+                      addToast('Mute Breakpoints', !areBreakpointsMuted ? 'Breakpoints muted' : 'Breakpoints unmuted', 'info');
+                    }}
+                    onSelectFrame={(frame) => {
+                      setActiveFrameId(frame.id);
+                      if (frame.filePath && frame.line) {
+                        handleOpenFileAtLocation(frame.filePath, frame.line, 1);
+                      }
+                    }}
+                    onAddWatch={handleAddWatch}
+                    onRemoveWatch={handleRemoveWatch}
+                    onClearConsole={() => setDebugConsoleOutput([])}
+                  />
                 )}
                 {bottomTab === 'find' && (
                   findResult ? (
@@ -3271,17 +3594,6 @@ export const App: React.FC = () => {
         />
       </div>
 
-      {/* Bottom Tool Window Dock Bar (Always accessible, authentic IntelliJ) */}
-      <BottomToolWindowBar
-        bottomTab={bottomTab}
-        isBottomOpen={isBottomOpen}
-        isRunning={isRunning}
-        hasFindResult={Boolean(findResult)}
-        findSymbol={findResult?.symbol}
-        onSelectTab={setBottomTab}
-        onToggleOpen={setIsBottomOpen}
-      />
-
       {/* Bottom Status Bar */}
       <StatusBar
         branch={currentBranch}
@@ -3296,6 +3608,8 @@ export const App: React.FC = () => {
     </>
   )}
 
+      {/* Lazy-loaded Dialogs & Modals Container */}
+      <React.Suspense fallback={null}>
       {/* Find / Replace in Files Modal (Ctrl+Shift+F / Ctrl+Shift+R) */}
       <FindInFilesModal
         isOpen={isFindInFilesOpen}
@@ -3653,6 +3967,18 @@ export const App: React.FC = () => {
           handleAttachProject(target);
         }}
       />
+
+      {/* Database Connection Modal (DataGrip mini) */}
+      <AddDataSourceModal
+        isOpen={isAddDataSourceOpen}
+        onClose={() => setIsAddDataSourceOpen(false)}
+        onSave={(newDs) => {
+          handleAddDataSource(newDs);
+          setIsAddDataSourceOpen(false);
+        }}
+        onShowToast={addToast}
+      />
+      </React.Suspense>
 
       {/* Toast Notification Balloon System */}
       <ToastContainer

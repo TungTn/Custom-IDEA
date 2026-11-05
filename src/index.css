@@ -5,8 +5,124 @@
 @tailwind components;
 @tailwind utilities;
 
+/* Local Bundled JetBrains Mono Font */
+@font-face {
+  font-family: 'JetBrains Mono';
+  src: url('/fonts/JetBrainsMono-Regular.ttf') format('truetype');
+  font-weight: 400;
+  font-style: normal;
+}
+@font-face {
+  font-family: 'JetBrains Mono';
+  src: url('/fonts/JetBrainsMono-Bold.ttf') format('truetype');
+  font-weight: 700;
+  font-style: normal;
+}
+@font-face {
+  font-family: 'JetBrains Mono';
+  src: url('/fonts/JetBrainsMono-Italic.ttf') format('truetype');
+  font-weight: 400;
+  font-style: italic;
+}
+@font-face {
+  font-family: 'JetBrains Mono';
+  src: url('/fonts/JetBrainsMono-Medium.ttf') format('truetype');
+  font-weight: 500;
+  font-style: normal;
+}
+
+/* Local Bundled Inter Font (JetBrains New UI Font) */
+@font-face {
+  font-family: 'Inter';
+  src: url('/fonts/Inter-Regular.woff2') format('woff2');
+  font-weight: 400;
+  font-style: normal;
+}
+@font-face {
+  font-family: 'Inter';
+  src: url('/fonts/Inter-Medium.woff2') format('woff2');
+  font-weight: 500;
+  font-style: normal;
+}
+@font-face {
+  font-family: 'Inter';
+  src: url('/fonts/Inter-SemiBold.woff2') format('woff2');
+  font-weight: 600;
+  font-style: normal;
+}
+
 :root {
   color-scheme: dark;
+  --bg-primary: #1E1F22;
+  --bg-secondary: #2B2D30;
+  --bg-tertiary: #26282B;
+  --bg-hover: #35373B;
+  --border-color: #393B40;
+  --text-primary: #DFE1E5;
+  --text-secondary: #868A91;
+  --accent-color: #3574F0;
+  --selection-bg: #214283;
+}
+
+body.theme-intellij-light {
+  color-scheme: light;
+  --bg-primary: #FFFFFF;
+  --bg-secondary: #F2F2F2;
+  --bg-tertiary: #EAEAEA;
+  --bg-hover: #E0E0E0;
+  --border-color: #D1D1D1;
+  --text-primary: #1F1F1F;
+  --text-secondary: #6C707E;
+  --accent-color: #3574F0;
+  --selection-bg: #B5D6FD;
+  background-color: #FFFFFF !important;
+  color: #1F1F1F !important;
+}
+
+body.theme-intellij-light .bg-\[\#1E1F22\],
+body.theme-intellij-light .bg-\[\#1e1f22\] {
+  background-color: var(--bg-primary) !important;
+}
+
+body.theme-intellij-light .bg-\[\#2B2D30\],
+body.theme-intellij-light .bg-\[\#2b2d30\] {
+  background-color: var(--bg-secondary) !important;
+}
+
+body.theme-intellij-light .bg-\[\#26282B\],
+body.theme-intellij-light .bg-\[\#26282b\] {
+  background-color: var(--bg-tertiary) !important;
+}
+
+body.theme-intellij-light .bg-\[\#212225\] {
+  background-color: #F8F9FA !important;
+}
+
+body.theme-intellij-light .border-\[\#393B40\],
+body.theme-intellij-light .border-\[\#2B2D30\],
+body.theme-intellij-light .border-\[\#1E1F22\],
+body.theme-intellij-light .border-\[\#393b40\],
+body.theme-intellij-light .border-\[\#2b2d30\],
+body.theme-intellij-light .border-\[\#1e1f22\] {
+  border-color: var(--border-color) !important;
+}
+
+body.theme-intellij-light .text-\[\#DFE1E5\],
+body.theme-intellij-light .text-\[\#dfe1e5\],
+body.theme-intellij-light .text-\[\#BBBBBB\],
+body.theme-intellij-light .text-\[\#bbbbbb\] {
+  color: var(--text-primary) !important;
+}
+
+body.theme-intellij-light .text-\[\#868A91\],
+body.theme-intellij-light .text-\[\#868a91\],
+body.theme-intellij-light .text-\[\#808080\] {
+  color: var(--text-secondary) !important;
+}
+
+body.theme-intellij-light .hover\:bg-\[\#35373B\]:hover,
+body.theme-intellij-light .hover\:bg-\[\#2B2D30\]:hover {
+  background-color: var(--bg-hover) !important;
 }
 
 body {
@@ -14,9 +130,18 @@ body {
   padding: 0;
   overflow: hidden;
   user-select: none;
-  background-color: #1E1F22;
-  color: #DFE1E5;
+  background-color: var(--bg-primary);
+  color: var(--text-primary);
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+}
+
+.cm-editor, .cm-content {
+  font-family: 'JetBrains Mono', Consolas, Monaco, monospace !important;
+  font-feature-settings: "calt" 1, "liga" 1;
+  -webkit-font-smoothing: antialiased !important;
+  -moz-osx-font-smoothing: grayscale !important;
+  text-rendering: optimizeLegibility !important;
+  line-height: 1.5 !important;
 }
 
 /* Custom Scrollbar styled for IntelliJ */
@@ -184,3 +309,49 @@ body.theme-darcula-classic {
   background-color: #2B2B2B !important;
   color: #A9B7C6 !important;
 }
+
+/* CodeMirror 6 IntelliJ IDEA Selection & Active Line Styles */
+.cm-editor.cm-focused > .cm-scroller > .cm-selectionLayer .cm-selectionBackground,
+.cm-editor.cm-focused .cm-selectionBackground,
+.cm-editor .cm-selectionBackground,
+.cm-selectionLayer .cm-selectionBackground {
+  background-color: var(--selection-bg, #214283) !important;
+}
+
+.cm-editor:not(.cm-focused) > .cm-scroller > .cm-selectionLayer .cm-selectionBackground,
+.cm-editor:not(.cm-focused) .cm-selectionBackground {
+  background-color: rgba(33, 66, 131, 0.6) !important;
+}
+
+.cm-content ::selection {
+  background-color: var(--selection-bg, #214283) !important;
+}
+
+/* Active line must be translucent so selectionLayer (z-index: -1) remains visible */
+.cm-editor .cm-activeLine {
+  background-color: rgba(255, 255, 255, 0.045) !important;
+}
+
+body.theme-intellij-light .cm-editor .cm-activeLine {
+  background-color: rgba(0, 80, 200, 0.04) !important;
+}
+
+body.theme-intellij-light .cm-editor.cm-focused > .cm-scroller > .cm-selectionLayer .cm-selectionBackground,
+body.theme-intellij-light .cm-editor.cm-focused .cm-selectionBackground,
+body.theme-intellij-light .cm-editor .cm-selectionBackground,
+body.theme-intellij-light .cm-content ::selection {
+  background-color: #B5D6FD !important;
+}
+
+/* Occurrences matching highlight */
+.cm-editor .cm-selectionMatch {
+  background-color: rgba(33, 66, 131, 0.4) !important;
+  outline: 1px solid rgba(88, 157, 246, 0.35) !important;
+  border-radius: 2px !important;
+}
+
+body.theme-intellij-light .cm-editor .cm-selectionMatch {
+  background-color: rgba(166, 210, 255, 0.6) !important;
+  outline: 1px solid #70ACFF !important;
+}
+

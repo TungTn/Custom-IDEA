@@ -23,6 +23,7 @@ export type MenuCategoryName =
   | 'Run' 
   | 'Tools' 
   | 'Git' 
+  | 'Window'
   | 'Help';
 
 export type MenuRegistry = Record<MenuCategoryName, MenuItem[]>;

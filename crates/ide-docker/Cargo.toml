@@ -1,0 +1,14 @@
+﻿[package]
+name = "ide-docker"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+tauri.workspace = true
+tokio.workspace = true
+log.workspace = true
+ts-rs.workspace = true

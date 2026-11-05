@@ -1,5 +1,11 @@
-import { editor } from 'monaco-editor';
 import { ThemeDefinition, IdeThemeId, SyntaxTokenColors } from '../types/theme';
+import { MARKETPLACE_THEMES } from './marketplaceThemes';
+import { EditorView } from '@codemirror/view';
+import { Extension } from '@codemirror/state';
+import { HighlightStyle, syntaxHighlighting } from '@codemirror/language';
+import { tags as t } from '@lezer/highlight';
+
+export { MARKETPLACE_THEMES };
 
 export const IDE_THEMES: ThemeDefinition[] = [
   {
@@ -23,15 +29,19 @@ export const IDE_THEMES: ThemeDefinition[] = [
       badgeBg: '#3574F022',
     },
     syntaxColors: {
-      keyword: '#CC7832',
-      string: '#6A8759',
-      number: '#6897BB',
-      function: '#FFC66D',
+      keyword: '#CF8E6D',
+      string: '#6AAB73',
+      number: '#2AACB8',
+      function: '#56A8F5',
       comment: '#7A7E85',
-      type: '#299999',
-      variable: '#9876AA',
-      operator: '#A9B7C6',
-      annotation: '#BBB529',
+      type: '#2AACB8',
+      variable: '#BCBEC4',
+      operator: '#BCBEC4',
+      annotation: '#B3AE60',
+      tagName: '#56A8F5',
+      attributeName: '#BCBEC4',
+      tagBracket: '#7A7E85',
+      vueDirective: '#CF8E6D',
     }
   },
   {
@@ -64,6 +74,10 @@ export const IDE_THEMES: ThemeDefinition[] = [
       variable: '#9876AA',
       operator: '#A9B7C6',
       annotation: '#BBB529',
+      tagName: '#E8BF6A',
+      attributeName: '#BABABA',
+      tagBracket: '#E8BF6A',
+      vueDirective: '#CC7832',
     }
   },
   {
@@ -96,6 +110,10 @@ export const IDE_THEMES: ThemeDefinition[] = [
       variable: '#871094',
       operator: '#000000',
       annotation: '#9E880D',
+      tagName: '#0033B3',
+      attributeName: '#174AD4',
+      tagBracket: '#0033B3',
+      vueDirective: '#0033B3',
     }
   },
   {
@@ -196,14 +214,54 @@ export const IDE_THEMES: ThemeDefinition[] = [
   }
 ];
 
-export const getThemeById = (themeId: IdeThemeId): ThemeDefinition => {
-  return IDE_THEMES.find(t => t.id === themeId) || IDE_THEMES[0];
+export const getCustomThemes = (): ThemeDefinition[] => {
+  if (typeof window === 'undefined') return [];
+  try {
+    const raw = localStorage.getItem('intellij_custom_themes');
+    if (raw) return JSON.parse(raw);
+  } catch (e) {
+    console.error('Failed to parse custom themes:', e);
+  }
+  return [];
+};
+
+export const saveCustomTheme = (theme: ThemeDefinition): void => {
+  if (typeof window === 'undefined') return;
+  try {
+    const existing = getCustomThemes().filter(t => t.id !== theme.id);
+    const updated = [...existing, theme];
+    localStorage.setItem('intellij_custom_themes', JSON.stringify(updated));
+    window.dispatchEvent(new CustomEvent('ide-custom-themes-updated'));
+  } catch (e) {
+    console.error('Failed to save custom theme:', e);
+  }
+};
+
+export const removeCustomTheme = (id: string): void => {
+  if (typeof window === 'undefined') return;
+  try {
+    const existing = getCustomThemes().filter(t => t.id !== id);
+    localStorage.setItem('intellij_custom_themes', JSON.stringify(existing));
+    window.dispatchEvent(new CustomEvent('ide-custom-themes-updated'));
+  } catch (e) {
+    console.error('Failed to remove custom theme:', e);
+  }
+};
+
+export const getAllThemes = (): ThemeDefinition[] => {
+  const custom = getCustomThemes();
+  return [...IDE_THEMES, ...MARKETPLACE_THEMES, ...custom];
+};
+
+export const getThemeById = (themeId: IdeThemeId | string): ThemeDefinition => {
+  const all = getAllThemes();
+  return all.find(t => t.id === themeId) || IDE_THEMES[0];
 };
 
 export const buildMonacoTheme = (
   theme: ThemeDefinition,
   customSyntax?: Partial<SyntaxTokenColors>
-): editor.IStandaloneThemeData => {
+): any => {
   const syn = { ...theme.syntaxColors, ...(customSyntax || {}) };
   const col = theme.colors;
 
@@ -222,10 +280,11 @@ export const buildMonacoTheme = (
       { token: 'operator', foreground: syn.operator.replace('#', '') },
       { token: 'delimiter', foreground: syn.operator.replace('#', '') },
       { token: 'delimiter.bracket', foreground: syn.operator.replace('#', '') },
-      { token: 'tag', foreground: syn.keyword.replace('#', '') },
+      { token: 'tag', foreground: (syn.tagName || (theme.type === 'light' ? '#0033B3' : '#56A8F5')).replace('#', '') },
       { token: 'tag.id', foreground: syn.variable.replace('#', '') },
       { token: 'tag.class', foreground: syn.variable.replace('#', '') },
-      { token: 'attribute.name', foreground: col.textSecondary.replace('#', '') },
+      { token: 'delimiter.html', foreground: (syn.tagBracket || (theme.type === 'light' ? '#0033B3' : '#7A7E85')).replace('#', '') },
+      { token: 'attribute.name', foreground: (syn.attributeName || (theme.type === 'light' ? '#174AD4' : '#BCBEC4')).replace('#', '') },
       { token: 'attribute.value', foreground: syn.string.replace('#', '') },
       { token: 'keyword.directive', foreground: syn.annotation.replace('#', ''), fontStyle: 'bold' },
       { token: 'metatag', foreground: syn.annotation.replace('#', '') },
@@ -254,8 +313,127 @@ export const buildMonacoTheme = (
   };
 };
 
+export const buildCodeMirrorTheme = (
+  theme: ThemeDefinition,
+  customSyntax?: Partial<SyntaxTokenColors>
+): Extension => {
+  const col = theme.colors;
+  const syn = { ...theme.syntaxColors, ...(customSyntax || {}) };
+  const isDark = theme.type === 'dark';
+
+  const cmTheme = EditorView.theme(
+    {
+      '&': {
+        color: col.textPrimary,
+        backgroundColor: col.bgPrimary,
+        fontFamily: "'JetBrains Mono', Consolas, Monaco, monospace",
+        fontSize: '13px',
+        height: '100%',
+      },
+      '.cm-content': {
+        caretColor: col.accentColor,
+        fontFamily: "'JetBrains Mono', Consolas, Monaco, monospace",
+        padding: '4px 0',
+      },
+      '.cm-cursor, .cm-dropCursor': {
+        borderLeftColor: col.accentColor,
+        borderLeftWidth: '2px',
+      },
+      // CodeMirror selection background - high specificity to override CM defaults
+      '&.cm-focused > .cm-scroller > .cm-selectionLayer .cm-selectionBackground': {
+        backgroundColor: `${col.selectionBg} !important`,
+      },
+      '&.cm-focused .cm-selectionBackground': {
+        backgroundColor: `${col.selectionBg} !important`,
+      },
+      '.cm-selectionBackground': {
+        backgroundColor: `${col.selectionBg}cc !important`,
+      },
+      '.cm-content ::selection': {
+        backgroundColor: `${col.selectionBg} !important`,
+      },
+      '.cm-selectionMatch': {
+        backgroundColor: isDark ? 'rgba(33, 66, 131, 0.4)' : 'rgba(166, 210, 255, 0.6)',
+        outline: isDark ? '1px solid rgba(88, 157, 246, 0.35)' : '1px solid #70ACFF',
+        borderRadius: '2px',
+      },
+      '.cm-panels': {
+        backgroundColor: col.bgSecondary,
+        color: col.textPrimary,
+      },
+      '.cm-panels.cm-panels-top': {
+        borderBottom: `1px solid ${col.borderColor}`,
+      },
+      '.cm-panels.cm-panels-bottom': {
+        borderTop: `1px solid ${col.borderColor}`,
+      },
+      // Active line MUST be translucent so .cm-selectionBackground (at z-index: -1) shows through
+      '.cm-activeLine': {
+        backgroundColor: isDark ? 'rgba(255, 255, 255, 0.045)' : 'rgba(0, 80, 200, 0.04)',
+      },
+      '.cm-gutters': {
+        backgroundColor: col.gutterBg || col.bgPrimary,
+        color: col.textSecondary,
+        borderRight: `1px solid ${col.borderColor}`,
+        paddingRight: '6px',
+      },
+      '.cm-activeLineGutter': {
+        backgroundColor: isDark ? (col.bgTertiary || '#26282E') : '#E6EEFA',
+        color: col.textPrimary,
+      },
+      '.cm-tooltip': {
+        border: `1px solid ${col.borderColor}`,
+        backgroundColor: col.bgSecondary,
+        color: col.textPrimary,
+        borderRadius: '4px',
+        boxShadow: isDark ? '0 4px 12px rgba(0, 0, 0, 0.5)' : '0 4px 12px rgba(0, 0, 0, 0.15)',
+      },
+      '.cm-tooltip-autocomplete': {
+        '& > ul > li[aria-selected]': {
+          backgroundColor: col.selectionBg,
+          color: col.textPrimary,
+        },
+      },
+    },
+    { dark: isDark }
+  );
+
+  const highlightStyle = HighlightStyle.define([
+    { tag: [t.keyword, t.modifier], color: syn.keyword, fontWeight: 'bold' },
+    { tag: [t.typeName, t.namespace, t.changed], color: syn.type, fontWeight: 'bold' },
+    { tag: [t.className], color: syn.type }, // CSS Class selector
+    { tag: [t.propertyName, t.definition(t.propertyName)], color: syn.variable }, // CSS property
+    { tag: [t.definition(t.variableName), t.constant(t.name), t.standard(t.name), t.variableName], color: syn.variable }, // CSS vars and SCSS $var
+    { tag: [t.function(t.variableName), t.function(t.propertyName)], color: syn.function },
+    { tag: [t.labelName], color: syn.function }, // CSS ID selector (#id)
+    { tag: [t.number], color: syn.number },
+    { tag: [t.color], color: syn.number }, // CSS color literals (#hex, rgb)
+    { tag: [t.unit], color: syn.keyword }, // CSS units (px, rem, em, %, vh, deg, s)
+    { tag: [t.string, t.special(t.string), t.inserted, t.processingInstruction], color: syn.string },
+    { tag: [t.atom, t.bool, t.null], color: syn.keyword, fontWeight: 'bold' },
+    { tag: [t.meta, t.comment, t.lineComment, t.blockComment, t.docComment], color: syn.comment, fontStyle: 'italic' },
+    { tag: [t.annotation], color: syn.annotation },
+    { tag: [t.operator, t.operatorKeyword, t.url, t.escape, t.regexp], color: syn.operator },
+    { tag: [t.separator, t.punctuation, t.bracket, t.paren, t.brace], color: syn.operator },
+    { tag: [t.name, t.character], color: col.textPrimary },
+    { tag: t.strong, fontWeight: 'bold' },
+    { tag: t.emphasis, fontStyle: 'italic' },
+    { tag: t.strikethrough, textDecoration: 'line-through' },
+    { tag: t.link, color: col.accentColor, textDecoration: 'underline' },
+    { tag: t.heading, fontWeight: 'bold', color: col.accentColor },
+    // HTML / XML / Vue tags, brackets & attributes (Authentic JetBrains New UI)
+    { tag: [t.tagName], color: syn.tagName || (isDark ? '#56A8F5' : '#0033B3'), fontWeight: '500' }, // HTML / XML / Vue element tags (template, div, span, img)
+    { tag: [t.angleBracket], color: syn.tagBracket || (isDark ? '#7A7E85' : '#8C8C8C') }, // < > </ />
+    { tag: [t.attributeName], color: syn.attributeName || (isDark ? '#BCBEC4' : '#174AD4') }, // HTML / XML attributes (class, id, style)
+    { tag: [t.attributeValue], color: syn.string },
+    { tag: t.invalid, color: '#FA6675' },
+  ]);
+
+  return [cmTheme, syntaxHighlighting(highlightStyle)];
+};
+
 export const applyIdeTheme = (
-  themeId: IdeThemeId,
+  themeId: IdeThemeId | string,
   customSyntax?: Partial<SyntaxTokenColors>
 ) => {
   const theme = getThemeById(themeId);
@@ -277,15 +455,9 @@ export const applyIdeTheme = (
   // Set color-scheme for native inputs
   root.style.colorScheme = theme.type;
 
-  // Also apply class on body for Tailwind or scoped styles
-  document.body.classList.remove(
-    'theme-intellij-new-ui-dark',
-    'theme-darcula-classic',
-    'theme-intellij-light',
-    'theme-one-dark-pro',
-    'theme-dracula',
-    'theme-github-dark'
-  );
+  // Clean up all existing theme-* classes and add new one
+  const classesToRemove = Array.from(document.body.classList).filter(c => c.startsWith('theme-'));
+  classesToRemove.forEach(c => document.body.classList.remove(c));
   document.body.classList.add(`theme-${theme.id}`);
 
   // Register theme in Monaco Editor if available
@@ -295,4 +467,10 @@ export const applyIdeTheme = (
     monaco.editor.defineTheme(theme.id, monacoTheme);
     monaco.editor.setTheme(theme.id);
   }
+
+  // Notify listeners
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent('ide-theme-applied', { detail: theme }));
+  }
 };
+

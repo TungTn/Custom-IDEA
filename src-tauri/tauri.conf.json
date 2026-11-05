@@ -1,8 +1,8 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
-  "productName": "intellij-idea-clone",
+  "productName": "Custom IDEA",
   "version": "0.1.0",
-  "identifier": "com.intellij.clone",
+  "identifier": "com.custom.idea",
   "build": {
     "frontendDist": "../dist",
     "devUrl": "http://localhost:5173",
@@ -13,7 +13,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "IntelliJ IDEA",
+        "title": "Custom IDEA",
         "width": 1280,
         "height": 800,
         "minWidth": 900,

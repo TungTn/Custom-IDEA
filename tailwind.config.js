@@ -28,7 +28,7 @@ export default {
       },
       fontFamily: {
         mono: ['"JetBrains Mono"', 'Consolas', 'Menlo', 'monospace'],
-        sans: ['"Segoe UI"', '-apple-system', 'BlinkMacSystemFont', 'system-ui', 'sans-serif']
+        sans: ['"Inter"', '"Segoe UI"', '-apple-system', 'BlinkMacSystemFont', 'system-ui', 'sans-serif']
       }
     },
   },

@@ -1,0 +1,25 @@
+export const detectLanguage = (fileName: string): string => {
+  const lower = fileName.toLowerCase();
+  if (lower.endsWith('.vue')) return 'vue';
+  if (lower.endsWith('.svelte')) return 'svelte';
+  if (lower.endsWith('.ts') || lower.endsWith('.tsx')) return 'typescript';
+  if (lower.endsWith('.js') || lower.endsWith('.jsx') || lower.endsWith('.mjs') || lower.endsWith('.cjs')) return 'javascript';
+  if (lower.endsWith('.json')) return 'json';
+  if (lower.endsWith('.html') || lower.endsWith('.htm')) return 'html';
+  if (lower.endsWith('.css')) return 'css';
+  if (lower.endsWith('.scss') || lower.endsWith('.sass')) return 'scss';
+  if (lower.endsWith('.less')) return 'less';
+  if (lower.endsWith('.yaml') || lower.endsWith('.yml')) return 'yaml';
+  if (lower.endsWith('.md') || lower.endsWith('.markdown')) return 'markdown';
+  if (lower.endsWith('.rs')) return 'rust';
+  if (lower.endsWith('.py')) return 'python';
+  if (lower.endsWith('.go')) return 'go';
+  if (lower.endsWith('.java')) return 'java';
+  if (lower.endsWith('.kt') || lower.endsWith('.kts')) return 'kotlin';
+  if (lower.endsWith('.sql')) return 'sql';
+  if (lower.endsWith('.xml') || lower.endsWith('.svg')) return 'xml';
+  if (lower.endsWith('.env') || lower.endsWith('.toml') || lower.endsWith('.ini')) return 'ini';
+  if (lower.endsWith('.sh') || lower.endsWith('.bash') || lower.endsWith('.ps1')) return 'shell';
+  if (lower.endsWith('.cpp') || lower.endsWith('.c') || lower.endsWith('.h') || lower.endsWith('.hpp')) return 'cpp';
+  return 'plaintext';
+};

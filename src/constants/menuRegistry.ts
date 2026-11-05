@@ -4,6 +4,7 @@ import {
   FolderOpen, 
   Save, 
   X, 
+  Minus,
   RotateCcw, 
   Scissors, 
   Copy, 
@@ -59,7 +60,9 @@ import {
   ArrowUpFromLine,
   ArrowDownToLine,
   Columns,
-  CheckCircle2
+  CheckCircle2,
+  Palette,
+  Calculator
 } from 'lucide-react';
 import { MenuRegistry, MenuItem } from '../types/menu';
 
@@ -288,8 +291,8 @@ export const menuRegistry: MenuRegistry = {
     { id: 'n-search-everywhere', label: 'Search Everywhere', shortcut: 'Double Shift', icon: Sparkles, actionId: 'navigate.searchEverywhere' },
     { id: 'n-go-file', label: 'File...', shortcut: 'Ctrl+Shift+N', icon: FileCode, actionId: 'navigate.goToFile' },
     { id: 'n-go-class', label: 'Class...', shortcut: 'Ctrl+N', actionId: 'navigate.goToFile' },
-    { id: 'n-go-symbol', label: 'Symbol...', shortcut: 'Ctrl+Alt+Shift+N', actionId: 'navigate.searchEverywhere' },
-    { id: 'n-go-action', label: 'Action...', shortcut: 'Ctrl+Shift+A', actionId: 'navigate.searchEverywhere' },
+    { id: 'n-go-symbol', label: 'Symbol...', shortcut: 'Ctrl+Alt+Shift+N', actionId: 'navigate.goToSymbol' },
+    { id: 'n-go-action', label: 'Action...', shortcut: 'Ctrl+Shift+A', actionId: 'navigate.goToAction' },
     { id: 'n-go-line', label: 'Line:Column...', shortcut: 'Ctrl+G', actionId: 'navigate.goToLine' },
     { id: 'n-sep-1', isSeparator: true },
     { id: 'n-decl', label: 'Declaration or Usages', shortcut: 'Ctrl+B', actionId: 'navigate.gotoDeclaration' },
@@ -337,6 +340,7 @@ export const menuRegistry: MenuRegistry = {
       id: 'c-surround', 
       label: 'Surround With...', 
       shortcut: 'Ctrl+Alt+T',
+      actionId: 'code.surround',
       icon: Layers,
       children: [
         { id: 'c-surr-if', label: 'if / else Block', actionId: 'code.surroundIf' },
@@ -410,10 +414,12 @@ export const menuRegistry: MenuRegistry = {
     },
     { id: 'rn-toggle-bp', label: 'Toggle Line Breakpoint', shortcut: 'Ctrl+F8', actionId: 'run.toggleBreakpoint' },
     { id: 'rn-view-bp', label: 'View Breakpoints...', shortcut: 'Ctrl+Shift+F8', actionId: 'run.viewBreakpoints' },
+    { id: 'rn-evaluate-expr', label: 'Evaluate Expression...', shortcut: 'Alt+F8', icon: Calculator, actionId: 'run.evaluateExpression' },
   ],
 
   Tools: [
     { id: 't-terminal', label: 'Open Terminal', shortcut: 'Alt+F12', icon: Terminal, actionId: 'tools.terminal' },
+    { id: 't-theme-studio', label: 'Theme Studio...', icon: Palette, actionId: 'tools.themeStudio' },
     { 
       id: 't-http', 
       label: 'HTTP Client', 
@@ -458,6 +464,36 @@ export const menuRegistry: MenuRegistry = {
     { id: 'g-sep-2', isSeparator: true },
     { id: 'g-stash', label: 'Stash Changes...', actionId: 'git.stash' },
     { id: 'g-unstash', label: 'UnStash Changes...', actionId: 'git.unstash' },
+  ],
+
+  Window: [
+    { id: 'w-min', label: 'Minimize', shortcut: 'Ctrl+M', icon: Minus, actionId: 'window.minimize' },
+    { id: 'w-zoom', label: 'Zoom', icon: Maximize, actionId: 'window.zoom' },
+    { id: 'w-close', label: 'Close Window', shortcut: 'Ctrl+F4', icon: X, actionId: 'window.close' },
+    { id: 'w-sep-1', isSeparator: true },
+    { id: 'w-next', label: 'Next Project Window', shortcut: 'Ctrl+Alt+]', actionId: 'window.nextProject' },
+    { id: 'w-prev', label: 'Previous Project Window', shortcut: 'Ctrl+Alt+[', actionId: 'window.prevProject' },
+    { id: 'w-sep-2', isSeparator: true },
+    { 
+      id: 'w-tabs', 
+      label: 'Editor Tabs', 
+      icon: Layers,
+      children: [
+        { id: 'w-tab-close', label: 'Close', shortcut: 'Ctrl+F4', actionId: 'file.close' },
+        { id: 'w-tab-close-all', label: 'Close All Tabs', shortcut: 'Ctrl+Shift+F4', actionId: 'file.closeAll' },
+        { id: 'w-tab-split-v', label: 'Split Right', actionId: 'editor.splitRight' },
+        { id: 'w-tab-split-h', label: 'Split Down', actionId: 'editor.splitDown' },
+      ]
+    },
+    { 
+      id: 'w-layouts', 
+      label: 'Layouts', 
+      icon: Layout,
+      children: [
+        { id: 'w-layout-default', label: 'Default', actionId: 'window.layoutDefault' },
+        { id: 'w-layout-save', label: 'Save Current Layout as New...', actionId: 'window.layoutSave' },
+      ]
+    },
   ],
 
   Help: [

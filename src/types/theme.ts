@@ -4,7 +4,8 @@ export type IdeThemeId =
   | 'intellij-light'
   | 'one-dark-pro'
   | 'dracula'
-  | 'github-dark';
+  | 'github-dark'
+  | (string & {});
 
 export interface ThemeColors {
   bgPrimary: string;      // Main background (#1E1F22, #2B2B2B, #FFFFFF)
@@ -31,6 +32,10 @@ export interface SyntaxTokenColors {
   variable: string;
   operator: string;
   annotation: string;
+  tagName?: string;
+  attributeName?: string;
+  tagBracket?: string;
+  vueDirective?: string;
 }
 
 export interface ThemeDefinition {

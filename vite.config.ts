@@ -17,7 +17,13 @@ export default defineConfig({
       output: {
         manualChunks: {
           'vendor-react': ['react', 'react-dom'],
-          'vendor-monaco': ['@monaco-editor/react'],
+          'vendor-codemirror': [
+            '@codemirror/state',
+            '@codemirror/view',
+            '@codemirror/language',
+            '@codemirror/commands',
+            '@replit/codemirror-vim'
+          ],
           'vendor-xterm': ['@xterm/xterm', '@xterm/addon-fit', '@xterm/addon-search'],
           'vendor-icons': ['lucide-react'],
         }

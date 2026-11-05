@@ -15,6 +15,7 @@ export interface OpenTab {
   content: string;
   language: string;
   isDirty?: boolean;
+  isPinned?: boolean;
   tabType?: 'code' | 'db-table' | 'sql-console';
   dbMetadata?: {
     dataSourceId: string;
@@ -61,6 +62,7 @@ export interface UsageOccurrence {
   fileId: string;
   fileName: string;
   filePath: string;
+  relativePath?: string;
   lineNumber: number;
   columnNumber: number;
   lineContent: string;
@@ -68,6 +70,8 @@ export interface UsageOccurrence {
   matchStart: number;
   matchEnd: number;
   usageType: 'import' | 'declaration' | 'usage';
+  declarationKind?: string;
+  enclosingScope?: string;
 }
 
 export interface FindUsagesResult {
@@ -171,5 +175,9 @@ export interface RebaseCommitItem {
   subject: string;
   author: string;
 }
+
+// ─── Auto-generated Backend DTOs from ts-rs ───
+export * from '../bindings';
+
 
 

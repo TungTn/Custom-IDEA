@@ -1,6 +1,4 @@
-import type { languages } from 'monaco-editor';
-
-export const vueLanguageConfiguration: languages.LanguageConfiguration = {
+export const vueLanguageConfiguration: any = {
   comments: {
     blockComment: ['<!--', '-->'],
   },
@@ -31,7 +29,7 @@ export const vueLanguageConfiguration: languages.LanguageConfiguration = {
   ],
 };
 
-export const vueMonarchTokensProvider: languages.IMonarchLanguage = {
+export const vueMonarchTokensProvider: any = {
   defaultToken: '',
   tokenPostfix: '.vue',
   keywords: [

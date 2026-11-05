@@ -1,6 +1,4 @@
-import { editor } from 'monaco-editor';
-
-export const intellijNewUIDarkTheme: editor.IStandaloneThemeData = {
+export const intellijNewUIDarkTheme: any = {
   base: 'vs-dark',
   inherit: true,
   rules: [

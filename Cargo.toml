@@ -1,0 +1,55 @@
+[workspace]
+resolver = "3"
+members = [
+  "crates/ide-vfs",
+  "crates/ide-lsp",
+  "crates/ide-dap",
+  "crates/ide-terminal",
+  "crates/ide-vcs",
+  "crates/ide-run",
+  "crates/ide-db",
+  "crates/ide-http",
+  "crates/ide-index",
+  "crates/ide-docker",
+  "crates/ide-coverage",
+  "src-tauri",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+authors = ["TungTN <tran.tung1311@gmail.com>"]
+license = "Apache-2.0"
+
+[workspace.dependencies]
+ide-vfs = { path = "crates/ide-vfs" }
+ide-lsp = { path = "crates/ide-lsp" }
+ide-dap = { path = "crates/ide-dap" }
+ide-terminal = { path = "crates/ide-terminal" }
+ide-vcs = { path = "crates/ide-vcs" }
+ide-run = { path = "crates/ide-run" }
+ide-db = { path = "crates/ide-db" }
+ide-http = { path = "crates/ide-http" }
+ide-index = { path = "crates/ide-index" }
+ide-docker = { path = "crates/ide-docker" }
+ide-coverage = { path = "crates/ide-coverage" }
+
+regex = "1.10"
+
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+log = "0.4"
+tokio = { version = "1", features = ["full"] }
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "tls-rustls", "sqlite", "postgres", "mysql", "any", "json"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "stream"] }
+tauri = { version = "2.12.5", features = [] }
+tauri-plugin-log = "2"
+rfd = "0.15"
+portable-pty = "0.8"
+walkdir = "2.5"
+notify = "6.1.1"
+ropey = "1.6"
+nucleo-matcher = "0.3"
+notify-debouncer-mini = "0.3"
+ts-rs = { version = "12.0.1", default-features = true }
+zip = { version = "2.2", default-features = false, features = ["deflate"] }

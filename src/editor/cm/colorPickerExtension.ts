@@ -1,33 +1,41 @@
 import { Extension } from '@codemirror/state';
-import { gutter, GutterMarker, EditorView } from '@codemirror/view';
+import {
+  EditorView,
+  Decoration,
+  DecorationSet,
+  ViewPlugin,
+  ViewUpdate,
+  WidgetType,
+} from '@codemirror/view';
 
-class ColorGutterMarker extends GutterMarker {
+class ColorSwatchWidget extends WidgetType {
   constructor(
     readonly color: string,
-    readonly lineFrom: number
+    readonly pos: number
   ) {
     super();
   }
 
-  eq(other: ColorGutterMarker) {
-    return other.color === this.color && other.lineFrom === this.lineFrom;
+  eq(other: ColorSwatchWidget) {
+    return other.color === this.color && other.pos === this.pos;
   }
 
-  toDOM(view: EditorView) {
-    const wrapper = document.createElement('div');
-    wrapper.className = 'cm-color-swatch-container';
-    wrapper.style.cssText = 'width: 14px; height: 14px; display: inline-flex; align-items: center; justify-content: center; cursor: pointer; position: relative;';
+  toDOM(view: EditorView): HTMLElement {
+    const wrapper = document.createElement('span');
+    wrapper.className = 'cm-color-swatch-wrapper inline-flex items-center align-middle mx-1 select-none';
+    wrapper.style.cssText = 'display: inline-flex; vertical-align: middle; margin: 0 3px 0 1px; cursor: pointer;';
 
-    const swatch = document.createElement('div');
+    const swatch = document.createElement('span');
     swatch.className = 'cm-color-swatch';
     swatch.style.cssText = `
       width: 10px;
       height: 10px;
       border-radius: 2px;
+      display: inline-block;
       background-color: ${this.color};
-      border: 1px solid rgba(255, 255, 255, 0.35);
-      box-shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
-      transition: transform 0.1s ease;
+      border: 1px solid rgba(255, 255, 255, 0.4);
+      box-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
+      vertical-align: middle;
     `;
     swatch.title = `Color: ${this.color} (Click to change)`;
 
@@ -50,9 +58,8 @@ class ColorGutterMarker extends GutterMarker {
       swatch.style.backgroundColor = newColor;
 
       try {
-        const line = view.state.doc.lineAt(this.lineFrom);
-        const lineText = line.text;
-        const match = lineText.match(/#(?:[0-9a-fA-F]{3,4}){1,2}\b|rgba?\(\s*\d+\s*,\s*\d+\s*,\s*\d+(?:\s*,\s*[\d.]+\s*)?\)/i);
+        const line = view.state.doc.lineAt(this.pos);
+        const match = line.text.match(colorRegex);
         if (match && match.index !== undefined) {
           const from = line.from + match.index;
           const to = from + match[0].length;
@@ -61,7 +68,7 @@ class ColorGutterMarker extends GutterMarker {
           });
         }
       } catch (err) {
-        console.warn('Failed to update color from gutter:', err);
+        console.warn('Failed to update color from swatch:', err);
       }
     });
 
@@ -82,35 +89,54 @@ class ColorGutterMarker extends GutterMarker {
     }
     return '#000000';
   }
+
+  ignoreEvent() {
+    return true;
+  }
 }
 
-const colorRegex = /#(?:[0-9a-fA-F]{3,4}){1,2}\b|rgba?\(\s*\d+\s*,\s*\d+\s*,\s*\d+(?:\s*,\s*[\d.]+\s*)?\)/i;
+const colorRegex = /#(?:[0-9a-fA-F]{3,4}){1,2}\b|rgba?\(\s*\d+\s*,\s*\d+\s*,\s*\d+(?:\s*,\s*[\d.]+\s*)?\)/gi;
 
-export const colorPickerExtension: Extension = [
-  gutter({
-    class: 'cm-color-gutter select-none bg-[#1E1F22]',
-    lineMarker(view, line) {
-      const lineText = view.state.doc.sliceString(line.from, line.to);
-      const match = lineText.match(colorRegex);
-      if (match) {
-        return new ColorGutterMarker(match[0], line.from);
+function buildColorDecorations(view: EditorView): DecorationSet {
+  const widgets: { from: number; deco: Decoration }[] = [];
+
+  for (const { from, to } of view.visibleRanges) {
+    const text = view.state.doc.sliceString(from, to);
+    colorRegex.lastIndex = 0;
+    let match: RegExpExecArray | null;
+
+    while ((match = colorRegex.exec(text)) !== null) {
+      const pos = from + match.index;
+      widgets.push({
+        from: pos,
+        deco: Decoration.widget({
+          widget: new ColorSwatchWidget(match[0], pos),
+          side: -1,
+        }),
+      });
+    }
+  }
+
+  // Sort by from position
+  widgets.sort((a, b) => a.from - b.from);
+  return Decoration.set(widgets.map((w) => w.deco.range(w.from)));
+}
+
+export const colorPickerExtension: Extension = ViewPlugin.fromClass(
+  class {
+    decorations: DecorationSet;
+
+    constructor(view: EditorView) {
+      this.decorations = buildColorDecorations(view);
+    }
+
+    update(update: ViewUpdate) {
+      if (update.docChanged || update.viewportChanged) {
+        this.decorations = buildColorDecorations(update.view);
       }
-      return null;
-    },
-  }),
-  EditorView.theme({
-    '.cm-color-gutter': {
-      width: '18px',
-      minWidth: '18px',
-      maxWidth: '18px',
-      backgroundColor: '#1E1F22',
-      borderRight: 'none',
-    },
-    '.cm-color-gutter .cm-gutterElement': {
-      display: 'flex',
-      alignItems: 'center',
-      justifyContent: 'center',
-      padding: '0',
-    },
-  }),
-];
+    }
+  },
+  {
+    decorations: (v) => v.decorations,
+  }
+);

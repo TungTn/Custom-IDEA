@@ -2113,22 +2113,48 @@ export const App: React.FC = () => {
             <div className="flex-1 flex overflow-hidden relative">
             {/* Activity Bar (Icon Stripe) */}
             <ActivityBar
-            activeSideTab={activeSideTab}
-            isSideBarOpen={isSideBarOpen}
-            onToggleSideTab={handleToggleSideTab}
-            bottomTab={bottomTab}
-            isBottomOpen={isBottomOpen}
-            onToggleBottomTab={handleToggleBottomTab}
-            isRunning={isRunning}
-            hasFindResult={Boolean(findResult)}
-            errorCount={problems.filter(p => p.severity === 'error').length}
-            warningCount={problems.filter(p => p.severity === 'warning').length}
-            onOpenCommit={() => setIsCommitOpen(true)}
-            onOpenSearch={() => setIsSearchOpen(true)}
-            onToggleDatabase={() => {
+              activeSideTab={activeSideTab}
+              isSideBarOpen={isSideBarOpen}
+              onToggleSideTab={handleToggleSideTab}
+              activeRightPanel={activeRightPanel}
+              bottomTab={bottomTab}
+              isBottomOpen={isBottomOpen}
+              onToggleBottomTab={handleToggleBottomTab}
+              isRunning={isRunning}
+              hasFindResult={Boolean(findResult)}
+              errorCount={problems.filter(p => p.severity === 'error').length}
+              warningCount={problems.filter(p => p.severity === 'warning').length}
+              onOpenCommit={() => setIsCommitOpen(true)}
+              onOpenSearch={() => setIsSearchOpen(true)}
+              onToggleDatabase={() => {
                 setActiveRightPanel(prev => prev === 'database' ? null : 'database');
-            }}
-            onOpenPlugins={() => setIsSettingsOpen(true)}
+              }}
+              onOpenPlugins={() => setIsSettingsOpen(true)}
+              onSelectMoreTool={(toolId) => {
+                if (toolId === 'find') {
+                  setIsSearchOpen(true);
+                } else if (toolId === 'run') {
+                  handleToggleBottomTab('run');
+                } else if (toolId === 'debug') {
+                  handleToggleBottomTab('debug');
+                } else if (toolId === 'todo') {
+                  handleToggleBottomTab('problems');
+                } else if (toolId === 'bookmarks') {
+                  setActiveSideTab('bookmarks');
+                  setIsSideBarOpen(true);
+                } else if (toolId === 'hierarchy') {
+                  setActiveSideTab('structure');
+                  setIsSideBarOpen(true);
+                } else if (toolId === 'coverage') {
+                  addToast('Coverage', 'Run with Coverage activated', 'info');
+                } else if (toolId === 'endpoints') {
+                  addToast('Endpoints', 'Endpoints Explorer activated', 'info');
+                } else if (toolId === 'learn') {
+                  addToast('Learn', 'Interactive IDE Tutorials', 'info');
+                } else if (toolId === 'profiler') {
+                  addToast('Profiler', 'Performance Profiler activated', 'info');
+                }
+              }}
             />
 
             {/* Middle Workspace Area (Top: Sidebar + Editor, Bottom: Full-Width Tool Window) */}

@@ -83,6 +83,7 @@ import { useEditorStore } from '../stores/editorStore';
 import { Breakpoint, OpenTab } from '../types';
 import { createBreakpointGutter, createActiveLineHighlighter } from './cm/breakpointGutter';
 import { createGitBlameGutter } from './cm/gitBlameGutter';
+import { createGitDiffGutter, parseGitDiff, GitDiffType } from './cm/gitDiffGutter';
 import { colorPickerExtension } from './cm/colorPickerExtension';
 import { GitBlameLineDto } from '../bindings';
 import { createLocalAiExtension } from './cm/localAiExtension';
@@ -490,7 +491,9 @@ export const CmEditor = forwardRef<CmEditorHandle, CmEditorProps>(
     const gitBlameCompartmentRef = useRef<Compartment>(new Compartment());
     const breakpointCompartmentRef = useRef<Compartment>(new Compartment());
     const coverageCompartmentRef = useRef<Compartment>(new Compartment());
+    const gitDiffCompartmentRef = useRef<Compartment>(new Compartment());
     const themeCompartmentRef = useRef<Compartment>(new Compartment());
+    const [gitDiffMap, setGitDiffMap] = useState<Map<number, GitDiffType> | null>(null);
     const isDispatchingRef = useRef(false);
 
     const handleFormatDocument = useCallback(async () => {
@@ -1070,6 +1073,7 @@ export const CmEditor = forwardRef<CmEditorHandle, CmEditorProps>(
             }),
             colorPickerExtension,
             lineNumbers(),
+            gitDiffCompartmentRef.current.of(createGitDiffGutter(gitDiffMap)),
             highlightActiveLineGutter(),
             highlightSpecialChars(),
             history(),
@@ -1280,6 +1284,36 @@ export const CmEditor = forwardRef<CmEditorHandle, CmEditorProps>(
         effects: themeCompartmentRef.current.reconfigure(resolveEditorTheme(theme, customThemeJson)),
       });
     }, [theme, customThemeJson]);
+
+    // Fetch and track Git Diff for change markers (Blue/Green stripes on Gutter)
+    useEffect(() => {
+      if (!filePath || !projectPath) {
+        setGitDiffMap(null);
+        return;
+      }
+      let isMounted = true;
+      invoke<string>('git_get_diff', { projectPath, filePath })
+        .then((diffText) => {
+          if (isMounted) {
+            setGitDiffMap(parseGitDiff(diffText));
+          }
+        })
+        .catch(() => {
+          if (isMounted) setGitDiffMap(null);
+        });
+      return () => {
+        isMounted = false;
+      };
+    }, [filePath, projectPath, content]);
+
+    // Dynamically reconfigure Git Diff gutter
+    useEffect(() => {
+      const view = viewRef.current;
+      if (!view) return;
+      view.dispatch({
+        effects: gitDiffCompartmentRef.current.reconfigure(createGitDiffGutter(gitDiffMap)),
+      });
+    }, [gitDiffMap]);
 
     // Handle external content updates (e.g., file reloaded from disk)
     useEffect(() => {
@@ -2145,7 +2179,7 @@ export const CmEditor = forwardRef<CmEditorHandle, CmEditorProps>(
                   >
                     <span className="flex items-center gap-1.5">
                       {showGitBlame && <Check size={12} className="text-[#3574F0] group-hover:text-white" />}
-                      <span>Annotate with Git Blame</span>
+                      <span>{showGitBlame ? 'Close Annotations' : 'Annotate with Git Blame'}</span>
                     </span>
                   </button>
                   <button

@@ -70,7 +70,7 @@ export function createBreakpointGutter(
   const pausedLineNum = isPausedOnThisFile ? activePausedLine.line : -1;
 
   const bpGutter = gutter({
-    class: 'cm-breakpoint-gutter bg-[#1E1F22] border-r border-[#2B2D30]/50 select-none w-5',
+    class: 'cm-breakpoint-gutter select-none w-3.5 flex items-center justify-center',
     markers: (view: EditorView) => {
       const builder = new RangeSetBuilder<GutterMarker>();
       const { doc } = view.state;
@@ -100,7 +100,23 @@ export function createBreakpointGutter(
     },
   });
 
-  return bpGutter;
+  const bpTheme = EditorView.theme({
+    '.cm-breakpoint-gutter': {
+      width: '14px',
+      minWidth: '14px',
+      maxWidth: '14px',
+      backgroundColor: 'transparent',
+    },
+    '.cm-breakpoint-gutter .cm-gutterElement': {
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'center',
+      padding: '0 !important',
+      width: '14px',
+    },
+  });
+
+  return [bpGutter, bpTheme];
 }
 
 // Line highlight decoration for active paused line

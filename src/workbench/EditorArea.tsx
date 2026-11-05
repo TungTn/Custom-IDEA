@@ -256,9 +256,10 @@ export const EditorArea = forwardRef<EditorAreaHandle, EditorAreaProps>(
     const [httpError, setHttpError] = useState<string | null>(null);
     const [runningHttpBlockId, setRunningHttpBlockId] = useState<string | null>(null);
 
-    // Git Blame State
-    const [showGitBlame, setShowGitBlame] = useState(false);
+    // Git Blame State (Per-file tracking)
+    const [blameOpenFiles, setBlameOpenFiles] = useState<Record<string, boolean>>({});
     const [blameDataByFile, setBlameDataByFile] = useState<Record<string, GitBlameLineDto[]>>({});
+    const isCurrentBlameOpen = Boolean(activeTab?.path && blameOpenFiles[activeTab.path]);
 
     // Code Coverage State (ide-coverage)
     const [showCoverage, setShowCoverage] = useState(true);
@@ -304,31 +305,37 @@ export const EditorArea = forwardRef<EditorAreaHandle, EditorAreaProps>(
       }
     }, [projectPath]);
 
-    const toggleGitBlame = useCallback(async () => {
-      const next = !showGitBlame;
-      setShowGitBlame(next);
-      if (next && activeTab?.path) {
-        if (!blameDataByFile[activeTab.path]) {
+    const toggleGitBlame = useCallback(async (explicitFilePath?: string) => {
+      const targetPath = explicitFilePath || activeTab?.path;
+      if (!targetPath) return;
+
+      const currentlyOpen = Boolean(blameOpenFiles[targetPath]);
+      const next = !currentlyOpen;
+
+      setBlameOpenFiles(prev => ({ ...prev, [targetPath]: next }));
+
+      if (next) {
+        if (!blameDataByFile[targetPath]) {
           onShowToast?.('Git Blame', 'Loading git annotations...', 'info');
-          const data = await fetchBlameForFile(activeTab.path);
+          const data = await fetchBlameForFile(targetPath);
           if (data && data.length > 0) {
             onShowToast?.('Git Blame', `Annotated ${data.length} lines`, 'success');
           } else {
             onShowToast?.('Git Blame', 'No git blame available for this file', 'warning');
           }
         } else {
-          onShowToast?.('Git Blame', 'Git blame enabled', 'info');
+          onShowToast?.('Git Blame', 'Git annotations enabled', 'info');
         }
-      } else if (!next) {
-        onShowToast?.('Git Blame', 'Git blame disabled', 'info');
+      } else {
+        onShowToast?.('Git Blame', 'Git annotations closed', 'info');
       }
-    }, [showGitBlame, activeTab?.path, blameDataByFile, fetchBlameForFile, onShowToast]);
+    }, [activeTab?.path, blameOpenFiles, blameDataByFile, fetchBlameForFile, onShowToast]);
 
     useEffect(() => {
-      if (showGitBlame && activeTab?.path && !blameDataByFile[activeTab.path]) {
+      if (activeTab?.path && blameOpenFiles[activeTab.path] && !blameDataByFile[activeTab.path]) {
         fetchBlameForFile(activeTab.path);
       }
-    }, [showGitBlame, activeTab?.path, blameDataByFile, fetchBlameForFile]);
+    }, [activeTab?.path, blameOpenFiles, blameDataByFile, fetchBlameForFile]);
 
     // Editor Store Split State
     const {
@@ -639,10 +646,10 @@ export const EditorArea = forwardRef<EditorAreaHandle, EditorAreaProps>(
             </button>
             {/* Git Blame Action Button */}
             <button
-              onClick={toggleGitBlame}
-              title={showGitBlame ? 'Hide Git Annotations (Blame)' : 'Annotate with Git Blame'}
+              onClick={() => toggleGitBlame()}
+              title={isCurrentBlameOpen ? 'Close Annotations (Blame)' : 'Annotate with Git Blame'}
               className={`p-1 rounded transition-colors cursor-pointer ${
-                showGitBlame ? 'bg-[#3574F0]/25 text-[#56A8F5]' : 'hover:bg-[#2B2D30] text-[#868A91] hover:text-[#DFE1E5]'
+                isCurrentBlameOpen ? 'bg-[#3574F0]/25 text-[#56A8F5]' : 'hover:bg-[#2B2D30] text-[#868A91] hover:text-[#DFE1E5]'
               }`}
             >
               <GitCommit size={13} />
@@ -821,7 +828,7 @@ export const EditorArea = forwardRef<EditorAreaHandle, EditorAreaProps>(
                             onToggleBreakpoint={onToggleBreakpoint}
                             onChange={(value) => onChangeContent(paneTab.id, value)}
                             onCursorChange={(line, col) => onCursorChange?.(line, col)}
-                            showGitBlame={showGitBlame}
+                            showGitBlame={Boolean(paneTab.path && blameOpenFiles[paneTab.path])}
                             blameData={blameDataByFile[paneTab.path] || EMPTY_BLAME_DATA}
                             coverageData={showCoverage ? coverageDataByFile[paneTab.path] : null}
                             onGutterContextMenu={handleGutterContextMenu}
@@ -830,7 +837,7 @@ export const EditorArea = forwardRef<EditorAreaHandle, EditorAreaProps>(
                             onFindUsages={onFindUsages}
                             onOpenSurroundWith={onOpenSurroundWith}
                             onRunFile={onRunFile}
-                            onToggleGitBlame={toggleGitBlame}
+                            onToggleGitBlame={() => toggleGitBlame(paneTab.path)}
                             onOpenAiDrawer={onOpenAiDrawer}
                             onSelectMenuAction={onSelectMenuAction}
                             onShowToast={onShowToast}
@@ -907,19 +914,23 @@ export const EditorArea = forwardRef<EditorAreaHandle, EditorAreaProps>(
               className="absolute bg-[#2B2D30] border border-[#393B40] rounded shadow-2xl py-1 w-56 text-xs text-[#DFE1E5] z-50 select-none animate-in fade-in zoom-in-95 duration-100 font-sans"
               onClick={(e) => e.stopPropagation()}
             >
-              {/* 1. Annotate with Git Blame */}
+              {/* 1. Annotate with Git Blame / Close Annotations */}
               <button
                 onClick={() => {
-                  toggleGitBlame();
+                  toggleGitBlame(gutterContextMenu.filePath);
                   setGutterContextMenu(null);
                 }}
-                className="w-full px-3 py-1.5 hover:bg-[#3574F0] hover:text-white flex items-center justify-between transition-colors text-left"
+                className="w-full px-3 py-1.5 hover:bg-[#3574F0] hover:text-white flex items-center justify-between transition-colors text-left cursor-pointer"
               >
                 <span className="flex items-center gap-2">
                   <span className="w-4 flex items-center justify-center text-[#59A869]">
-                    {showGitBlame && <Check size={13} />}
+                    {Boolean(blameOpenFiles[gutterContextMenu.filePath || activeTab?.path || '']) && <Check size={13} />}
                   </span>
-                  <span>Annotate with Git Blame</span>
+                  <span>
+                    {Boolean(blameOpenFiles[gutterContextMenu.filePath || activeTab?.path || ''])
+                      ? 'Close Annotations'
+                      : 'Annotate with Git Blame'}
+                  </span>
                 </span>
               </button>
 
@@ -1499,12 +1510,16 @@ export const EditorArea = forwardRef<EditorAreaHandle, EditorAreaProps>(
                       </div>
                       <div
                         onClick={() => {
-                          toggleGitBlame();
+                          toggleGitBlame(targetTab.path);
                           setTabContextMenu(null);
                         }}
                         className="px-3 py-1.5 hover:bg-[#3574F0] hover:text-white cursor-pointer"
                       >
-                        <span>Annotate with Git Blame</span>
+                        <span>
+                          {Boolean(targetTab.path && blameOpenFiles[targetTab.path])
+                            ? 'Close Annotations'
+                            : 'Annotate with Git Blame'}
+                        </span>
                       </div>
                     </div>
                   )}

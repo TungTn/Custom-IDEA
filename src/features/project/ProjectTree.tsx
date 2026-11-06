@@ -38,6 +38,7 @@ import {
   FilePlus,
   Edit3
 } from 'lucide-react';
+import { SonarIcon } from '../sonar/SonarToolWindow';
 import { FileNode } from '../../types';
 
 export interface ProjectTreeProps {
@@ -70,6 +71,8 @@ export interface ProjectTreeProps {
   onShowBookmarksModal?: () => void;
   onCloseFile?: (filePath: string) => void;
   onFindInFolder?: (folderPath: string, mode: 'find' | 'replace') => void;
+  onAnalyzeSonarPath?: (path: string, isFolder: boolean) => void;
+  onExcludeSonarPath?: (path: string) => void;
 }
 
 export const IntelliJExpandAllIcon: React.FC<{ size?: number; className?: string }> = ({ size = 13, className = '' }) => (
@@ -118,6 +121,8 @@ export const ProjectTree: React.FC<ProjectTreeProps> = ({
   onShowBookmarksModal,
   onCloseFile,
   onFindInFolder,
+  onAnalyzeSonarPath,
+  onExcludeSonarPath,
 }) => {
   // IDE File Clipboard State
   const [clipboardItem, setClipboardItem] = useState<{ node: FileNode; op: 'cut' | 'copy'; timestamp: number } | null>(null);
@@ -1923,6 +1928,51 @@ export const ProjectTree: React.FC<ProjectTreeProps> = ({
                   className="px-3 py-1.5 hover:bg-[#3574F0] hover:text-white cursor-pointer"
                 >
                   <span>Show Diagram...</span>
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* SonarQube for IDE > (Matching IntelliJ IDEA Context Menu 100%) */}
+          <div 
+            className="relative group"
+            onMouseEnter={() => setActiveSubmenu('sonarqube')}
+          >
+            <div className="px-3 py-1.5 hover:bg-[#3574F0] hover:text-white cursor-pointer flex items-center justify-between">
+              <div className="flex items-center gap-2 pl-5">
+                <SonarIcon size={13} />
+                <span>SonarQube for IDE</span>
+              </div>
+              <ChevronRight size={13} className="text-[#868A91] group-hover:text-white" />
+            </div>
+
+            {activeSubmenu === 'sonarqube' && (
+              <div 
+                className={`absolute ${menuPos.x + 240 + 260 > window.innerWidth ? 'right-full -mr-0.5' : 'left-full -ml-0.5'} ${isBottomHalf ? 'bottom-0' : '-top-1'} bg-[#2B2D30] border border-[#393B40] rounded-md shadow-2xl py-1 z-[60] text-[12px] text-[#DFE1E5] w-72`}
+                onMouseDown={(e) => e.stopPropagation()}
+                onClick={(e) => e.stopPropagation()}
+              >
+                <div 
+                  onClick={() => {
+                    const targetPath = contextMenu.node.path || contextMenu.node.name;
+                    onAnalyzeSonarPath?.(targetPath, Boolean(contextMenu.node.isFolder));
+                    setContextMenu(null);
+                  }}
+                  className="px-3 py-1.5 hover:bg-[#3574F0] hover:text-white cursor-pointer flex items-center justify-between"
+                >
+                  <span>Analyze with SonarQube for IDE</span>
+                  <span className="text-[10px] text-[#868A91] font-mono">Ctrl+Shift+S</span>
+                </div>
+                <div 
+                  onClick={() => {
+                    const targetPath = contextMenu.node.path || contextMenu.node.name;
+                    onExcludeSonarPath?.(targetPath);
+                    onShowToast?.('SonarQube for IDE', `Excluded "${contextMenu.node.name}" from SonarQube analysis`, 'info');
+                    setContextMenu(null);
+                  }}
+                  className="px-3 py-1.5 hover:bg-[#3574F0] hover:text-white cursor-pointer"
+                >
+                  <span>Exclude from SonarQube for IDE Analysis</span>
                 </div>
               </div>
             )}

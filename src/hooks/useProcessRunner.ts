@@ -2,6 +2,67 @@ import { useState, useCallback, useRef, useEffect } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { FileNode, RunConfiguration, RunLog } from '../types';
+import { useSettingsStore } from '../stores/settingsStore';
+
+function parseCommandLineArgs(cmdStr: string): string[] {
+  const args: string[] = [];
+  let current = '';
+  let inQuotes = false;
+  let quoteChar = '';
+
+  for (let i = 0; i < cmdStr.length; i++) {
+    const char = cmdStr[i];
+    if ((char === '"' || char === "'") && (!inQuotes || quoteChar === char)) {
+      inQuotes = !inQuotes;
+      if (inQuotes) {
+        quoteChar = char;
+      } else {
+        quoteChar = '';
+      }
+    } else if (char === ' ' && !inQuotes) {
+      if (current.length > 0) {
+        args.push(current);
+        current = '';
+      }
+    } else {
+      current += char;
+    }
+  }
+  if (current.length > 0) {
+    args.push(current);
+  }
+  return args;
+}
+
+function getMavenRunnerEnv(): Record<string, string> {
+  const s = useSettingsStore.getState().settings;
+  const env: Record<string, string> = {};
+  if (s.mavenRunnerVmOptions?.trim()) {
+    env['MAVEN_OPTS'] = s.mavenRunnerVmOptions.trim();
+  }
+  if (s.mavenRunnerJdk?.trim()) {
+    const jdk = s.mavenRunnerJdk.trim();
+    if (!jdk.includes('nampa') && !jdk.includes('graalvm-jdk-21.0.7')) {
+      env['JAVA_HOME'] = jdk;
+    }
+  }
+  if (s.mavenRunnerEnv) {
+    if (typeof s.mavenRunnerEnv === 'string') {
+      const lines = (s.mavenRunnerEnv as string).split('\n');
+      for (const line of lines) {
+        const idx = line.indexOf('=');
+        if (idx > 0) {
+          const k = line.substring(0, idx).trim();
+          const v = line.substring(idx + 1).trim();
+          if (k) env[k] = v;
+        }
+      }
+    } else if (typeof s.mavenRunnerEnv === 'object') {
+      Object.assign(env, s.mavenRunnerEnv);
+    }
+  }
+  return env;
+}
 
 export interface UseProcessRunnerOptions {
   currentProjectDirectory: string;
@@ -26,18 +87,25 @@ export function useProcessRunner({
       const saved = localStorage.getItem('intellij_run_configurations');
       if (saved) {
         const parsed: RunConfiguration[] = JSON.parse(saved);
-        // Automatically upgrade existing Java / Spring Boot configs to the Ultra-Lightweight profile
+        // Safely upgrade legacy cramped 256m/384m configurations that cause javac OutOfMemoryError on projects with many files
         return parsed.map(c => {
-          if (c.type === 'spring-boot' || c.command.includes('mvn') || c.command.includes('gradle')) {
-            const envs = { ...(c.envVars || {}) };
-            const ultraLightOpts = '-Xms64m -Xmx384m -Xss256k -XX:+UseSerialGC -XX:TieredStopAtLevel=1 -XX:MaxMetaspaceSize=384m -XX:ReservedCodeCacheSize=96m';
-            envs['JAVA_TOOL_OPTIONS'] = ultraLightOpts;
-            if (!envs['MAVEN_OPTS'] && c.command.includes('mvn')) {
-              envs['MAVEN_OPTS'] = '-Xms32m -Xmx96m -XX:+UseSerialGC';
-            }
-            return { ...c, envVars: envs };
+          let updatedCmd = c.command;
+          if (updatedCmd && updatedCmd.includes('nampa')) {
+            updatedCmd = 'mvn';
           }
-          return c;
+          if (c.type === 'spring-boot' || (updatedCmd && (updatedCmd.includes('mvn') || updatedCmd.includes('gradle')))) {
+            const envs = { ...(c.envVars || {}) };
+            const currentOpts = envs['JAVA_TOOL_OPTIONS'] || '';
+            // If the configuration has the cramped 256m/384m heap, upgrade it to 1024m to prevent OutOfMemoryError
+            if (currentOpts.includes('-Xmx256m') || currentOpts.includes('-Xmx384m')) {
+              envs['JAVA_TOOL_OPTIONS'] = '-Xms128m -Xmx1024m -Xss512k -XX:TieredStopAtLevel=1 -XX:MaxMetaspaceSize=384m -XX:ReservedCodeCacheSize=128m';
+              if (!envs['MAVEN_OPTS'] || envs['MAVEN_OPTS'].includes('-Xmx96m')) {
+                envs['MAVEN_OPTS'] = '-Xms64m -Xmx256m';
+              }
+              return { ...c, command: updatedCmd, envVars: envs };
+            }
+          }
+          return { ...c, command: updatedCmd };
         });
       }
     } catch (e) {
@@ -283,9 +351,45 @@ export function useProcessRunner({
 
     const activeCfg = runConfigurations.find(c => c.id === activeConfigId) || runConfigurations[0];
     const projectDir = activeCfg?.workingDirectory || currentProjectDirectory;
-    const cmd = activeCfg?.command || 'cargo';
-    const args = activeCfg?.args || ['check', '--all-targets'];
-    const envVars = activeCfg?.envVars;
+    let cmd = activeCfg?.command || 'cargo';
+    if (cmd.includes('nampa')) {
+      cmd = 'mvn';
+    }
+    let args = activeCfg?.args ? [...activeCfg.args] : ['check', '--all-targets'];
+    const envVars = { ...(activeCfg?.envVars || {}) };
+
+    const s = useSettingsStore.getState().settings;
+    if (cmd.toLowerCase().includes('mvn') || activeCfg?.type === 'maven') {
+      const isCustomValid = s.mavenHomePath === 'custom' && s.mavenCustomPath && !s.mavenCustomPath.includes('nampa') && !s.mavenCustomPath.includes('wrapper\\dists') && !s.mavenCustomPath.includes('wrapper/dists');
+      if (isCustomValid) {
+        cmd = s.mavenCustomPath!.endsWith('.cmd') || s.mavenCustomPath!.endsWith('.exe') || s.mavenCustomPath!.endsWith('mvn')
+          ? s.mavenCustomPath!
+          : `${s.mavenCustomPath!.replace(/[/\\]+$/, '')}\\bin\\mvn.cmd`;
+      } else {
+        const hasWrapper = files.some(f => f.name === 'mvnw.cmd' || f.name === 'mvnw');
+        if (hasWrapper && s.mavenHomePath !== 'bundled') {
+          cmd = navigator.platform.toLowerCase().includes('win') ? 'mvnw.cmd' : './mvnw';
+        } else if (cmd.includes('\\') || cmd.includes('/')) {
+          cmd = 'mvn';
+        }
+      }
+      if (s.mavenOverrideGlobalSettings && s.mavenGlobalSettings && !args.includes('-gs')) {
+        args.push('-gs', s.mavenGlobalSettings);
+      }
+      if (s.mavenOverrideUserSettings && s.mavenUserSettings && !args.includes('-s')) {
+        args.push('-s', s.mavenUserSettings);
+      }
+      if (s.mavenOverrideLocalRepo && s.mavenLocalRepo && !args.some(a => a.startsWith('-Dmaven.repo.local='))) {
+        args.push(`-Dmaven.repo.local=${s.mavenLocalRepo}`);
+      }
+      if (s.mavenSkipTests && !args.includes('-DskipTests')) {
+        args.push('-DskipTests');
+      }
+      if (s.mavenOfflineMode && !args.includes('-o')) {
+        args.push('-o');
+      }
+      Object.assign(envVars, getMavenRunnerEnv());
+    }
 
     const runId = `run-${Date.now()}`;
     activeRunIdRef.current = runId;
@@ -409,6 +513,38 @@ export function useProcessRunner({
         buildArgs = action === 'clean' ? ['clean'] : action === 'rebuild' ? ['clean', 'build'] : ['build'];
       }
 
+      let buildEnv: Record<string, string> | undefined;
+      if (buildCmd.toLowerCase().includes('mvn')) {
+        const s = useSettingsStore.getState().settings;
+        const isCustomValid = s.mavenHomePath === 'custom' && s.mavenCustomPath && !s.mavenCustomPath.includes('nampa') && !s.mavenCustomPath.includes('wrapper\\dists') && !s.mavenCustomPath.includes('wrapper/dists');
+        if (isCustomValid) {
+          buildCmd = s.mavenCustomPath!.endsWith('.cmd') || s.mavenCustomPath!.endsWith('.exe') || s.mavenCustomPath!.endsWith('mvn')
+            ? s.mavenCustomPath!
+            : `${s.mavenCustomPath!.replace(/[/\\]+$/, '')}\\bin\\mvn.cmd`;
+        } else {
+          const hasWrapper = files.some(f => f.name === 'mvnw.cmd' || f.name === 'mvnw');
+          if (hasWrapper && s.mavenHomePath !== 'bundled') {
+            buildCmd = navigator.platform.toLowerCase().includes('win') ? 'mvnw.cmd' : './mvnw';
+          }
+        }
+        if (s.mavenOverrideGlobalSettings && s.mavenGlobalSettings && !buildArgs.includes('-gs')) {
+          buildArgs.push('-gs', s.mavenGlobalSettings);
+        }
+        if (s.mavenOverrideUserSettings && s.mavenUserSettings && !buildArgs.includes('-s')) {
+          buildArgs.push('-s', s.mavenUserSettings);
+        }
+        if (s.mavenOverrideLocalRepo && s.mavenLocalRepo && !buildArgs.some(a => a.startsWith('-Dmaven.repo.local='))) {
+          buildArgs.push(`-Dmaven.repo.local=${s.mavenLocalRepo}`);
+        }
+        if (s.mavenSkipTests && !buildArgs.includes('-DskipTests')) {
+          buildArgs.push('-DskipTests');
+        }
+        if (s.mavenOfflineMode && !buildArgs.includes('-o')) {
+          buildArgs.push('-o');
+        }
+        buildEnv = getMavenRunnerEnv();
+      }
+
       const runId = `build-${Date.now()}`;
       activeRunIdRef.current = runId;
       setIsRunning(true);
@@ -438,6 +574,7 @@ export function useProcessRunner({
             command: buildCmd,
             args: buildArgs,
             cwd: projectDir,
+            envVars: buildEnv && Object.keys(buildEnv).length > 0 ? buildEnv : null,
           });
           addToast(action === 'clean' ? 'Build Cleaned' : 'Build Started', `${buildCmd} ${buildArgs.join(' ')}`, 'info');
         } else {
@@ -492,12 +629,52 @@ export function useProcessRunner({
       setRunLogs(prev => [...prev, newLog]);
 
       if (typeof window !== 'undefined' && ('__TAURI_INTERNALS__' in window || '__TAURI__' in window)) {
-        const parts = command.split(' ');
-        const cmd = parts[0];
-        const args = parts.slice(1);
+        const parts = parseCommandLineArgs(command);
+        let cmd = parts[0] || 'mvn';
+        let args = parts.slice(1);
+        if (cmd.includes('nampa')) {
+          cmd = 'mvn';
+        }
+        const isMaven = tool === 'maven' || cmd.toLowerCase().includes('mvn');
+
+        const s = useSettingsStore.getState().settings;
+        if (isMaven) {
+          const isCustomValid = s.mavenHomePath === 'custom' && s.mavenCustomPath && !s.mavenCustomPath.includes('nampa') && !s.mavenCustomPath.includes('wrapper\\dists') && !s.mavenCustomPath.includes('wrapper/dists');
+          if (isCustomValid && (cmd === 'mvn' || cmd === 'mvn.cmd')) {
+            cmd = s.mavenCustomPath!.endsWith('.cmd') || s.mavenCustomPath!.endsWith('.exe') || s.mavenCustomPath!.endsWith('mvn')
+              ? s.mavenCustomPath!
+              : `${s.mavenCustomPath!.replace(/[/\\]+$/, '')}\\bin\\mvn.cmd`;
+          } else if (!isCustomValid && (cmd.includes('\\') || cmd.includes('/'))) {
+            const hasWrapper = files.some(f => f.name === 'mvnw.cmd' || f.name === 'mvnw');
+            if (hasWrapper && s.mavenHomePath !== 'bundled') {
+              cmd = navigator.platform.toLowerCase().includes('win') ? 'mvnw.cmd' : './mvnw';
+            } else {
+              cmd = 'mvn';
+            }
+          }
+          if (s.mavenOverrideGlobalSettings && s.mavenGlobalSettings && !args.includes('-gs')) {
+            args.push('-gs', s.mavenGlobalSettings);
+          }
+          if (s.mavenOverrideUserSettings && s.mavenUserSettings && !args.includes('-s')) {
+            args.push('-s', s.mavenUserSettings);
+          }
+          if (s.mavenOverrideLocalRepo && s.mavenLocalRepo && !args.some(a => a.startsWith('-Dmaven.repo.local='))) {
+            args.push(`-Dmaven.repo.local=${s.mavenLocalRepo}`);
+          }
+          if (s.mavenSkipTests && !args.includes('-DskipTests')) {
+            args.push('-DskipTests');
+          }
+          if (s.mavenOfflineMode && !args.includes('-o')) {
+            args.push('-o');
+          }
+        }
+        const envVars = isMaven ? getMavenRunnerEnv() : undefined;
+
         invoke<{ stdout: string; stderr: string; exit_code: number }>('execute_build_command', {
           command: cmd,
           args,
+          cwd: projectDir,
+          envVars: envVars && Object.keys(envVars).length > 0 ? envVars : null,
         })
           .then(res => {
             setIsRunning(false);

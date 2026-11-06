@@ -16,6 +16,7 @@ import {
 import { BottomBreadcrumbs } from './BottomBreadcrumbs';
 import { FileNode } from '../types';
 import { usePluginStore } from '../stores/pluginStore';
+import { SonarIcon, SonarAnalysisProgress } from '../features/sonar/SonarToolWindow';
 
 export interface StatusBarProps {
   branch: string;
@@ -43,6 +44,8 @@ export interface StatusBarProps {
   projectName?: string;
   projectTree?: FileNode[];
   onSelectFile?: (file: FileNode) => void;
+  sonarAnalysisState?: SonarAnalysisProgress | null;
+  onStopSonarAnalysis?: () => void;
 }
 
 export const StatusBar: React.FC<StatusBarProps> = ({
@@ -71,6 +74,8 @@ export const StatusBar: React.FC<StatusBarProps> = ({
   projectName = '',
   projectTree = [],
   onSelectFile,
+  sonarAnalysisState,
+  onStopSonarAnalysis,
 }) => {
   const isPluginActive = usePluginStore(s => s.isPluginActive);
   const isNyanActive = isPluginActive('nyan-progress');
@@ -146,6 +151,36 @@ export const StatusBar: React.FC<StatusBarProps> = ({
 
       {/* ─── Right items (Matching IntelliJ IDEA 100%) ─── */}
       <div className="flex items-center gap-2 font-mono text-[11px] flex-shrink-0">
+        {/* SonarQube Background Task Progress (Matching IntelliJ IDEA 100%) */}
+        {sonarAnalysisState?.isAnalyzing && (
+          <div className="flex items-center gap-2 px-2 py-0.5 rounded bg-[#2B2D30] border border-[#393B40] text-xs font-sans animate-in fade-in duration-150 mr-1 shadow-sm">
+            <SonarIcon size={13} className="text-[#4B9FD5] flex-shrink-0 animate-pulse" />
+            <span className="text-[#DFE1E5] text-[11px] font-normal truncate max-w-[200px]">
+              {sonarAnalysisState.message || 'SonarQube: Analyzing...'}
+            </span>
+            {/* Progress bar */}
+            <div className="w-16 h-1.5 bg-[#1E1F22] rounded-full overflow-hidden border border-[#393B40] flex-shrink-0">
+              <div 
+                className="h-full bg-[#3574F0] rounded-full transition-all duration-200"
+                style={{ 
+                  width: `${sonarAnalysisState.progressPercent ?? 65}%` 
+                }}
+              />
+            </div>
+            {/* Stop button (red square) */}
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                onStopSonarAnalysis?.();
+              }}
+              className="w-4 h-4 rounded flex items-center justify-center hover:bg-[#E05555]/25 text-[#E05555] transition-colors cursor-pointer flex-shrink-0"
+              title="Stop SonarQube analysis"
+            >
+              <div className="w-2 h-2 rounded-[1px] bg-[#E05555]" />
+            </button>
+          </div>
+        )}
+
         {/* Cursor Position (Click to Go to Line:Column) */}
         <span 
           onClick={() => {

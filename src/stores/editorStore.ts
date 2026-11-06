@@ -115,10 +115,45 @@ export const useEditorStore = create<EditorState>((set, get) => ({
 
   openTab: (newTab) => {
     set((state) => {
-      const existing = state.tabs.find((t) => t.id === newTab.id || t.path === newTab.path);
-      if (existing) {
-        return { activeTabId: existing.id };
+      // 1. If tab with exact same id exists, update its content & diffData and switch to it
+      const exactIndex = state.tabs.findIndex((t) => t.id === newTab.id);
+      if (exactIndex !== -1) {
+        const updated = [...state.tabs];
+        updated[exactIndex] = { ...updated[exactIndex], ...newTab };
+        return {
+          tabs: updated,
+          activeTabId: newTab.id,
+        };
       }
+
+      // 2. If opening a diff tab, but another diff tab is open, reuse it or update it
+      if (newTab.tabType === 'diff') {
+        const existingDiffIndex = state.tabs.findIndex((t) => t.id === 'diff:active' || t.tabType === 'diff');
+        if (existingDiffIndex !== -1 && newTab.id === 'diff:active') {
+          const updated = [...state.tabs];
+          updated[existingDiffIndex] = { ...newTab };
+          return {
+            tabs: updated,
+            activeTabId: newTab.id,
+          };
+        }
+      }
+
+      // 3. If opening a regular file and same path is open as regular file
+      if (newTab.tabType !== 'diff') {
+        const samePath = state.tabs.find((t) => t.path === newTab.path && t.tabType !== 'diff');
+        if (samePath) {
+          // If existing tab was empty but newTab has content, update it
+          if (!samePath.content && newTab.content) {
+            return {
+              tabs: state.tabs.map(t => t.id === samePath.id ? { ...t, content: newTab.content } : t),
+              activeTabId: samePath.id,
+            };
+          }
+          return { activeTabId: samePath.id };
+        }
+      }
+
       return {
         tabs: [...state.tabs, newTab],
         activeTabId: newTab.id,

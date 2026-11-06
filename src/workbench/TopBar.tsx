@@ -458,7 +458,7 @@ export const TopBar: React.FC<TopBarProps> = ({
                           key={p.path}
                           onClick={() => {
                             setIsProjectDropdownOpen(false);
-                            onSelectMenuAction('file.openRecent');
+                            onSelectMenuAction(`file.openRecent:${p.path}`);
                           }}
                           className="px-3 py-1.5 hover:bg-[#3574F0] hover:text-white cursor-pointer flex items-center justify-between transition-colors"
                         >

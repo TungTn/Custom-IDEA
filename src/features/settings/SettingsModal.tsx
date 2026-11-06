@@ -132,9 +132,24 @@ export interface IdeSettings {
   // Build Docker Target
   dockerTargetHost?: string;
   // Keymaps
-  keymapProfile?: 'windows' | 'macos' | 'vscode' | 'eclipse' | 'netbeans';
+  keymapProfile?: 'windows' | 'macos' | 'vscode' | 'eclipse' | 'netbeans' | string;
   customKeymaps?: Record<string, string>;
+  // Maven Global & Runner Settings (IntelliJ IDEA 100% Compatible)
+  mavenHomePath?: 'bundled' | 'wrapper' | 'custom';
+  mavenCustomPath?: string;
+  mavenGlobalSettings?: string;
+  mavenOverrideGlobalSettings?: boolean;
+  mavenUserSettings?: string;
+  mavenOverrideUserSettings?: boolean;
+  mavenLocalRepo?: string;
+  mavenOverrideLocalRepo?: boolean;
+  mavenRunnerVmOptions?: string;
+  mavenRunnerJdk?: string;
+  mavenRunnerEnv?: Record<string, string>;
+  mavenSkipTests?: boolean;
+  mavenOfflineMode?: boolean;
 }
+
 
 export interface SettingsModalProps {
   isOpen: boolean;
@@ -328,10 +343,19 @@ export const SETTINGS_TREE: TreeItem[] = [
         label: 'Build Tools',
         description: 'Configure Maven, Gradle, Cargo, and package manager integrations.',
         children: [
-          { id: 'build-tools-maven', label: 'Maven' },
+          { 
+            id: 'build-tools-maven', 
+            label: 'Maven',
+            description: 'Configure Maven home directory, user settings, global settings, local repository, and runner options.',
+            children: [
+              { id: 'build-tools-maven-runner', label: 'Runner' },
+              { id: 'build-tools-maven-importing', label: 'Importing' },
+            ]
+          },
           { id: 'build-tools-gradle', label: 'Gradle' },
           { id: 'build-tools-cargo', label: 'Cargo' },
         ]
+
       },
       {
         id: 'build-compiler',
@@ -440,8 +464,15 @@ export const SETTINGS_TREE: TreeItem[] = [
         ]
       },
       { id: 'tools-http-client', label: 'HTTP Client' },
+      {
+        id: 'tools-sonarqube-parent',
+        label: 'SonarQube for IDE',
+        description: 'Configure SonarQube / SonarLint Connected Mode and project binding.',
+        children: [
+          { id: 'tools-sonarqube', label: 'Project Settings' },
+        ],
+      },
       { id: 'tools-ssh', label: 'SSH Configurations' },
-      { id: 'tools-sonarqube', label: 'SonarQube / SonarLint' },
     ]
   },
   {
@@ -545,6 +576,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     'build-exec': false,
     'languages': false,
     'tools': false,
+    'tools-sonarqube-parent': true,
   });
 
   const [formSettings, setFormSettings] = useState<IdeSettings>({

@@ -32,8 +32,10 @@ import {
   StructurePanel,
   DebugPanel,
   ProblemsPanel,
+  CommitPanel,
 } from './features';
 import type { IdeSettings } from './features';
+import type { SonarAnalysisProgress } from './features/sonar/SonarToolWindow';
 import { ImportSettingsModal, ExportSettingsModal } from './features/settings';
 import type { ImportedSettingsResult } from './services/intellijSettingsService';
 import {
@@ -197,6 +199,11 @@ export const App: React.FC = () => {
   // Git branch & status
   const [currentBranch, setCurrentBranch] = useState('main');
 
+  // SonarQube for IDE Analysis States
+  const [sonarAnalysisState, setSonarAnalysisState] = useState<SonarAnalysisProgress | null>(null);
+  const [sonarTargetScanPath, setSonarTargetScanPath] = useState<{ path: string; isFolder: boolean; timestamp: number } | null>(null);
+  const [sonarCancelSignal, setSonarCancelSignal] = useState(0);
+
   const refreshGitStatus = useCallback(async () => {
       const projectDir = currentProjectDirectory;
       try {
@@ -273,6 +280,26 @@ export const App: React.FC = () => {
     toggleEditorEngine,
   } = useEditorStore();
 
+  const handleAnalyzeWithSonar = useCallback((path?: string, isFolder?: boolean) => {
+    const activeTab = tabs.find(t => t.id === activeTabId);
+    const targetPath = path || activeTab?.path || activeTab?.title;
+    if (!targetPath) {
+      addToast('SonarQube for IDE', 'No file selected to analyze.', 'info');
+      return;
+    }
+    setIsBottomOpen(true);
+    setBottomTab('sonar');
+    setSonarTargetScanPath({
+      path: targetPath,
+      isFolder: Boolean(isFolder),
+      timestamp: Date.now(),
+    });
+  }, [tabs, activeTabId, setIsBottomOpen, setBottomTab, addToast]);
+
+  const handleExcludeSonarPath = useCallback((targetPath: string) => {
+    addToast('SonarQube for IDE', `Excluded "${targetPath}" from Sonar analysis`, 'info');
+  }, [addToast]);
+
 
     // Save All Dirty Files to Disk (Authentic IntelliJ IDEA)
   const saveAllFiles = useCallback(async (isManual = false) => {
@@ -343,34 +370,45 @@ export const App: React.FC = () => {
   };
 
   const handleOpenFileAtLocation = async (filePath: string, line: number, col: number = 1) => {
-    let existingTab = tabs.find(t => t.path === filePath || t.id === filePath);
-    if (!existingTab) {
+    const normProj = (currentProjectDirectory || 'D:/IDE').replace(/\\/g, '/');
+    const normFile = filePath.replace(/\\/g, '/');
+    const fullPath = filePath.startsWith('/') || /^[a-zA-Z]:/.test(filePath) ? filePath : `${normProj}/${normFile}`;
+
+    let existingTab = tabs.find(t => t.path === fullPath || t.id === fullPath || t.path === filePath || t.id === filePath);
+    
+    // Always ensure file content is loaded if tab is empty
+    if (!existingTab || !existingTab.content) {
       let fileContent = '';
       if (typeof window !== 'undefined' && ('__TAURI_INTERNALS__' in window || '__TAURI__' in window)) {
         try {
-          fileContent = await invoke<string>('read_file_content', { path: filePath });
+          fileContent = await invoke<string>('read_file_content', { path: fullPath });
         } catch (e) {
-          console.warn('Failed to read file:', e);
+          console.warn('Failed to read file at:', fullPath, e);
         }
       }
       const fileName = filePath.split(/[\/\\]/).pop() || 'Untitled';
       const language = detectLanguage(fileName);
-      const newTab: OpenTab = {
-        id: filePath,
-        title: fileName,
-        path: filePath,
-        content: fileContent,
-        language,
-        isDirty: false,
-      };
-      setTabs(prev => [...prev, newTab]);
-      existingTab = newTab;
+      
+      if (existingTab) {
+        setTabs(prev => prev.map(t => t.id === existingTab!.id ? { ...t, content: fileContent, path: fullPath } : t));
+      } else {
+        const newTab: OpenTab = {
+          id: fullPath,
+          title: fileName,
+          path: fullPath,
+          content: fileContent,
+          language,
+          isDirty: false,
+        };
+        setTabs(prev => [...prev, newTab]);
+        existingTab = newTab;
+      }
     }
 
-    setActiveTabId(existingTab.id);
+    setActiveTabId(existingTab ? existingTab.id : fullPath);
     setTimeout(() => {
-        codeEditorRef.current?.revealPosition(line, col, 0);
-      }, 100);
+      codeEditorRef.current?.revealPosition(line, col, 0);
+    }, 100);
   };
 
   // Database Data Sources (DataGrip mini)
@@ -1539,6 +1577,7 @@ export const App: React.FC = () => {
     handleOpenProject,
     handleOpenFindInFiles,
     handleOpenCurrentFileDiff,
+    onAnalyzeWithSonar: () => handleAnalyzeWithSonar(),
   });
 
       // Create New File logic
@@ -2137,6 +2176,8 @@ export const App: React.FC = () => {
                   handleToggleBottomTab('run');
                 } else if (toolId === 'debug') {
                   handleToggleBottomTab('debug');
+                } else if (toolId === 'sonar') {
+                  handleToggleBottomTab('sonar');
                 } else if (toolId === 'todo') {
                   handleToggleBottomTab('problems');
                 } else if (toolId === 'bookmarks') {
@@ -2157,11 +2198,9 @@ export const App: React.FC = () => {
               }}
             />
 
-            {/* Middle Workspace Area (Top: Sidebar + Editor, Bottom: Full-Width Tool Window) */}
-            <div className="flex-1 flex flex-col h-full overflow-hidden min-w-0">
-            {/* Top Zone: Project Sidebar & Monaco Editor */}
-            <div className="flex-1 flex min-h-0 overflow-hidden relative">
-            {/* Left Tool Window (Project Tree) */}
+            {/* Middle Workspace Area (Left Sidebar Full Height, Center Zone: Editor on Top, Terminal on Bottom) */}
+            <div className="flex-1 flex flex-row h-full overflow-hidden min-w-0">
+              {/* Left Tool Window (Project Tree) */}
             {isSideBarOpen && (
                 <div
                 style={{ width: `${sideBarWidth}px` }}
@@ -2237,7 +2276,23 @@ export const App: React.FC = () => {
                     }}
                     onCloseFile={handleCloseFileByPath}
                     onFindInFolder={(folderPath, mode) => handleOpenFindInFiles(mode, folderPath)}
+                    onAnalyzeSonarPath={(path, isFolder) => handleAnalyzeWithSonar(path, isFolder)}
+                    onExcludeSonarPath={handleExcludeSonarPath}
                     />
+                )}
+                {activeSideTab === 'commit' && (
+                  <CommitPanel
+                    projectPath={currentProjectDirectory}
+                    currentBranch={currentBranch}
+                    onClose={() => setIsSideBarOpen(false)}
+                    onOpenFile={(filePath) => {
+                      handleOpenFileAtLocation(filePath, 1, 1);
+                    }}
+                    onCommitSuccess={() => {
+                      refreshGitStatus();
+                      syncProjectFilesFromDisk();
+                    }}
+                  />
                 )}
                 {activeSideTab === 'structure' && (
                     <StructurePanel
@@ -2301,7 +2356,7 @@ export const App: React.FC = () => {
                       </div>
                     </div>
                 )}
-                {activeSideTab !== 'project' && activeSideTab !== 'structure' && activeSideTab !== 'bookmarks' && (
+                {activeSideTab !== 'project' && activeSideTab !== 'structure' && activeSideTab !== 'bookmarks' && activeSideTab !== 'commit' && (
                     <div className="h-full bg-[#2B2D30] p-4 text-xs text-[#868A91]">
                     Tool Window: <span className="text-[#DFE1E5] font-semibold">{activeSideTab}</span>
                     </div>
@@ -2325,13 +2380,14 @@ export const App: React.FC = () => {
                     document.addEventListener('mouseup', onMouseUp);
                 }}
                 className="absolute -right-1 top-0 bottom-0 w-2 cursor-col-resize hover:bg-[#3574F0]/50 transition-colors z-20"
-                title="Drag to resize Project sidebar"
+                title={`Drag to resize ${activeSideTab === 'commit' ? 'Commit tool window' : activeSideTab === 'project' ? 'Project sidebar' : 'sidebar'}`}
                 />
                 </div>
             )}
 
-            {/* Monaco Editor Zone */}
-            <div className="flex-1 min-w-0 h-full overflow-hidden">
+              {/* Center Zone: Editor on Top, Bottom Tool Window on Bottom (IntelliJ Standard) */}
+              <div className="flex-1 flex flex-col h-full overflow-hidden min-w-0">
+                <div className="flex-1 min-w-0 min-h-0 overflow-hidden">
             <CodeEditor
             ref={codeEditorRef}
             projectPath={currentProjectDirectory}
@@ -2385,10 +2441,9 @@ export const App: React.FC = () => {
             }}
             activePausedLine={debugState === 'paused' ? { filePath: activeTab?.path || '', line: cursorPos.line } : null}
             />
-            </div>
-            </div>
+                </div>
 
-            {/* Bottom Tool Window (Extracted in Phase 9) */}
+                {/* Bottom Tool Window (Extracted in Phase 9) */}
             <BottomToolWindow
               isBottomOpen={isBottomOpen}
               setIsBottomOpen={setIsBottomOpen}
@@ -2444,7 +2499,11 @@ export const App: React.FC = () => {
               handleJumpToOccurrence={handleJumpToOccurrence}
               onExecuteMavenGoal={(goal) => handleExecuteBuildTask('maven', goal, `mvn ${goal}`)}
               addToast={addToast}
+              onSonarAnalysisStateChange={setSonarAnalysisState}
+              sonarTargetScanPath={sonarTargetScanPath}
+              sonarCancelSignal={sonarCancelSignal}
             />
+              </div>
             </div>
 
             {/* Right Tool Window Activity Bar */}
@@ -2510,6 +2569,8 @@ export const App: React.FC = () => {
             projectName={projectName || 'mic-fe-personal'}
             projectTree={files}
             onSelectFile={handleFileSelect}
+            sonarAnalysisState={sonarAnalysisState}
+            onStopSonarAnalysis={() => setSonarCancelSignal(prev => prev + 1)}
             />
             </>
         )}

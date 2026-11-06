@@ -491,61 +491,61 @@ export const RunConfigModal: React.FC<RunConfigModalProps> = ({
                     </span>
                   </div>
                   <p className="text-[11px] text-[#868A91] leading-relaxed">
-                    Mặc định JVM và Maven chiếm gần 1GB RAM. Chế độ <b className="text-[#DFE1E5]">Ultra-Light Dev</b> dùng SerialGC và giới hạn Heap 384MB + Metaspace 384MB giúp Spring Boot (kèm 46 JPA Repo, Security, Oracle) chạy ổn định và giảm 50-60% RAM.
+                    Tùy chỉnh mức RAM cho JVM & Maven. Với dự án lớn nhiều file (&gt;500 file như <b className="text-[#DFE1E5]">mic-vehicles 681 files</b>), nên chọn <b className="text-[#71C482]">Tiêu Chuẩn (1024MB)</b> hoặc <b className="text-[#85B1F8]">Dự Án Lớn (1536MB)</b> để trình biên dịch javac không bị lỗi <i>OutOfMemoryError</i>.
                   </p>
                   <div className="flex flex-wrap items-center gap-2 pt-1">
+                    {/* Preset 1024MB (Tiêu Chuẩn) */}
                     <button
                       type="button"
                       onClick={() => {
-                        const ultraLight256 = 'JAVA_TOOL_OPTIONS=-Xms64m -Xmx256m -Xss256k -XX:+UseSerialGC -XX:TieredStopAtLevel=1 -XX:MaxMetaspaceSize=256m -XX:ReservedCodeCacheSize=64m; MAVEN_OPTS=-Xms32m -Xmx96m -XX:+UseSerialGC';
                         let newEnv = envVarsString;
                         if (newEnv.includes('JAVA_TOOL_OPTIONS')) {
-                          newEnv = newEnv.replace(/JAVA_TOOL_OPTIONS=[^;]+/, 'JAVA_TOOL_OPTIONS=-Xms64m -Xmx256m -Xss256k -XX:+UseSerialGC -XX:TieredStopAtLevel=1 -XX:MaxMetaspaceSize=256m -XX:ReservedCodeCacheSize=64m');
+                          newEnv = newEnv.replace(/JAVA_TOOL_OPTIONS=[^;]+/, 'JAVA_TOOL_OPTIONS=-Xms128m -Xmx1024m -Xss512k -XX:TieredStopAtLevel=1 -XX:MaxMetaspaceSize=384m -XX:ReservedCodeCacheSize=128m');
                         } else {
-                          newEnv = newEnv ? `${newEnv}; JAVA_TOOL_OPTIONS=-Xms64m -Xmx256m -Xss256k -XX:+UseSerialGC -XX:TieredStopAtLevel=1 -XX:MaxMetaspaceSize=256m -XX:ReservedCodeCacheSize=64m` : 'JAVA_TOOL_OPTIONS=-Xms64m -Xmx256m -Xss256k -XX:+UseSerialGC -XX:TieredStopAtLevel=1 -XX:MaxMetaspaceSize=256m -XX:ReservedCodeCacheSize=64m';
+                          newEnv = newEnv ? `${newEnv}; JAVA_TOOL_OPTIONS=-Xms128m -Xmx1024m -Xss512k -XX:TieredStopAtLevel=1 -XX:MaxMetaspaceSize=384m -XX:ReservedCodeCacheSize=128m` : 'JAVA_TOOL_OPTIONS=-Xms128m -Xmx1024m -Xss512k -XX:TieredStopAtLevel=1 -XX:MaxMetaspaceSize=384m -XX:ReservedCodeCacheSize=128m';
                         }
                         if (newEnv.includes('MAVEN_OPTS')) {
-                          newEnv = newEnv.replace(/MAVEN_OPTS=[^;]+/, 'MAVEN_OPTS=-Xms32m -Xmx96m -XX:+UseSerialGC');
+                          newEnv = newEnv.replace(/MAVEN_OPTS=[^;]+/, 'MAVEN_OPTS=-Xms64m -Xmx256m');
                         } else {
-                          newEnv = `${newEnv}; MAVEN_OPTS=-Xms32m -Xmx96m -XX:+UseSerialGC`;
+                          newEnv = `${newEnv}; MAVEN_OPTS=-Xms64m -Xmx256m`;
                         }
                         handleEnvVarsChange(newEnv);
                       }}
                       className="px-2.5 py-1 bg-[#59A869]/20 hover:bg-[#59A869]/30 border border-[#59A869]/40 text-[#71C482] rounded text-[11px] font-medium flex items-center gap-1.5 cursor-pointer transition-colors"
-                      title="Tiết kiệm RAM tối đa cho dự án (350-450MB tổng)"
+                      title="Mức đề xuất chuẩn cho hầu hết dự án Spring Boot (Compile 500-1000 files mượt mà)"
                     >
-                      <Zap size={11} className="text-[#E5A83B]" />
-                      <span>⚡ Cực Nhẹ (256MB)</span>
+                      <Zap size={11} className="text-[#71C482]" />
+                      <span>🎯 Tiêu Chuẩn (1024MB)</span>
                     </button>
 
+                    {/* Preset 1536MB (Dự Án Lớn) */}
                     <button
                       type="button"
                       onClick={() => {
-                        const ultraLightOpt = 'JAVA_TOOL_OPTIONS=-Xms64m -Xmx384m -Xss256k -XX:+UseSerialGC -XX:TieredStopAtLevel=1 -XX:MaxMetaspaceSize=384m -XX:ReservedCodeCacheSize=96m; MAVEN_OPTS=-Xms32m -Xmx96m -XX:+UseSerialGC';
                         let newEnv = envVarsString;
                         if (newEnv.includes('JAVA_TOOL_OPTIONS')) {
-                          newEnv = newEnv.replace(/JAVA_TOOL_OPTIONS=[^;]+/, 'JAVA_TOOL_OPTIONS=-Xms64m -Xmx384m -Xss256k -XX:+UseSerialGC -XX:TieredStopAtLevel=1 -XX:MaxMetaspaceSize=384m -XX:ReservedCodeCacheSize=96m');
+                          newEnv = newEnv.replace(/JAVA_TOOL_OPTIONS=[^;]+/, 'JAVA_TOOL_OPTIONS=-Xms256m -Xmx1536m -Xss512k -XX:MaxMetaspaceSize=512m -XX:ReservedCodeCacheSize=128m');
                         } else {
-                          newEnv = newEnv ? `${newEnv}; JAVA_TOOL_OPTIONS=-Xms64m -Xmx384m -Xss256k -XX:+UseSerialGC -XX:TieredStopAtLevel=1 -XX:MaxMetaspaceSize=384m -XX:ReservedCodeCacheSize=96m` : 'JAVA_TOOL_OPTIONS=-Xms64m -Xmx384m -Xss256k -XX:+UseSerialGC -XX:TieredStopAtLevel=1 -XX:MaxMetaspaceSize=384m -XX:ReservedCodeCacheSize=96m';
+                          newEnv = newEnv ? `${newEnv}; JAVA_TOOL_OPTIONS=-Xms256m -Xmx1536m -Xss512k -XX:MaxMetaspaceSize=512m -XX:ReservedCodeCacheSize=128m` : 'JAVA_TOOL_OPTIONS=-Xms256m -Xmx1536m -Xss512k -XX:MaxMetaspaceSize=512m -XX:ReservedCodeCacheSize=128m';
                         }
                         if (newEnv.includes('MAVEN_OPTS')) {
-                          newEnv = newEnv.replace(/MAVEN_OPTS=[^;]+/, 'MAVEN_OPTS=-Xms32m -Xmx96m -XX:+UseSerialGC');
+                          newEnv = newEnv.replace(/MAVEN_OPTS=[^;]+/, 'MAVEN_OPTS=-Xms128m -Xmx512m');
                         } else {
-                          newEnv = `${newEnv}; MAVEN_OPTS=-Xms32m -Xmx96m -XX:+UseSerialGC`;
+                          newEnv = `${newEnv}; MAVEN_OPTS=-Xms128m -Xmx512m`;
                         }
                         handleEnvVarsChange(newEnv);
                       }}
                       className="px-2.5 py-1 bg-[#3574F0]/20 hover:bg-[#3574F0]/30 border border-[#3574F0]/40 text-[#85B1F8] rounded text-[11px] font-medium flex items-center gap-1.5 cursor-pointer transition-colors"
-                      title="Mức an toàn tối ưu cho Spring Boot với nhiều JPA Entities và Metaspace 384MB"
+                      title="Dành riêng cho dự án lớn (>500 source files như mic-vehicles) để biên dịch không bị tràn RAM"
                     >
                       <Zap size={11} className="text-[#3574F0]" />
-                      <span>⚡ Tiết Kiệm (384MB)</span>
+                      <span>🚀 Dự Án Lớn (1536MB)</span>
                     </button>
 
+                    {/* Preset 512MB */}
                     <button
                       type="button"
                       onClick={() => {
-                        const balancedOpt = 'JAVA_TOOL_OPTIONS=-Xms64m -Xmx512m -XX:+TieredCompilation -XX:TieredStopAtLevel=1; MAVEN_OPTS=-Xms64m -Xmx128m';
                         let newEnv = envVarsString;
                         if (newEnv.includes('JAVA_TOOL_OPTIONS')) {
                           newEnv = newEnv.replace(/JAVA_TOOL_OPTIONS=[^;]+/, 'JAVA_TOOL_OPTIONS=-Xms64m -Xmx512m -XX:+TieredCompilation -XX:TieredStopAtLevel=1');
@@ -560,23 +560,46 @@ export const RunConfigModal: React.FC<RunConfigModalProps> = ({
                         handleEnvVarsChange(newEnv);
                       }}
                       className="px-2.5 py-1 bg-[#2B2D30] hover:bg-[#323438] border border-[#4E5157]/40 text-[#DFE1E5] rounded text-[11px] font-medium flex items-center gap-1.5 cursor-pointer transition-colors"
+                      title="Tiết kiệm RAM cho dự án vừa & nhỏ"
                     >
-                      <span>Cân Bằng (512MB)</span>
+                      <span>⚡ Tiết Kiệm (512MB)</span>
                     </button>
 
-                    {envVarsString.includes('-Xmx256m') && (
-                      <span className="text-[11px] text-[#59A869] font-medium flex items-center gap-1 ml-auto">
-                        ✓ Đang chạy Cực Nhẹ (256MB)
+                    {/* Reset: Không giới hạn (Mặc định JVM) */}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        let newEnv = envVarsString
+                          .replace(/JAVA_TOOL_OPTIONS=[^;]+;?/g, '')
+                          .replace(/MAVEN_OPTS=[^;]+;?/g, '')
+                          .trim()
+                          .replace(/^;\s*|;\s*$/g, '');
+                        handleEnvVarsChange(newEnv);
+                      }}
+                      className="px-2.5 py-1 bg-[#2B2D30] hover:bg-[#323438] border border-[#4E5157]/40 text-[#868A91] hover:text-white rounded text-[11px] font-medium flex items-center gap-1.5 cursor-pointer transition-colors"
+                      title="Xóa giới hạn để JVM tự phân bổ RAM theo phần cứng máy tính"
+                    >
+                      <span>Mặc Định Hệ Thống</span>
+                    </button>
+
+                    {envVarsString.includes('-Xmx1536m') && (
+                      <span className="text-[11px] text-[#85B1F8] font-medium flex items-center gap-1 ml-auto">
+                        ✓ Đang chạy Dự Án Lớn (1536MB)
+                      </span>
+                    )}
+                    {envVarsString.includes('-Xmx1024m') && (
+                      <span className="text-[11px] text-[#71C482] font-medium flex items-center gap-1 ml-auto">
+                        ✓ Đang chạy Tiêu Chuẩn (1024MB)
+                      </span>
+                    )}
+                    {envVarsString.includes('-Xmx512m') && !envVarsString.includes('-Xmx1536m') && (
+                      <span className="text-[11px] text-[#DFE1E5] font-medium flex items-center gap-1 ml-auto">
+                        ✓ Đang chạy Tiết Kiệm (512MB)
                       </span>
                     )}
                     {envVarsString.includes('-Xmx384m') && (
-                      <span className="text-[11px] text-[#85B1F8] font-medium flex items-center gap-1 ml-auto">
-                        ✓ Đang chạy Tiết Kiệm (384MB)
-                      </span>
-                    )}
-                    {envVarsString.includes('-Xmx512m') && !envVarsString.includes('-Xmx256m') && !envVarsString.includes('-Xmx384m') && (
-                      <span className="text-[11px] text-[#DFE1E5] font-medium flex items-center gap-1 ml-auto">
-                        ✓ Đang chạy Cân Bằng (512MB)
+                      <span className="text-[11px] text-[#E5A83B] font-medium flex items-center gap-1 ml-auto">
+                        ⚠ Đang chạy Giới Hạn 384MB (Dễ OOM)
                       </span>
                     )}
                   </div>

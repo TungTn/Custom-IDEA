@@ -1,4 +1,4 @@
-﻿use std::path::Path;
+use std::path::Path;
 use regex::Regex;
 use std::sync::LazyLock;
 use crate::types::{IndexedSymbol, SymbolKind};
@@ -32,6 +32,16 @@ static GO_FUNC_RE: LazyLock<Regex> = LazyLock::new(|| {
 });
 static GO_TYPE_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"^\s*type\s+([a-zA-Z0-9_]+)\s+(?:struct|interface)").unwrap()
+});
+
+static JAVA_CLASS_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"^\s*(?:public|protected|private)?\s*(?:abstract|final|sealed|non-sealed)?\s*(?:class|interface|enum|record)\s+([a-zA-Z0-9_]+)").unwrap()
+});
+static JAVA_FIELD_CONST_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"^\s*(?:public|protected|private)\s+(?:static\s+)?(?:final\s+)?[a-zA-Z0-9_<>\[\]]+\s+([a-zA-Z0-9_]+)\s*(?:=|;)").unwrap()
+});
+static JAVA_METHOD_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"^\s*(?:public|protected|private)\s+(?:static\s+)?(?:final\s+)?(?:synchronized\s+)?(?:<[^>]+>\s+)?[a-zA-Z0-9_<>\[\],\s]+\s+([a-zA-Z0-9_]+)\s*\([^)]*\)\s*(?:throws\s+[^{;]+)?\s*[\{;]").unwrap()
 });
 
 pub fn extract_symbols_from_content(
@@ -88,7 +98,7 @@ pub fn extract_symbols_from_content(
                     }
                 }
             }
-            "ts" | "tsx" | "js" | "jsx" => {
+            "ts" | "tsx" | "js" | "jsx" | "vue" => {
                 if let Some(caps) = JS_TS_CLASS_RE.captures(line) {
                     if let Some(m) = caps.get(1) {
                         let kind = if line.contains("interface ") {
@@ -184,6 +194,57 @@ pub fn extract_symbols_from_content(
                         symbols.push(IndexedSymbol {
                             name: m.as_str().to_string(),
                             kind: SymbolKind::Function,
+                            file_path: file_path.to_string(),
+                            relative_path: relative_path.to_string(),
+                            line_number: line_num,
+                            column_number: m.start() + 1,
+                            snippet: Some(trimmed.to_string()),
+                        });
+                    }
+                }
+            }
+            "java" | "kt" | "cs" => {
+                if let Some(caps) = JAVA_CLASS_RE.captures(line) {
+                    if let Some(m) = caps.get(1) {
+                        let kind = if line.contains("interface ") {
+                            SymbolKind::Interface
+                        } else if line.contains("enum ") {
+                            SymbolKind::Enum
+                        } else {
+                            SymbolKind::Class
+                        };
+                        symbols.push(IndexedSymbol {
+                            name: m.as_str().to_string(),
+                            kind,
+                            file_path: file_path.to_string(),
+                            relative_path: relative_path.to_string(),
+                            line_number: line_num,
+                            column_number: m.start() + 1,
+                            snippet: Some(trimmed.to_string()),
+                        });
+                    }
+                } else if let Some(caps) = JAVA_FIELD_CONST_RE.captures(line) {
+                    if let Some(m) = caps.get(1) {
+                        let kind = if line.contains("final ") {
+                            SymbolKind::Constant
+                        } else {
+                            SymbolKind::Property
+                        };
+                        symbols.push(IndexedSymbol {
+                            name: m.as_str().to_string(),
+                            kind,
+                            file_path: file_path.to_string(),
+                            relative_path: relative_path.to_string(),
+                            line_number: line_num,
+                            column_number: m.start() + 1,
+                            snippet: Some(trimmed.to_string()),
+                        });
+                    }
+                } else if let Some(caps) = JAVA_METHOD_RE.captures(line) {
+                    if let Some(m) = caps.get(1) {
+                        symbols.push(IndexedSymbol {
+                            name: m.as_str().to_string(),
+                            kind: SymbolKind::Method,
                             file_path: file_path.to_string(),
                             relative_path: relative_path.to_string(),
                             line_number: line_num,

@@ -16,7 +16,15 @@ export interface OpenTab {
   language: string;
   isDirty?: boolean;
   isPinned?: boolean;
-  tabType?: 'code' | 'db-table' | 'sql-console';
+  tabType?: 'code' | 'db-table' | 'sql-console' | 'diff';
+  diffData?: {
+    filePath: string;
+    baseContent: string;
+    localContent: string;
+    baseHash?: string;
+    baseTitle?: string;
+    localTitle?: string;
+  };
   dbMetadata?: {
     dataSourceId: string;
     schema?: string;

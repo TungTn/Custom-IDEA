@@ -16,7 +16,7 @@ import {
   DebugPanel, 
   FindUsagesPanel 
 } from '../features';
-import { SonarToolWindow, SonarIcon } from '../features/sonar/SonarToolWindow';
+import { SonarToolWindow, SonarIcon, SonarAnalysisProgress } from '../features/sonar/SonarToolWindow';
 import { BottomTabType } from '../stores/layoutStore';
 import { 
   FindUsagesResult, 
@@ -100,6 +100,11 @@ export interface BottomToolWindowProps {
 
   // Toast notification
   addToast: (title: string, message: string, type?: 'info' | 'success' | 'warning' | 'error') => void;
+
+  // SonarQube props
+  onSonarAnalysisStateChange?: (state: SonarAnalysisProgress | null) => void;
+  sonarTargetScanPath?: { path: string; isFolder: boolean; timestamp: number } | null;
+  sonarCancelSignal?: number;
 }
 
 export const BottomToolWindow: React.FC<BottomToolWindowProps> = ({
@@ -157,6 +162,9 @@ export const BottomToolWindow: React.FC<BottomToolWindowProps> = ({
   handleJumpToOccurrence,
   onExecuteMavenGoal,
   addToast,
+  onSonarAnalysisStateChange,
+  sonarTargetScanPath,
+  sonarCancelSignal,
 }) => {
   if (!isBottomOpen) return null;
 
@@ -187,7 +195,7 @@ export const BottomToolWindow: React.FC<BottomToolWindowProps> = ({
       />
 
       {/* Bottom Tool Window Header (Clean Authentic Title & Controls - No horizontal tabs) */}
-      {bottomTab !== 'terminal' && bottomTab !== 'git' && (
+      {bottomTab !== 'terminal' && bottomTab !== 'git' && bottomTab !== 'sonar' && (
         <div className="h-7 bg-[#1E1F22] border-b border-[#2B2D30] px-3 flex items-center justify-between text-[11px] select-none">
           {/* Tool Window Title & Active Context */}
           <div className="flex items-center gap-2 h-full text-[#DFE1E5]">
@@ -239,13 +247,6 @@ export const BottomToolWindow: React.FC<BottomToolWindowProps> = ({
               <>
                 <Bug size={13} className="text-[#E55353]" />
                 <span className="font-semibold text-xs text-[#DFE1E5]">Debug</span>
-              </>
-            )}
-            {bottomTab === 'sonar' && (
-              <>
-                <SonarIcon size={14} />
-                <span className="font-semibold text-xs text-[#DFE1E5]">SonarLint</span>
-                <span className="text-[#868A91] text-[11px]">Quality Gate & Security Rules</span>
               </>
             )}
           </div>
@@ -374,6 +375,12 @@ export const BottomToolWindow: React.FC<BottomToolWindowProps> = ({
             onOpenFileAtLocation={handleOpenFileAtLocation}
             onExecuteMavenGoal={onExecuteMavenGoal}
             onShowToast={addToast}
+            onOpenSettings={() => setIsSettingsOpen(true)}
+            onToggleMaximize={handleToggleMaximizeBottom}
+            onHide={() => setIsBottomOpen(false)}
+            onAnalysisStateChange={onSonarAnalysisStateChange}
+            targetScanPath={sonarTargetScanPath}
+            cancelSignal={sonarCancelSignal}
           />
         )}
       </div>

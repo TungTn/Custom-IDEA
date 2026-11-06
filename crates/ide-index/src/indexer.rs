@@ -79,7 +79,7 @@ impl IndexManager {
             if !is_folder {
                 if let Some(ref ext) = extension {
                     let ext_lower = ext.to_lowercase();
-                    if matches!(ext_lower.as_str(), "rs" | "ts" | "tsx" | "js" | "jsx" | "py" | "go" | "java" | "c" | "cpp" | "h") {
+                    if matches!(ext_lower.as_str(), "rs" | "ts" | "tsx" | "js" | "jsx" | "vue" | "py" | "go" | "java" | "kt" | "cs" | "c" | "cpp" | "h") {
                         if let Ok(metadata) = entry.metadata() {
                             if metadata.len() < 1_000_000 {
                                 if let Ok(content) = std::fs::read_to_string(path) {

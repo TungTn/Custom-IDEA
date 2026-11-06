@@ -10,6 +10,7 @@ import {
   FolderTree,
   Database,
   Cpu,
+  Hammer,
   FileArchive,
   FolderOpen,
   Check,
@@ -41,7 +42,8 @@ const CATEGORY_ICONS: Record<string, React.ElementType> = {
   general: Settings,
   projectView: FolderTree,
   database: Database,
-  jdk: Cpu
+  jdk: Cpu,
+  maven: Hammer,
 };
 
 export const ImportSettingsModal: React.FC<ImportSettingsModalProps> = ({

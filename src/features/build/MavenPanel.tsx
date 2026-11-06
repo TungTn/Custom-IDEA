@@ -23,6 +23,7 @@ import {
   Folder
 } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
+import { useSettingsStore } from '../../stores/settingsStore';
 
 export interface MavenTask {
   id: string;
@@ -62,6 +63,7 @@ export const MavenPanel: React.FC<MavenPanelProps> = ({
   onShowToast,
   onClose,
 }) => {
+  const { settings } = useSettingsStore();
   const [filterQuery, setFilterQuery] = useState('');
   const [expandedNodes, setExpandedNodes] = useState<Record<string, boolean>>({
     'maven-root': true,
@@ -222,30 +224,59 @@ export const MavenPanel: React.FC<MavenPanelProps> = ({
     setExpandedNodes({});
   };
 
-  const handleRunGoal = (cmd: string, taskName: string) => {
-    let finalCmd = cmd;
-    if (skipTests && !finalCmd.includes('-DskipTests')) {
+  const buildMavenCommandLine = (baseCmd: string) => {
+    let finalCmd = baseCmd;
+
+    // Custom Maven distribution
+    if (settings.mavenHomePath === 'custom' && settings.mavenCustomPath && !settings.mavenCustomPath.includes('nampa') && !settings.mavenCustomPath.includes('wrapper\\dists') && !settings.mavenCustomPath.includes('wrapper/dists')) {
+      const customExe = settings.mavenCustomPath.endsWith('.cmd') || settings.mavenCustomPath.endsWith('.exe') || settings.mavenCustomPath.endsWith('mvn')
+        ? settings.mavenCustomPath
+        : `${settings.mavenCustomPath.replace(/[/\\]+$/, '')}\\bin\\mvn.cmd`;
+      finalCmd = finalCmd.replace(/^mvn(\.cmd)?\b/, `"${customExe}"`);
+    }
+
+    // Global settings override
+    if (settings.mavenOverrideGlobalSettings && settings.mavenGlobalSettings && !finalCmd.includes('-gs ')) {
+      finalCmd += ` -gs "${settings.mavenGlobalSettings}"`;
+    }
+
+    // User settings override
+    if (settings.mavenOverrideUserSettings && settings.mavenUserSettings && !finalCmd.includes('-s ')) {
+      finalCmd += ` -s "${settings.mavenUserSettings}"`;
+    }
+
+    // Local repository override
+    if (settings.mavenOverrideLocalRepo && settings.mavenLocalRepo && !finalCmd.includes('-Dmaven.repo.local=')) {
+      finalCmd += ` -Dmaven.repo.local="${settings.mavenLocalRepo}"`;
+    }
+
+    // Skip Tests (-DskipTests)
+    if ((skipTests || settings.mavenSkipTests) && !finalCmd.includes('-DskipTests')) {
       finalCmd += ' -DskipTests';
     }
-    if (offlineMode && !finalCmd.includes('-o')) {
+
+    // Offline mode (-o)
+    if ((offlineMode || settings.mavenOfflineMode) && !finalCmd.includes('-o')) {
       finalCmd += ' -o';
     }
+
+    return finalCmd;
+  };
+
+  const handleRunGoal = (cmd: string, taskName: string) => {
+    const finalCmd = buildMavenCommandLine(cmd);
     onExecuteTask('maven', taskName, finalCmd);
     onShowToast?.('Maven Goal', `Running: ${finalCmd}`, 'info');
   };
 
+
   const handleCustomGoalSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!customGoalText.trim()) return;
-    let fullCmd = customGoalText.trim().startsWith('mvn') 
+    let rawCmd = customGoalText.trim().startsWith('mvn') 
       ? customGoalText.trim() 
       : `mvn ${customGoalText.trim()}`;
-    if (skipTests && !fullCmd.includes('-DskipTests')) {
-      fullCmd += ' -DskipTests';
-    }
-    if (offlineMode && !fullCmd.includes('-o')) {
-      fullCmd += ' -o';
-    }
+    const fullCmd = buildMavenCommandLine(rawCmd);
     onExecuteCustomGoal?.(fullCmd);
     onShowToast?.('Maven Goal', `Executing: ${fullCmd}`, 'info');
     setShowGoalInput(false);

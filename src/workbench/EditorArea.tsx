@@ -13,6 +13,7 @@ import { DatabaseTableGrid } from '../features/database/DatabaseTableGrid';
 import { RenameModal } from '../features/project/RenameModal';
 import { lspService, LspPosition } from '../services/lspService';
 import { SqlQueryConsole } from '../features/database/SqlQueryConsole';
+import { DiffEditorTab } from '../features/git/DiffEditorTab';
 
 import {
   X,
@@ -118,6 +119,9 @@ export interface EditorAreaProps {
 export type CodeEditorProps = EditorAreaProps;
 
 export const getTabIcon = (fileName: string, tab?: OpenTab) => {
+  if (tab?.tabType === 'diff') {
+    return <GitCommit size={13} className="text-[#3574F0] flex-shrink-0" />;
+  }
   if (tab?.tabType === 'db-table') {
     return <Table size={13} className="text-[#3574F0] flex-shrink-0" />;
   }
@@ -791,6 +795,15 @@ export const EditorArea = forwardRef<EditorAreaHandle, EditorAreaProps>(
                         initialDataSourceId={paneTab.dbMetadata?.dataSourceId}
                         initialQuery={paneTab.dbMetadata?.query}
                         onShowToast={onShowToast}
+                      />
+                    </div>
+                  ) : paneTab.tabType === 'diff' && paneTab.diffData ? (
+                    <div className="h-full overflow-hidden relative">
+                      <DiffEditorTab
+                        diffData={paneTab.diffData}
+                        projectPath={projectPath}
+                        onOpenFile={(fp) => onOpenFileAtLocation?.(fp, 1, 1)}
+                        onChangeLocal={(newContent) => onChangeContent(paneTab.id, newContent)}
                       />
                     </div>
                   ) : (

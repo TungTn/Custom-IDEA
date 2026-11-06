@@ -100,101 +100,85 @@ pub fn stop_all_processes() -> Result<(), String> {
   Ok(())
 }
 
-#[tauri::command]
-pub fn execute_build_command(command: String, args: Vec<String>, cwd: Option<String>) -> Result<BuildCommandResult, String> {
-  let work_dir = cwd.unwrap_or_else(|| ".".to_string());
-  let mut cmd = {
-    #[cfg(windows)]
-    {
-      let mut c = std::process::Command::new("cmd.exe");
-      c.arg("/d").arg("/c");
-      let mut full_cmd = command.clone();
-      for a in &args {
-        full_cmd.push(' ');
-        if a.contains(' ') {
-          full_cmd.push('"');
-          full_cmd.push_str(a);
-          full_cmd.push('"');
-        } else {
-          full_cmd.push_str(a);
-        }
-      }
-      c.arg(&full_cmd);
-      c.creation_flags(0x08000000);
-      c
+fn expand_home_path(s: &str) -> String {
+  if s.starts_with('~') {
+    if let Ok(home) = std::env::var("USERPROFILE").or_else(|_| std::env::var("HOME")) {
+      return format!("{}{}", home, &s[1..]);
     }
-    #[cfg(not(windows))]
-    {
-      let mut c = std::process::Command::new(&command);
-      c.args(&args);
-      c
-    }
-  };
-  cmd.current_dir(&work_dir);
-  let output = cmd.output().map_err(|e| format!("Failed to run build command '{}': {}", command, e))?;
-  Ok(BuildCommandResult {
-    stdout: String::from_utf8_lossy(&output.stdout).to_string(),
-    stderr: String::from_utf8_lossy(&output.stderr).to_string(),
-    exit_code: output.status.code().unwrap_or(-1),
-  })
+  }
+  s.to_string()
 }
 
-#[tauri::command]
-pub fn start_process(
-  app: tauri::AppHandle,
-  run_id: String,
-  command: String,
-  args: Vec<String>,
-  cwd: Option<String>,
-  env_vars: Option<HashMap<String, String>>,
-) -> Result<(), String> {
-  let _ = stop_all_processes();
+fn resolve_executable_path(command: &str, work_dir: &str) -> String {
+  let expanded = expand_home_path(command);
+  let clean = if (expanded.starts_with('"') && expanded.ends_with('"')) 
+    || (expanded.starts_with('\'') && expanded.ends_with('\'')) {
+    &expanded[1..expanded.len() - 1]
+  } else {
+    &expanded
+  };
 
-  let work_dir = cwd.unwrap_or_else(|| ".".to_string());
-
-  #[cfg(windows)]
-  let mut cmd = {
-    let mut c = Command::new("cmd.exe");
-    c.arg("/d").arg("/c");
-    let mut full_cmd = command.clone();
-    for a in &args {
-      full_cmd.push(' ');
-      if a.contains(' ') {
-        full_cmd.push('"');
-        full_cmd.push_str(a);
-        full_cmd.push('"');
-      } else {
-        full_cmd.push_str(a);
+  // If clean command contains directory separators, test if that specific binary exists
+  if clean.contains('\\') || clean.contains('/') {
+    let p = std::path::Path::new(clean);
+    if !p.exists() {
+      // Path does not exist on this machine! Fallback to project wrapper or system executable
+      let lower = clean.to_lowercase();
+      if lower.contains("mvn") {
+        #[cfg(windows)]
+        let wrapper = "mvnw.cmd";
+        #[cfg(not(windows))]
+        let wrapper = "mvnw";
+        let wrapper_path = std::path::Path::new(work_dir).join(wrapper);
+        if wrapper_path.exists() {
+          return wrapper_path.to_string_lossy().to_string();
+        }
+        return "mvn".to_string();
+      } else if lower.contains("gradle") {
+        #[cfg(windows)]
+        let wrapper = "gradlew.bat";
+        #[cfg(not(windows))]
+        let wrapper = "gradlew";
+        let wrapper_path = std::path::Path::new(work_dir).join(wrapper);
+        if wrapper_path.exists() {
+          return wrapper_path.to_string_lossy().to_string();
+        }
+        return "gradle".to_string();
       }
     }
-    c.arg(&full_cmd);
-    c.creation_flags(0x08000000);
-    c
-  };
-
-  #[cfg(not(windows))]
-  let mut cmd = {
-    let mut c = Command::new(&command);
-    c.args(&args);
-    c
-  };
-
-  if let Some(ref envs) = env_vars {
-    for (k, v) in envs {
-      cmd.env(k, v);
+  } else {
+    // Command is just "mvn" or "mvn.cmd"
+    let lower = clean.to_lowercase();
+    if lower == "mvn" || lower == "mvn.cmd" {
+      #[cfg(windows)]
+      let wrapper = "mvnw.cmd";
+      #[cfg(not(windows))]
+      let wrapper = "mvnw";
+      let wrapper_path = std::path::Path::new(work_dir).join(wrapper);
+      if wrapper_path.exists() {
+        return wrapper_path.to_string_lossy().to_string();
+      }
     }
   }
 
-  // Optimize JVM memory footprint if not explicitly specified by user configuration
+  expanded
+}
+
+fn ensure_valid_jvm_environment(
+  cmd: &mut std::process::Command,
+  command: &str,
+  args: &[String],
+  env_vars: Option<&HashMap<String, String>>,
+) {
   let is_java_cmd = command.to_lowercase().contains("java") 
     || command.to_lowercase().contains("mvn") 
     || command.to_lowercase().contains("gradle")
     || args.iter().any(|a| a.contains("bootRun") || a.contains("spring-boot") || a.ends_with(".jar"));
-  
+
   if is_java_cmd {
     let mut has_java_opts = false;
     let mut has_maven_opts = false;
-    if let Some(ref envs) = env_vars {
+    if let Some(envs) = env_vars {
       if envs.contains_key("JAVA_TOOL_OPTIONS") {
         has_java_opts = true;
       }
@@ -203,7 +187,6 @@ pub fn start_process(
       }
     }
     if !has_java_opts {
-      // Dev Profile: 1024MB heap for multi-file compilation (e.g. 680+ files), 512k stack, 384MB Metaspace
       cmd.env("JAVA_TOOL_OPTIONS", "-Xms128m -Xmx1024m -Xss512k -XX:TieredStopAtLevel=1 -XX:MaxMetaspaceSize=384m -XX:ReservedCodeCacheSize=128m");
     }
     if !has_maven_opts && command.to_lowercase().contains("mvn") {
@@ -212,17 +195,22 @@ pub fn start_process(
 
     // Ensure valid JAVA_HOME is passed to Maven/Gradle
     let mut current_jh_valid = false;
-    if let Some(ref envs) = env_vars {
+    if let Some(envs) = env_vars {
       if let Some(jh) = envs.get("JAVA_HOME") {
-        if std::path::Path::new(jh).join("bin").join("java.exe").exists() || std::path::Path::new(jh).join("bin").join("java").exists() {
+        let expanded_jh = expand_home_path(jh);
+        let p = std::path::Path::new(&expanded_jh);
+        if p.join("bin").join("java.exe").exists() || p.join("bin").join("java").exists() {
           current_jh_valid = true;
+          cmd.env("JAVA_HOME", &expanded_jh);
         }
       }
     }
     if !current_jh_valid {
       if let Ok(jh) = std::env::var("JAVA_HOME") {
-        if std::path::Path::new(&jh).join("bin").join("java.exe").exists() || std::path::Path::new(&jh).join("bin").join("java").exists() {
+        let p = std::path::Path::new(&jh);
+        if p.join("bin").join("java.exe").exists() || p.join("bin").join("java").exists() {
           current_jh_valid = true;
+          cmd.env("JAVA_HOME", &jh);
         }
       }
     }
@@ -244,6 +232,117 @@ pub fn start_process(
       }
     }
   }
+}
+
+#[tauri::command]
+pub fn execute_build_command(
+  command: String, 
+  args: Vec<String>, 
+  cwd: Option<String>,
+  env_vars: Option<HashMap<String, String>>,
+) -> Result<BuildCommandResult, String> {
+  let work_dir = expand_home_path(&cwd.unwrap_or_else(|| ".".to_string()));
+  let resolved_command = resolve_executable_path(&command, &work_dir);
+
+  let mut cmd = {
+    #[cfg(windows)]
+    {
+      let mut c = std::process::Command::new("cmd.exe");
+      c.arg("/d").arg("/c");
+      let mut full_cmd = if resolved_command.contains(' ') && !resolved_command.starts_with('"') {
+        format!("\"{}\"", resolved_command)
+      } else {
+        resolved_command.clone()
+      };
+      for a in &args {
+        full_cmd.push(' ');
+        if a.contains(' ') && !a.starts_with('"') {
+          full_cmd.push('"');
+          full_cmd.push_str(a);
+          full_cmd.push('"');
+        } else {
+          full_cmd.push_str(a);
+        }
+      }
+      c.arg(&full_cmd);
+      c.creation_flags(0x08000000);
+      c
+    }
+    #[cfg(not(windows))]
+    {
+      let mut c = std::process::Command::new(&resolved_command);
+      c.args(&args);
+      c
+    }
+  };
+  cmd.current_dir(&work_dir);
+  if let Some(ref envs) = env_vars {
+    for (k, v) in envs {
+      cmd.env(k, expand_home_path(v));
+    }
+  }
+  ensure_valid_jvm_environment(&mut cmd, &resolved_command, &args, env_vars.as_ref());
+
+  let output = cmd.output().map_err(|e| format!("Failed to run build command '{}': {}", command, e))?;
+  Ok(BuildCommandResult {
+    stdout: String::from_utf8_lossy(&output.stdout).to_string(),
+    stderr: String::from_utf8_lossy(&output.stderr).to_string(),
+    exit_code: output.status.code().unwrap_or(-1),
+  })
+}
+
+#[tauri::command]
+pub fn start_process(
+  app: tauri::AppHandle,
+  run_id: String,
+  command: String,
+  args: Vec<String>,
+  cwd: Option<String>,
+  env_vars: Option<HashMap<String, String>>,
+) -> Result<(), String> {
+  let _ = stop_all_processes();
+
+  let work_dir = expand_home_path(&cwd.unwrap_or_else(|| ".".to_string()));
+  let resolved_command = resolve_executable_path(&command, &work_dir);
+
+  #[cfg(windows)]
+  let mut cmd = {
+    let mut c = Command::new("cmd.exe");
+    c.arg("/d").arg("/c");
+    let mut full_cmd = if resolved_command.contains(' ') && !resolved_command.starts_with('"') {
+      format!("\"{}\"", resolved_command)
+    } else {
+      resolved_command.clone()
+    };
+    for a in &args {
+      full_cmd.push(' ');
+      if a.contains(' ') && !a.starts_with('"') {
+        full_cmd.push('"');
+        full_cmd.push_str(a);
+        full_cmd.push('"');
+      } else {
+        full_cmd.push_str(a);
+      }
+    }
+    c.arg(&full_cmd);
+    c.creation_flags(0x08000000);
+    c
+  };
+
+  #[cfg(not(windows))]
+  let mut cmd = {
+    let mut c = Command::new(&resolved_command);
+    c.args(&args);
+    c
+  };
+
+  if let Some(ref envs) = env_vars {
+    for (k, v) in envs {
+      cmd.env(k, expand_home_path(v));
+    }
+  }
+
+  ensure_valid_jvm_environment(&mut cmd, &resolved_command, &args, env_vars.as_ref());
 
   cmd.current_dir(&work_dir);
   cmd.stdout(Stdio::piped());

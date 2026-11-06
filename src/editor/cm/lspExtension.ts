@@ -48,13 +48,18 @@ import { getLiveTemplateCompletions } from './snippetEngine';
 import { getPostfixCompletions } from './postfixEngine';
 
 // Common programming language keywords to ignore for Go to Definition & Underline
+// Common programming language keywords to ignore for Go to Definition & Underline
 const IGNORED_KEYWORDS = new Set([
   'if', 'else', 'for', 'while', 'do', 'switch', 'case', 'break', 'continue',
   'return', 'function', 'class', 'const', 'let', 'var', 'import', 'from',
-  'export', 'default', 'async', 'await', 'try', 'catch', 'finally', 'throw',
+  'export', 'default', 'async', 'await', 'try', 'catch', 'finally', 'throw', 'throws',
   'new', 'typeof', 'instanceof', 'in', 'of', 'null', 'undefined', 'true',
   'false', 'this', 'super', 'interface', 'type', 'enum', 'pub', 'fn', 'struct',
-  'impl', 'mut', 'use', 'mod', 'crate', 'self', 'void', 'int', 'string', 'boolean'
+  'impl', 'mut', 'use', 'mod', 'crate', 'self', 'void', 'int', 'long', 'double', 'float',
+  'boolean', 'char', 'byte', 'short', 'string', 'public', 'private', 'protected',
+  'static', 'final', 'abstract', 'synchronized', 'volatile', 'transient', 'native',
+  'package', 'extends', 'implements', 'def', 'elif', 'pass', 'lambda', 'with', 'as',
+  'yield', 'func', 'go', 'select', 'chan', 'defer'
 ]);
 
 // Browser & JavaScript built-in globals that should not trigger arbitrary project symbol search
@@ -426,7 +431,7 @@ export const ctrlLinkField = StateField.define<DecorationSet>({
  * - const { foo } = require('path')
  */
 export function findImportSourceForSymbol(docText: string, sym: string): string | null {
-  const escaped = sym.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const escaped = sym.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&');
 
   // 1. Named imports: import { ... sym ... } from '...' (supports multiline)
   const namedRegex = new RegExp(
@@ -468,18 +473,75 @@ export function findImportSourceForSymbol(docText: string, sym: string): string 
   const defReqMatch = defaultReqRegex.exec(docText);
   if (defReqMatch) return defReqMatch[1];
 
+  // 6. Python: from module import ... sym ...
+  const pyFromRegex = new RegExp(
+    `^\\s*from\\s+([\\w.]+)\\s+import\\s+[^\\n]*\\b${escaped}\\b`,
+    'm'
+  );
+  const pyFromMatch = pyFromRegex.exec(docText);
+  if (pyFromMatch) return pyFromMatch[1];
+
+  // 7. Java import: import pkg.subpkg.Class or import static pkg.Class.sym;
+  const javaImportRegex = new RegExp(
+    `^\\s*import\\s+(?:static\\s+)?([\\w.]+)\\.${escaped}\\s*;`,
+    'm'
+  );
+  const javaMatch = javaImportRegex.exec(docText);
+  if (javaMatch) return javaMatch[1] + '.' + sym;
+
   return null;
 }
 
 /**
- * Searches a file's content for the definition line of the symbol.
+ * Searches a file's content for the definition line of the symbol across all programming languages.
+ * Handles Java, Kotlin, C#, TypeScript, JavaScript, Python, Rust, Go, C/C++, PHP, etc.
  */
 export function findSymbolLineInFile(content: string, sym: string): { line: number; col: number } | null {
   const lines = content.split('\n');
-  const escaped = sym.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const escaped = sym.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&');
 
-  // Priority 1: export (async) function / const / let / var / class / interface / type / enum
-  const exportPattern = new RegExp(`^\\s*export\\s+(?:async\\s+)?(?:function\\*?|const|let|var|class|interface|type|enum)\\s+${escaped}\\b`);
+  // Priority 1: Java / C# / C++ Field / Constant declaration (e.g., public static final int TAX_CODE_LENGTH_14 = 14;)
+  const javaFieldPattern = new RegExp(
+    `^\\s*(?:(?:public|protected|private|static|final|readonly|const|volatile|transient)\\s+)*[\\w<>,\\\\[\\\\]]+\\s+${escaped}\\s*(?:=|;)`
+  );
+  for (let i = 0; i < lines.length; i++) {
+    if (javaFieldPattern.test(lines[i])) {
+      const col = lines[i].indexOf(sym) + 1;
+      return { line: i + 1, col: Math.max(1, col) };
+    }
+  }
+
+  // Priority 2: Methods & Functions across languages (Java, TS, JS, Rust, Go, Python, C++)
+  // e.g. public void validate(), def validate(), fn validate(), func validate()
+  const methodPatterns = [
+    new RegExp(`^\\s*(?:(?:public|protected|private|static|final|abstract|synchronized|async|export)\\s+)*(?:[\\w<>,\\\\[\\\\]]+\\s+)?${escaped}\\s*\\(`),
+    new RegExp(`^\\s*(?:def|fn|func|function)\\s+(?:\\([^)]*\\)\\s+)?${escaped}\\b`),
+    new RegExp(`^\\s*(?:async\\s+)?${escaped}\\s*\\(`),
+  ];
+  for (const pat of methodPatterns) {
+    for (let i = 0; i < lines.length; i++) {
+      if (pat.test(lines[i])) {
+        const col = lines[i].indexOf(sym) + 1;
+        return { line: i + 1, col: Math.max(1, col) };
+      }
+    }
+  }
+
+  // Priority 3: Class / Interface / Enum / Record / Struct / Trait declaration
+  const typePattern = new RegExp(
+    `\\b(?:class|interface|enum|record|struct|trait|type)\\s+${escaped}\\b`
+  );
+  for (let i = 0; i < lines.length; i++) {
+    if (typePattern.test(lines[i])) {
+      const col = lines[i].indexOf(sym) + 1;
+      return { line: i + 1, col: Math.max(1, col) };
+    }
+  }
+
+  // Priority 4: JS/TS export const / let / var / function
+  const exportPattern = new RegExp(
+    `^\\s*export\\s+(?:default\\s+)?(?:async\\s+)?(?:function\\*?|const|let|var|class|interface|type|enum)\\s+${escaped}\\b`
+  );
   for (let i = 0; i < lines.length; i++) {
     if (exportPattern.test(lines[i])) {
       const col = lines[i].indexOf(sym) + 1;
@@ -487,25 +549,18 @@ export function findSymbolLineInFile(content: string, sym: string): { line: numb
     }
   }
 
-  // Priority 2: regular declaration (function / const / let / class / fn / pub fn)
-  const defPattern = new RegExp(`^\\s*(?:async\\s+)?(?:function\\*?|const|let|var|class|interface|type|enum|fn|pub\\s+fn)\\s+${escaped}\\b`);
+  // Priority 5: Python / JS variable or constant assignment (e.g. TAX_CODE = ... or const TAX_CODE =)
+  const assignPattern = new RegExp(
+    `^\\s*(?:const|let|var\\s+)?${escaped}\\s*[:=]`
+  );
   for (let i = 0; i < lines.length; i++) {
-    if (defPattern.test(lines[i])) {
+    if (assignPattern.test(lines[i])) {
       const col = lines[i].indexOf(sym) + 1;
       return { line: i + 1, col: Math.max(1, col) };
     }
   }
 
-  // Priority 3: export default function sym / export default sym
-  const exportDefaultPattern = new RegExp(`^\\s*export\\s+default\\s+(?:(?:async\\s+)?function\\s+)?${escaped}\\b`);
-  for (let i = 0; i < lines.length; i++) {
-    if (exportDefaultPattern.test(lines[i])) {
-      const col = lines[i].indexOf(sym) + 1;
-      return { line: i + 1, col: Math.max(1, col) };
-    }
-  }
-
-  // Priority 4: export { ... sym ... }
+  // Priority 6: export { ... sym ... }
   const exportListPattern = new RegExp(`^\\s*export\\s*\\{[^}]*\\b${escaped}\\b`);
   for (let i = 0; i < lines.length; i++) {
     if (exportListPattern.test(lines[i])) {
@@ -514,10 +569,10 @@ export function findSymbolLineInFile(content: string, sym: string): { line: numb
     }
   }
 
-  // Priority 5: object method / function property (e.g. sym() { or sym: () => or sym: function)
-  const methodPattern = new RegExp(`^\\s*(?:async\\s+)?${escaped}\\s*\\(`);
+  // Priority 7: General word match fallback (first whole-word occurrence)
+  const fallbackPattern = new RegExp(`\\b${escaped}\\b`);
   for (let i = 0; i < lines.length; i++) {
-    if (methodPattern.test(lines[i])) {
+    if (fallbackPattern.test(lines[i])) {
       const col = lines[i].indexOf(sym) + 1;
       return { line: i + 1, col: Math.max(1, col) };
     }
@@ -536,12 +591,19 @@ export function findLocalDefinitionInDoc(
   currentHeadPos: number
 ): { line: number; col: number } | null {
   const currentLine = doc.lineAt(currentHeadPos).number;
-  const escaped = sym.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const escaped = sym.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&');
 
   const patterns = [
-    new RegExp(`(?:export\\s+)?(?:async\\s+)?(?:function\\*?|const|let|var|class|interface|type|enum|struct|fn|trait)\\s+${escaped}\\b`),
-    new RegExp(`^\\s*(?:async\\s+)?${escaped}\\s*\\([^)]*\\)\\s*\\{`),
-    new RegExp(`^\\s*${escaped}\\s*[:=]\\s*(?:async\\s*)?(?:function|\\([^)]*\\)\\s*=>|\\w+\\s*=>)`),
+    // Java/C#/C++ field
+    new RegExp(`^\\s*(?:(?:public|protected|private|static|final|readonly|const)\\s+)*[\\w<>,\\\\[\\\\]]+\\s+${escaped}\\s*(?:=|;)`),
+    // Methods / Functions
+    new RegExp(`^\\s*(?:(?:public|protected|private|static|final|abstract|synchronized|async|export)\\s+)*(?:[\\w<>,\\\\[\\\\]]+\\s+)?${escaped}\\s*\\(`),
+    new RegExp(`^\\s*(?:def|fn|func|function)\\s+(?:\\([^)]*\\)\\s+)?${escaped}\\b`),
+    // Types
+    new RegExp(`\\b(?:class|interface|enum|record|struct|trait|type)\\s+${escaped}\\b`),
+    // JS/TS declarations
+    new RegExp(`(?:export\\s+)?(?:async\\s+)?(?:function\\*?|const|let|var)\\s+${escaped}\\b`),
+    new RegExp(`^\\s*${escaped}\\s*[:=]`),
   ];
 
   for (const pattern of patterns) {
@@ -583,7 +645,7 @@ export async function triggerGoToDefinition(
     }
   }
 
-  // 2. LSP Go to Definition
+  // 2. LSP Go to Definition (if language server is available)
   try {
     const locations: any = await lspService.getDefinition(filePath, {
       line: line.number - 1,
@@ -598,16 +660,17 @@ export async function triggerGoToDefinition(
       return true;
     }
   } catch (err: any) {
-    console.warn('LSP Go to Definition error:', err);
+    // Continue with universal heuristics
   }
 
-  // 3. Word / Symbol Resolution
+  // 3. Universal Word / Symbol Resolution
   const word = view.state.wordAt(head);
   if (word && word.from < word.to) {
     const sym = view.state.sliceDoc(word.from, word.to);
     const docText = view.state.doc.toString();
+    const lineText = line.text;
 
-    // Ignore programming language keywords (if, return, const, etc.)
+    // Ignore core programming language keywords
     if (IGNORED_KEYWORDS.has(sym)) {
       return false;
     }
@@ -619,12 +682,97 @@ export async function triggerGoToDefinition(
       return true;
     }
 
-    // If it's a built-in browser/JS global (window, document, console, etc.) with no local declaration, do not navigate
+    // If it's a built-in browser/JS global with no local declaration, do not navigate
     if (BUILTIN_GLOBALS.has(sym)) {
       return false;
     }
 
-    // 3b. Search import statements in current file to trace across files
+    const isTauri = typeof window !== 'undefined' && ('__TAURI_INTERNALS__' in window || '__TAURI__' in window);
+
+    // 3b. Qualified Member Access check (e.g. Constant.TAX_CODE_LENGTH_14 or Class::MEMBER)
+    // When clicking TAX_CODE_LENGTH_14, check if there is a Qualifier before it!
+    const textBeforeWord = lineText.slice(0, word.from - line.from);
+    const qualifierMatch = textBeforeWord.match(/([A-Za-z0-9_$]+)(?:\.|::)$/);
+    const qualifier = qualifierMatch ? qualifierMatch[1] : null;
+
+    if (qualifier && projectPath && isTauri) {
+      try {
+        // Find files matching qualifier name (e.g. Constant.java, Constant.ts)
+        const fileMatches = await invoke<any[]>('search_project_files', {
+          projectPath,
+          query: qualifier,
+          limit: 10,
+        });
+
+        if (fileMatches && fileMatches.length > 0) {
+          // Find file whose filename without extension matches qualifier exactly
+          const targetFile = fileMatches.find((f: any) => {
+            if (f.is_folder) return false;
+            const baseName = (f.name || '').replace(/\.[^/.]+$/, '');
+            return baseName.toLowerCase() === qualifier.toLowerCase();
+          });
+
+          if (targetFile && targetFile.path) {
+            let targetLine = 1;
+            let targetCol = 1;
+            try {
+              const fileContent = await invoke<string>('read_file_content', { path: targetFile.path });
+              if (fileContent) {
+                const found = findSymbolLineInFile(fileContent, sym);
+                if (found) {
+                  targetLine = found.line;
+                  targetCol = found.col;
+                }
+              }
+            } catch (readErr) {
+              console.warn('Failed to read qualified target file content:', readErr);
+            }
+
+            onNavigate?.(targetFile.path, targetLine, targetCol);
+            return true;
+          }
+        }
+      } catch (qualifierErr) {
+        console.warn('Qualified member resolution error:', qualifierErr);
+      }
+    }
+
+    // 3c. Direct Import Statement Line Check:
+    // If clicking on an import line (e.g. import com.ins.vn.util.Constant;)
+    if (/^\s*import\s+/i.test(lineText) && projectPath && isTauri) {
+      try {
+        const fileMatches = await invoke<any[]>('search_project_files', {
+          projectPath,
+          query: sym,
+          limit: 10,
+        });
+        const targetFile = fileMatches?.find((f: any) => {
+          if (f.is_folder) return false;
+          const baseName = (f.name || '').replace(/\.[^/.]+$/, '');
+          return baseName.toLowerCase() === sym.toLowerCase();
+        });
+        if (targetFile && targetFile.path) {
+          let targetLine = 1;
+          let targetCol = 1;
+          try {
+            const fileContent = await invoke<string>('read_file_content', { path: targetFile.path });
+            if (fileContent) {
+              const found = findSymbolLineInFile(fileContent, sym);
+              if (found) {
+                targetLine = found.line;
+                targetCol = found.col;
+              }
+            }
+          } catch {}
+          onNavigate?.(targetFile.path, targetLine, targetCol);
+          return true;
+        }
+      } catch (impLineErr) {
+        console.warn('Import line resolution error:', impLineErr);
+      }
+    }
+
+    // 3d. Search import statements in current file to trace across files (JS/TS/Python)
     const importSource = findImportSourceForSymbol(docText, sym);
     if (importSource) {
       try {
@@ -633,7 +781,7 @@ export async function triggerGoToDefinition(
           let targetLine = 1;
           let targetCol = 1;
 
-          if (typeof window !== 'undefined' && ('__TAURI_INTERNALS__' in window || '__TAURI__' in window)) {
+          if (isTauri) {
             try {
               const fileContent = await invoke<string>('read_file_content', { path: resolvedTarget });
               if (fileContent) {
@@ -656,9 +804,43 @@ export async function triggerGoToDefinition(
       }
     }
 
-    // 3c. Fallback to ide-index Rust symbol search across project
-    // CRITICAL: MUST be an exact match on symbol name! Never fallback to fuzzy partial match!
-    if (projectPath && typeof window !== 'undefined' && ('__TAURI_INTERNALS__' in window || '__TAURI__' in window)) {
+    // 3e. Direct Class / Component / File Resolution by Name:
+    // If symbol starts with uppercase (PascalCase like Constant, AppUtils, UserEntity, HeaderComponent)
+    if (/^[A-Z][a-zA-Z0-9_$]*$/.test(sym) && projectPath && isTauri) {
+      try {
+        const fileMatches = await invoke<any[]>('search_project_files', {
+          projectPath,
+          query: sym,
+          limit: 15,
+        });
+        const matchedFile = fileMatches?.find((f: any) => {
+          if (f.is_folder) return false;
+          const baseName = (f.name || '').replace(/\.[^/.]+$/, '');
+          return baseName.toLowerCase() === sym.toLowerCase();
+        });
+        if (matchedFile && matchedFile.path) {
+          let targetLine = 1;
+          let targetCol = 1;
+          try {
+            const fileContent = await invoke<string>('read_file_content', { path: matchedFile.path });
+            if (fileContent) {
+              const found = findSymbolLineInFile(fileContent, sym);
+              if (found) {
+                targetLine = found.line;
+                targetCol = found.col;
+              }
+            }
+          } catch {}
+          onNavigate?.(matchedFile.path, targetLine, targetCol);
+          return true;
+        }
+      } catch (clsErr) {
+        console.warn('Class by name resolution error:', clsErr);
+      }
+    }
+
+    // 3f. Project Index Symbol Search (Exact match via Rust ide-index)
+    if (projectPath && isTauri) {
       try {
         const results = await invoke<any[]>('search_project_index', {
           projectPath,
@@ -681,6 +863,47 @@ export async function triggerGoToDefinition(
         }
       } catch (idxErr) {
         console.warn('Index symbol search fallback error:', idxErr);
+      }
+    }
+
+    // 3g. High-speed Ripgrep Text Search across project as ultimate fallback
+    // Looks for lines declaring this symbol (public ... sym, def sym, fn sym, const sym =)
+    if (projectPath && isTauri) {
+      try {
+        const textMatches = await invoke<any[]>('search_project_text', {
+          projectPath,
+          query: sym,
+          caseSensitive: true,
+          limit: 40,
+        });
+
+        if (textMatches && textMatches.length > 0) {
+          // Score matches: prefer declaration lines in files other than current position
+          const scored = textMatches
+            .filter((m: any) => {
+              if (m.file_path === filePath && m.line_number === line.number) return false;
+              return true;
+            })
+            .map((m: any) => {
+              let score = 0;
+              const content = m.line_content || '';
+              // Strong indicator of definition
+              if (/\b(class|interface|enum|record|struct|trait)\s+/i.test(content)) score += 50;
+              if (/\b(public|protected|private|static|final|readonly|const)\s+/i.test(content)) score += 40;
+              if (/\b(def|fn|func|function)\s+/i.test(content)) score += 40;
+              if (/[:=]/.test(content)) score += 20;
+              return { ...m, score };
+            })
+            .sort((a, b) => b.score - a.score);
+
+          if (scored.length > 0 && scored[0].score >= 20) {
+            const best = scored[0];
+            onNavigate?.(best.file_path, best.line_number, (best.match_start || 0) + 1);
+            return true;
+          }
+        }
+      } catch (searchErr) {
+        console.warn('Project text search fallback error:', searchErr);
       }
     }
   }

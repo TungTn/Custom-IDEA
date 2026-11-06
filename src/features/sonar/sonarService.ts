@@ -38,7 +38,85 @@ export interface SonarRemoteIssue {
   status: string;
 }
 
+export interface SonarConnection {
+  id: string;
+  name: string;
+  serverUrl: string;
+  token: string;
+}
+
+export interface SonarProjectBinding {
+  bindEnabled: boolean;
+  connectionId: string;
+  projectKey: string;
+  fileExclusions?: string[];
+}
+
 const STORAGE_KEY = 'intellij_sonarqube_config';
+const CONNECTIONS_STORAGE_KEY = 'intellij_sonarqube_connections';
+const BINDING_STORAGE_KEY = 'intellij_sonarqube_binding';
+
+export const getSavedSonarConnections = (): SonarConnection[] => {
+  try {
+    const raw = localStorage.getItem(CONNECTIONS_STORAGE_KEY);
+    if (raw) return JSON.parse(raw);
+  } catch (e) {
+    console.error('Failed to read Sonar connections:', e);
+  }
+  // Default connection derived from legacy config or standard fallback
+  const legacy = getSavedSonarConfig();
+  return [
+    {
+      id: 'conn-sonar-1',
+      name: 'Sonar',
+      serverUrl: legacy.serverUrl || 'https://sonar-dev-bpm.mic.vn',
+      token: legacy.token || '',
+    },
+  ];
+};
+
+export const saveSonarConnections = (conns: SonarConnection[]) => {
+  try {
+    localStorage.setItem(CONNECTIONS_STORAGE_KEY, JSON.stringify(conns));
+  } catch (e) {
+    console.error('Failed to save Sonar connections:', e);
+  }
+};
+
+export const getSavedSonarBinding = (): SonarProjectBinding => {
+  try {
+    const raw = localStorage.getItem(BINDING_STORAGE_KEY);
+    if (raw) return JSON.parse(raw);
+  } catch (e) {
+    console.error('Failed to read Sonar project binding:', e);
+  }
+  const conns = getSavedSonarConnections();
+  const legacy = getSavedSonarConfig();
+  return {
+    bindEnabled: true,
+    connectionId: conns[0]?.id || 'conn-sonar-1',
+    projectKey: legacy.projectKey || 'mic-fe-personal-pre',
+    fileExclusions: ['**/*.test.ts', '**/*.spec.ts', 'target/**', 'dist/**', 'node_modules/**'],
+  };
+};
+
+export const saveSonarBinding = (binding: SonarProjectBinding) => {
+  try {
+    localStorage.setItem(BINDING_STORAGE_KEY, JSON.stringify(binding));
+    // Also sync to legacy config so existing scanner calls continue to work
+    const conns = getSavedSonarConnections();
+    const activeConn = conns.find((c) => c.id === binding.connectionId) || conns[0];
+    if (activeConn) {
+      saveSonarConfig({
+        serverUrl: activeConn.serverUrl,
+        projectKey: binding.projectKey,
+        token: activeConn.token,
+      });
+    }
+  } catch (e) {
+    console.error('Failed to save Sonar project binding:', e);
+  }
+};
 
 export const getSavedSonarConfig = (): SonarServerConfig => {
   try {
@@ -49,7 +127,7 @@ export const getSavedSonarConfig = (): SonarServerConfig => {
   }
   return {
     serverUrl: 'https://sonar-dev-bpm.mic.vn',
-    projectKey: 'mic-vehicles',
+    projectKey: 'mic-fe-personal-pre',
     token: '',
   };
 };
@@ -150,6 +228,32 @@ export async function fetchSonarIssues(
     throw new Error('SonarQube authentication failed (HTTP 401). Please provide a valid User Token.');
   }
   throw new Error(`Failed to fetch issues (HTTP ${res.status}): ${res.body}`);
+}
+
+/**
+ * Searches for projects on the SonarQube server
+ */
+export async function searchSonarProjects(
+  serverUrl: string,
+  token?: string,
+  query?: string
+): Promise<Array<{ key: string; name: string }>> {
+  const q = query ? `&q=${encodeURIComponent(query)}` : '';
+  const url = `${serverUrl.replace(/\/+$/, '')}/api/components/search?qualifiers=TRK${q}&ps=50`;
+  const headers: Record<string, string> = {};
+  if (token) {
+    headers['Authorization'] = `Basic ${btoa(token + ':')}`;
+  }
+  try {
+    const res = await executeHttpRequest('GET', url, headers);
+    if (res.status === 200) {
+      const json = JSON.parse(res.body);
+      return (json.components || []).map((c: any) => ({ key: c.key, name: c.name || c.key }));
+    }
+  } catch (e) {
+    console.warn('Failed to search SonarQube projects:', e);
+  }
+  return [];
 }
 
 /**

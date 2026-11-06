@@ -514,7 +514,12 @@ export function useMenuDispatcher({
         }
         break;
       case 'view.toggleCommit':
-        setIsCommitOpen(true);
+        if (activeSideTab === 'commit' && isSideBarOpen) {
+          setIsSideBarOpen(false);
+        } else {
+          setActiveSideTab('commit');
+          setIsSideBarOpen(true);
+        }
         break;
       case 'view.toggleRun':
         setBottomTab('run');

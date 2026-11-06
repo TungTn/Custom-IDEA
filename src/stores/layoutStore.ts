@@ -30,7 +30,7 @@ export interface LayoutState {
 export const useLayoutStore = create<LayoutState>((set) => ({
   activeSideTab: 'project',
   isSideBarOpen: true,
-  sideBarWidth: 260,
+  sideBarWidth: 320,
   activeRightPanel: null,
   bottomTab: 'run',
   isBottomOpen: true,

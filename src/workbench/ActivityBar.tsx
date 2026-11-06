@@ -44,6 +44,16 @@ export const IjProjectIcon: React.FC<{ isActive?: boolean; className?: string }>
   </svg>
 );
 
+// 1b. Commit Icon (IntelliJ Blue Accent commit node with vertical graph stem)
+export const IjCommitIcon: React.FC<{ isActive?: boolean; className?: string }> = ({ isActive, className = '' }) => (
+  <svg width="18" height="18" viewBox="0 0 20 20" fill="none" className={className} xmlns="http://www.w3.org/2000/svg">
+    <path d="M10 2.5V7M10 13V17.5" stroke="#3574F0" strokeWidth="1.6" strokeLinecap="round" />
+    <circle cx="10" cy="10" r="3.2" stroke="#3574F0" strokeWidth="1.6" fill={isActive ? "#3574F0" : "transparent"} />
+    {isActive && <circle cx="10" cy="10" r="1.5" fill="#FFFFFF" />}
+  </svg>
+);
+
+
 // 2. Structure / Compass Icon (IntelliJ Yellow Accent)
 export const IjStructureIcon: React.FC<{ className?: string }> = ({ className = '' }) => (
   <svg width="18" height="18" viewBox="0 0 20 20" fill="none" className={className} xmlns="http://www.w3.org/2000/svg">
@@ -53,22 +63,28 @@ export const IjStructureIcon: React.FC<{ className?: string }> = ({ className = 
   </svg>
 );
 
-// 3. SonarQube Icon (IntelliJ Cyan Wave with Green Status Dot)
+// 3. SonarQube Official Logo (3 concentric wave arcs #4B9FD5)
 export const IjSonarIcon: React.FC<{ className?: string }> = ({ className = '' }) => (
   <svg width="18" height="18" viewBox="0 0 20 20" fill="none" className={className} xmlns="http://www.w3.org/2000/svg">
     <path
-      d="M3 13C4.5 13 5.5 11 7 11C8.5 11 9.5 13 11 13C12.5 13 13.5 11 15 11C16.5 11 17 12 17.5 12.5"
-      stroke="#00A3E0"
-      strokeWidth="1.75"
+      d="M4 16C4 9.92487 8.92487 5 15 5"
+      stroke="#4B9FD5"
+      strokeWidth="2"
       strokeLinecap="round"
     />
     <path
-      d="M3 8C4.5 8 5.5 6 7 6C8.5 6 9.5 8 11 8C12.5 8 13.5 6 15 6C16.5 6 17 7 17.5 7.5"
-      stroke="#00A3E0"
-      strokeWidth="1.75"
+      d="M4 16C4 12.6863 6.68629 10 10 10"
+      stroke="#4B9FD5"
+      strokeWidth="2"
       strokeLinecap="round"
     />
-    <circle cx="15.5" cy="5.5" r="2" fill="#59A869" />
+    <path
+      d="M4 16C4 14.3431 5.34315 13 7 13"
+      stroke="#4B9FD5"
+      strokeWidth="2"
+      strokeLinecap="round"
+    />
+    <circle cx="4" cy="16" r="1.2" fill="#4B9FD5" />
   </svg>
 );
 
@@ -205,20 +221,20 @@ export const ActivityBar: React.FC<ActivityBarProps> = ({
       renderIcon: (active?: boolean) => <IjProjectIcon isActive={active} />,
     },
     { 
+      id: 'commit', 
+      label: 'Commit', 
+      shortcut: 'Alt+0',
+      isActive: isSideBarOpen && activeSideTab === 'commit',
+      onClick: () => onToggleSideTab('commit'),
+      renderIcon: (active?: boolean) => <IjCommitIcon isActive={active} />,
+    },
+    { 
       id: 'structure', 
       label: 'Structure', 
       shortcut: 'Alt+7',
       isActive: isSideBarOpen && activeSideTab === 'structure',
       onClick: () => onToggleSideTab('structure'),
       renderIcon: () => <IjStructureIcon />,
-    },
-    { 
-      id: 'sonar', 
-      label: 'SonarQube Analysis', 
-      shortcut: '',
-      isActive: isBottomOpen && bottomTab === 'sonar',
-      onClick: () => onToggleBottomTab?.('sonar'),
-      renderIcon: () => <IjSonarIcon />,
     },
     { 
       id: 'pull-requests', 
@@ -325,13 +341,20 @@ export const ActivityBar: React.FC<ActivityBarProps> = ({
           )}
         </button>
 
-        {/* Notifications button */}
+        {/* SonarQube for IDE button */}
         <button
-          onClick={() => onToggleBottomTab?.('problems')}
-          title="Notifications"
-          className="w-8 h-8 rounded-[5px] flex items-center justify-center text-[#868A91] hover:text-[#DFE1E5] hover:bg-[#2B2D30]/60 transition-colors cursor-pointer"
+          onClick={() => onToggleBottomTab?.('sonar')}
+          title="SonarQube for IDE"
+          className={`w-8 h-8 rounded-[5px] flex items-center justify-center transition-all relative group cursor-pointer ${
+            isBottomOpen && bottomTab === 'sonar'
+              ? 'bg-[#2B2D30] text-[#DFE1E5]'
+              : 'text-[#868A91] hover:text-[#DFE1E5] hover:bg-[#2B2D30]/60'
+          }`}
         >
-          <IjNotificationsIcon />
+          <IjSonarIcon />
+          {isBottomOpen && bottomTab === 'sonar' && (
+            <div className="absolute left-0 top-1.5 bottom-1.5 w-[2.5px] bg-[#3574F0] rounded-r" />
+          )}
         </button>
 
         {/* Git Branch button (Sky Blue) */}

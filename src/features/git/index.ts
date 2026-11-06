@@ -8,3 +8,5 @@ export * from './StashModal';
 export * from './VcsCloneModal';
 export * from './GitBranchPopup';
 export * from './ThreeWayMergeModal';
+export * from './CommitPanel';
+export * from './DiffEditorTab';

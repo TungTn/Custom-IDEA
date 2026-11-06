@@ -46,13 +46,37 @@ const DEFAULT_SETTINGS: IdeSettings = {
   uiFontSize: 13,
   keymapProfile: ((typeof window !== 'undefined' ? localStorage.getItem('intellij_keymap_profile') : null) as any) || 'windows',
   customKeymaps: {},
+  mavenHomePath: 'wrapper',
+  mavenOverrideGlobalSettings: false,
+  mavenOverrideUserSettings: false,
+  mavenOverrideLocalRepo: false,
 };
 
 const getInitialSettings = (): IdeSettings => {
   try {
     const saved = localStorage.getItem('intellij_ide_settings');
     if (saved) {
-      return { ...DEFAULT_SETTINGS, ...JSON.parse(saved) };
+      const parsed = { ...DEFAULT_SETTINGS, ...JSON.parse(saved) };
+      let changed = false;
+      if (parsed.mavenCustomPath && (parsed.mavenCustomPath.includes('nampa') || parsed.mavenCustomPath.includes('/wrapper/dists/') || parsed.mavenCustomPath.includes('\\wrapper\\dists\\'))) {
+        parsed.mavenCustomPath = '';
+        parsed.mavenHomePath = 'wrapper';
+        changed = true;
+      }
+      if (parsed.mavenRunnerJdk && (parsed.mavenRunnerJdk.includes('nampa') || parsed.mavenRunnerJdk.includes('graalvm-jdk-21.0.7'))) {
+        parsed.mavenRunnerJdk = '';
+        changed = true;
+      }
+      if (!parsed.mavenHomePath) {
+        parsed.mavenHomePath = 'wrapper';
+        changed = true;
+      }
+      if (changed) {
+        try {
+          localStorage.setItem('intellij_ide_settings', JSON.stringify(parsed));
+        } catch (_) {}
+      }
+      return parsed;
     }
   } catch (e) {
     console.warn('Failed to parse saved settings, falling back to defaults:', e);

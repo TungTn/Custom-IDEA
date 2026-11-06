@@ -152,7 +152,7 @@ interface CmEditorProps {
   onOpenAiDrawer?: (initialPrompt?: string) => void;
   onSelectMenuAction?: (actionId: string) => void;
   onShowToast?: (title: string, message: string, type?: 'info' | 'success' | 'warning' | 'error') => void;
-  keymapProfile?: 'windows' | 'macos' | 'vscode' | 'eclipse' | 'netbeans';
+  keymapProfile?: 'windows' | 'macos' | 'vscode' | 'eclipse' | 'netbeans' | string;
 }
 
 function resolveEditorTheme(themeId?: IdeThemeId, customThemeJsonStr?: string): Extension {

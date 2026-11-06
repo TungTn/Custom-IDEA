@@ -88,6 +88,19 @@ export const MoreToolWindowsPopup: React.FC<MoreToolWindowsPopupProps> = ({
       ),
     },
     {
+      id: 'sonar',
+      name: 'SonarQube for IDE',
+      shortcut: 'Alt+8',
+      icon: (
+        <svg width="15" height="15" viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <path d="M4 16C4 9.92487 8.92487 5 15 5" stroke="#4B9FD5" strokeWidth="2" strokeLinecap="round" />
+          <path d="M4 16C4 12.6863 6.68629 10 10 10" stroke="#4B9FD5" strokeWidth="2" strokeLinecap="round" />
+          <path d="M4 16C4 14.3431 5.34315 13 7 13" stroke="#4B9FD5" strokeWidth="2" strokeLinecap="round" />
+          <circle cx="4" cy="16" r="1.2" fill="#4B9FD5" />
+        </svg>
+      ),
+    },
+    {
       id: 'bookmarks',
       name: 'Bookmarks',
       icon: (

@@ -194,9 +194,13 @@ export function useProjectWorkspace({
 
   const requestOpenProject = useCallback(
     (tree: FileNode) => {
+      const hasDirtyFiles = tabs.some(t => t.isDirty);
       if (files.length > 0 && projectName !== 'Welcome') {
         const savedMode = localStorage.getItem('ij_project_open_mode');
-        if (savedMode === 'this_window') {
+        if (hasDirtyFiles) {
+          setPendingTargetProject(tree);
+          setIsOpenProjectPromptOpen(true);
+        } else if (savedMode === 'this_window') {
           loadProjectIntoIde(tree);
         } else if (savedMode === 'new_window') {
           handleOpenNewWindow(tree);
@@ -208,7 +212,7 @@ export function useProjectWorkspace({
         loadProjectIntoIde(tree);
       }
     },
-    [files.length, projectName, loadProjectIntoIde, handleOpenNewWindow, setPendingTargetProject, setIsOpenProjectPromptOpen]
+    [files.length, projectName, tabs, loadProjectIntoIde, handleOpenNewWindow, setPendingTargetProject, setIsOpenProjectPromptOpen]
   );
 
   const handleOpenProject = useCallback(async () => {

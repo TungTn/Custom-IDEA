@@ -138,10 +138,18 @@ export class IntelliJSettingsService {
     // 1. UI & Theme
     const hasLaf = has('options/laf.xml') || has('options/colors.scheme.xml') || has('options/ui.lnf.xml');
     let lafSummary = 'Default Look & Feel';
-    if (entries['options/laf.xml']) {
+    let themeDisplay = '';
+    if (entries['options/colors.scheme.xml']) {
+      const doc = getXmlDoc(entries['options/colors.scheme.xml']);
+      themeDisplay = doc?.querySelector('global_color_scheme')?.getAttribute('name') || '';
+    }
+    if (!themeDisplay && entries['options/laf.xml']) {
       const doc = getXmlDoc(entries['options/laf.xml']);
-      const darkLaf = doc?.querySelector('preferred-dark-laf')?.getAttribute('themeId');
-      if (darkLaf) lafSummary = `Theme: ${darkLaf}`;
+      themeDisplay = doc?.querySelector('preferred-dark-laf')?.getAttribute('themeId') 
+        || doc?.querySelector('preferred-light-laf')?.getAttribute('themeId') || '';
+    }
+    if (themeDisplay) {
+      lafSummary = `Theme: ${themeDisplay} (Mapped to IntelliJ New UI Dark)`;
     }
 
     // 2. Editor & Fonts
@@ -157,20 +165,33 @@ export class IntelliJSettingsService {
     // 3. Code Style & Formatter
     const hasCodeStyle = keys.some(k => k.startsWith('codestyles/') || k.includes('code.style.schemes.xml'));
     let codeStyleSummary = 'Tab size, indent, line wrap rules';
-    const csKey = keys.find(k => k.startsWith('codestyles/'));
+    let csScheme = '';
+    if (entries['options/code.style.schemes.xml']) {
+      const doc = getXmlDoc(entries['options/code.style.schemes.xml']);
+      csScheme = doc?.querySelector('option[name="CURRENT_SCHEME_NAME"]')?.getAttribute('value') || '';
+    }
+    const csKey = (csScheme && keys.find(k => k.toLowerCase() === `codestyles/${csScheme.toLowerCase()}.xml`))
+      || keys.find(k => k.startsWith('codestyles/'));
     if (csKey && entries[csKey]) {
       const doc = getXmlDoc(entries[csKey]);
-      const schemeName = doc?.querySelector('code_scheme')?.getAttribute('name') || 'Custom';
+      const schemeName = doc?.querySelector('code_scheme')?.getAttribute('name') || csScheme || 'Custom';
       codeStyleSummary = `Scheme: ${schemeName}`;
     }
 
     // 4. Keymaps (Shortcuts)
     const hasKeymap = keys.some(k => k.startsWith('keymaps/') || k.includes('keymap.xml') || k.includes('keymapFlags.xml'));
     let keymapSummary = 'Keyboard action shortcuts';
-    const kmKey = keys.find(k => k.startsWith('keymaps/'));
-    if (kmKey) {
+    let activeKm = '';
+    const optKm = entries['options/windows/keymap.xml'] || entries['options/keymap.xml'];
+    if (optKm) {
+      const doc = getXmlDoc(optKm);
+      activeKm = doc?.querySelector('active_keymap')?.getAttribute('name') || '';
+    }
+    const kmKey = (activeKm && keys.find(k => k.toLowerCase() === `keymaps/${activeKm.toLowerCase()}.xml`))
+      || keys.find(k => k.startsWith('keymaps/'));
+    if (kmKey && entries[kmKey]) {
       const kmDoc = getXmlDoc(entries[kmKey]);
-      const kmName = kmDoc?.querySelector('keymap')?.getAttribute('name') || 'Custom Keymap';
+      const kmName = kmDoc?.querySelector('keymap')?.getAttribute('name') || activeKm || 'Custom Keymap';
       const actionCount = kmDoc?.querySelectorAll('action').length || 0;
       keymapSummary = `${kmName} (${actionCount} customized actions)`;
     }
@@ -216,7 +237,21 @@ export class IntelliJSettingsService {
     if (entries['options/jdk.table.xml']) {
       const doc = getXmlDoc(entries['options/jdk.table.xml']);
       const jdks = doc?.querySelectorAll('jdk');
-      jdkSummary = `${jdks?.length || 0} installed JDK(s) detected`;
+      const firstJdk = jdks?.[0]?.querySelector('name')?.getAttribute('value');
+      jdkSummary = `${jdks?.length || 0} installed JDK(s) (e.g. ${firstJdk || 'JavaSDK'})`;
+    }
+
+    // 10. Maven Configuration & Wrapper
+    const hasMaven = has('options/windows/maven.wrapper.mapping.xml') || has('options/maven.wrapper.mapping.xml');
+    let mavenSummary = 'Maven wrapper mappings and distribution paths';
+    const mvnMapping = entries['options/windows/maven.wrapper.mapping.xml'] || entries['options/maven.wrapper.mapping.xml'];
+    if (mvnMapping) {
+      const doc = getXmlDoc(mvnMapping);
+      const val = doc?.querySelector('map > entry')?.getAttribute('value');
+      if (val) {
+        const parts = val.split(/[/\\]/);
+        mavenSummary = `Discovered Maven distribution: ${parts[parts.length - 1] || val}`;
+      }
     }
 
     return [
@@ -309,6 +344,16 @@ export class IntelliJSettingsService {
         files: ['options/jdk.table.xml'],
         present: hasJdk,
         summary: jdkSummary
+      },
+      {
+        id: 'maven',
+        label: 'Maven Build Tools',
+        description: 'Maven distribution paths, wrapper mapping, runner JDK',
+        iconName: 'Hammer',
+        category: 'tools',
+        files: ['options/windows/maven.wrapper.mapping.xml', 'options/maven.wrapper.mapping.xml'],
+        present: hasMaven,
+        summary: mavenSummary
       }
     ];
   }
@@ -328,22 +373,67 @@ export class IntelliJSettingsService {
 
     // 1. UI & Theme
     if (selectedIds.includes('ui')) {
+      let matchedTheme: IdeThemeId = 'intellij-new-ui-dark';
+      let themeFound = false;
+
+      // Check colors.scheme.xml first
+      let colorSchemeName = '';
+      if (entries['options/colors.scheme.xml']) {
+        const doc = getXmlDoc(entries['options/colors.scheme.xml']);
+        colorSchemeName = doc?.querySelector('global_color_scheme')?.getAttribute('name') || '';
+      }
+
+      // Check laf.xml
+      let darkTheme = '';
+      let lightTheme = '';
       if (entries['options/laf.xml']) {
         const doc = getXmlDoc(entries['options/laf.xml']);
-        const darkTheme = doc?.querySelector('preferred-dark-laf')?.getAttribute('themeId') || '';
-        const lightTheme = doc?.querySelector('preferred-light-laf')?.getAttribute('themeId') || '';
-        
-        let matchedTheme: IdeThemeId = 'darcula-classic';
-        const lower = (darkTheme || lightTheme).toLowerCase();
-        if (lower.includes('islands') || lower.includes('darcula')) {
-          matchedTheme = 'darcula-classic';
-        } else if (lower.includes('light')) {
+        darkTheme = doc?.querySelector('preferred-dark-laf')?.getAttribute('themeId') || '';
+        lightTheme = doc?.querySelector('preferred-light-laf')?.getAttribute('themeId') || '';
+      }
+
+      const candidate = (colorSchemeName || darkTheme || lightTheme).toLowerCase();
+      if (candidate) {
+        themeFound = true;
+        // In JetBrains New UI, "Islands Darcula" and "Islands Dark" are the modern flat dark themes
+        if (candidate.includes('islands') || candidate.includes('new ui') || candidate === 'dark' || candidate.includes('darcula')) {
+          if (candidate.includes('darcula-classic') || candidate === 'classic' || candidate === 'darcula') {
+            matchedTheme = 'darcula-classic';
+          } else {
+            matchedTheme = 'intellij-new-ui-dark';
+          }
+        } else if (candidate.includes('light')) {
           matchedTheme = 'intellij-light';
+        } else if (candidate.includes('one dark') || candidate.includes('onedark')) {
+          matchedTheme = 'one-dark-pro';
+        } else if (candidate.includes('dracula')) {
+          matchedTheme = 'dracula';
+        } else if (candidate.includes('github')) {
+          matchedTheme = 'github-dark';
         } else {
           matchedTheme = 'intellij-new-ui-dark';
         }
+      }
+
+      // Check UI font and compact mode in ui.lnf.xml
+      if (entries['options/ui.lnf.xml']) {
+        const doc = getXmlDoc(entries['options/ui.lnf.xml']);
+        if (doc) {
+          const fontSize = doc.querySelector('option[name="FONT_SIZE"]')?.getAttribute('value');
+          if (fontSize) {
+            const sz = parseInt(fontSize, 10);
+            if (!isNaN(sz) && sz >= 8 && sz <= 32) updatedSettings.uiFontSize = sz;
+          }
+          const compact = doc.querySelector('option[name="COMPACT_MODE"]')?.getAttribute('value');
+          if (compact !== null && compact !== undefined) {
+            updatedSettings.compactMode = compact === 'true';
+          }
+        }
+      }
+
+      if (themeFound) {
         updatedSettings.theme = matchedTheme;
-        appliedCategories.push('UI & Theme');
+        appliedCategories.push(`UI & Theme (${matchedTheme})`);
       }
     }
 
@@ -354,6 +444,7 @@ export class IntelliJSettingsService {
         const fontFamily = getOptionValue(doc!, 'FONT_FAMILY');
         const fontSizeStr = getOptionValue(doc!, 'FONT_SIZE');
         const lineSpacingStr = getOptionValue(doc!, 'LINE_SPACING');
+        const ligaturesStr = getOptionValue(doc!, 'USE_LIGATURES');
         if (fontFamily) updatedSettings.fontFamily = fontFamily;
         if (fontSizeStr) {
           const sz = parseInt(fontSizeStr, 10);
@@ -363,21 +454,45 @@ export class IntelliJSettingsService {
           const ls = parseFloat(lineSpacingStr);
           if (!isNaN(ls) && ls >= 1.0 && ls <= 2.5) updatedSettings.lineHeight = ls;
         }
+        if (ligaturesStr !== null) {
+          updatedSettings.ligatures = ligaturesStr === 'true';
+        }
       }
       if (entries['options/editor.xml']) {
         const doc = getXmlDoc(entries['options/editor.xml']);
-        const tabSizeStr = getOptionValue(doc!, 'TAB_SIZE');
-        if (tabSizeStr) {
-          const ts = parseInt(tabSizeStr, 10);
-          if (!isNaN(ts)) updatedSettings.tabSize = ts;
+        if (doc) {
+          const tabSizeStr = getOptionValue(doc, 'TAB_SIZE');
+          if (tabSizeStr) {
+            const ts = parseInt(tabSizeStr, 10);
+            if (!isNaN(ts)) updatedSettings.tabSize = ts;
+          }
+          const lineNums = getOptionValue(doc, 'ARE_LINE_NUMBERS_SHOWN') || getOptionValue(doc, 'IS_LINE_NUMBERS_SHOWN');
+          if (lineNums !== null) updatedSettings.lineNumbers = lineNums === 'true';
+
+          const folding = getOptionValue(doc, 'IS_FOLDING_OUTLINE_SHOWN');
+          if (folding !== null) updatedSettings.codeFolding = folding === 'true';
+
+          const reformat = getOptionValue(doc, 'ENABLE_SECOND_REFORMAT');
+          if (reformat !== null) updatedSettings.autoFormatOnSave = reformat === 'true';
+
+          const smoothScroll = getOptionValue(doc, 'SMOOTH_SCROLLING');
+          if (smoothScroll !== null) updatedSettings.smoothScrolling = smoothScroll === 'true';
         }
       }
-      appliedCategories.push('Editor Fonts');
+      appliedCategories.push('Editor & Fonts');
     }
 
     // 3. Code Style
     if (selectedIds.includes('codestyle')) {
-      const csKey = Object.keys(entries).find(k => k.startsWith('codestyles/'));
+      let currentScheme = 'Default';
+      if (entries['options/code.style.schemes.xml']) {
+        const doc = getXmlDoc(entries['options/code.style.schemes.xml']);
+        currentScheme = doc?.querySelector('option[name="CURRENT_SCHEME_NAME"]')?.getAttribute('value') || 'Default';
+      }
+
+      const csKey = Object.keys(entries).find(k => k.toLowerCase() === `codestyles/${currentScheme.toLowerCase()}.xml`) 
+        || Object.keys(entries).find(k => k.startsWith('codestyles/'));
+
       if (csKey && entries[csKey]) {
         const doc = getXmlDoc(entries[csKey]);
         if (doc) {
@@ -393,15 +508,27 @@ export class IntelliJSettingsService {
           }
         }
       }
-      appliedCategories.push('Code Style');
+      appliedCategories.push(`Code Style (${currentScheme})`);
     }
 
     // 4. Keymaps
     if (selectedIds.includes('keymap')) {
-      const kmKey = Object.keys(entries).find(k => k.startsWith('keymaps/'));
+      let activeKmName = '';
+      const optKeymap = entries['options/windows/keymap.xml'] || entries['options/keymap.xml'];
+      if (optKeymap) {
+        const optDoc = getXmlDoc(optKeymap);
+        activeKmName = optDoc?.querySelector('active_keymap')?.getAttribute('name') || '';
+      }
+
+      const kmKey = (activeKmName && Object.keys(entries).find(k => k.toLowerCase() === `keymaps/${activeKmName.toLowerCase()}.xml`))
+        || Object.keys(entries).find(k => k.startsWith('keymaps/'));
+
       if (kmKey && entries[kmKey]) {
         const doc = getXmlDoc(entries[kmKey]);
         if (doc) {
+          const fileKmName = doc.querySelector('keymap')?.getAttribute('name') || activeKmName || kmKey.replace(/^keymaps\//, '').replace(/\.xml$/, '');
+          updatedSettings.keymapProfile = fileKmName;
+
           customKeymap = {};
           const actions = doc.querySelectorAll('action');
           actions.forEach(act => {
@@ -430,19 +557,9 @@ export class IntelliJSettingsService {
               }
             }
           });
-
-          // Check for active keymap name from options
-          const optKeymap = entries['options/windows/keymap.xml'] || entries['options/keymap.xml'];
-          if (optKeymap) {
-            const optDoc = getXmlDoc(optKeymap);
-            const kmName = optDoc?.querySelector('active_keymap')?.getAttribute('name');
-            if (kmName) {
-              updatedSettings.keymapProfile = kmName as any;
-            }
-          }
         }
       }
-      appliedCategories.push('Keymaps');
+      appliedCategories.push(`Keymaps (${updatedSettings.keymapProfile || 'custom'})`);
     }
 
     // 5. Terminal
@@ -473,6 +590,10 @@ export class IntelliJSettingsService {
         } else if (openNewProj === '2') {
           updatedSettings.projectOpenMode = 'ask';
         }
+        const reopenLast = doc?.querySelector('option[name="reopenLastProject"]')?.getAttribute('value');
+        if (reopenLast !== null && reopenLast !== undefined) {
+          updatedSettings.reopenProjectsOnStartup = reopenLast === 'true';
+        }
         const showTips = doc?.querySelector('option[name="showTipsOnStartup"]')?.getAttribute('value');
         if (showTips !== null && showTips !== undefined) {
           try {
@@ -497,7 +618,6 @@ export class IntelliJSettingsService {
             // ignore
           }
         }
-        // Always ensure compact packages is enabled
         try {
           localStorage.setItem('ij_project_tree_compact_packages', 'true');
         } catch {
@@ -510,14 +630,22 @@ export class IntelliJSettingsService {
     // 8. Database Tools
     if (selectedIds.includes('database')) {
       if (entries['options/databaseSettings.xml']) {
-        // Can adjust page size or sql row limit
-        updatedSettings.dataEditorPageSize = 500;
-        updatedSettings.sqlRowLimit = 500;
+        const doc = getXmlDoc(entries['options/databaseSettings.xml']);
+        const pageSize = doc?.querySelector('option[name="pageSize"]')?.getAttribute('value');
+        const rowLimit = doc?.querySelector('option[name="rowLimit"]')?.getAttribute('value');
+        if (pageSize) {
+          const ps = parseInt(pageSize, 10);
+          if (!isNaN(ps)) updatedSettings.dataEditorPageSize = ps;
+        }
+        if (rowLimit) {
+          const rl = parseInt(rowLimit, 10);
+          if (!isNaN(rl)) updatedSettings.sqlRowLimit = rl;
+        }
       }
       appliedCategories.push('Database Tools');
     }
 
-    // 9. Installed JDKs
+    // 9. Installed JDKs & Runner JDK
     if (selectedIds.includes('jdk')) {
       if (entries['options/jdk.table.xml']) {
         const doc = getXmlDoc(entries['options/jdk.table.xml']);
@@ -537,9 +665,28 @@ export class IntelliJSettingsService {
               });
             }
           });
+
+          // Automatically configure the best JDK for Maven Runner
+          // Only configure mavenRunnerJdk if it doesn't point to a foreign user directory
+          if (customJdks.length > 0) {
+            const bestJdk = customJdks.find(j => j.name.toLowerCase().includes('graalvm') || j.name.includes('21'))
+              || customJdks.find(j => j.name.includes('17'))
+              || customJdks[0];
+            if (bestJdk && !bestJdk.path.toLowerCase().includes('/users/') && !bestJdk.path.toLowerCase().includes('\\users\\')) {
+              updatedSettings.mavenRunnerJdk = bestJdk.path;
+            }
+          }
         }
       }
-      appliedCategories.push('JDKs & SDKs');
+      appliedCategories.push(`JDKs & SDKs (${customJdks?.length || 0} installed)`);
+    }
+
+    // 10. Maven Configuration & Wrapper
+    if (selectedIds.includes('maven') || selectedIds.includes('general')) {
+      // In IntelliJ IDEA, the default and recommended Maven Home is WRAPPER (Project Maven Wrapper: mvnw/mvnw.cmd)
+      // Never force custom path to foreign downloaded dist paths from other machines (e.g. C:\Users\nampa)
+      updatedSettings.mavenHomePath = 'wrapper';
+      appliedCategories.push('Maven (Project Wrapper)');
     }
 
     return {

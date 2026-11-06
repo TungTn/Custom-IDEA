@@ -93,7 +93,7 @@ pub fn git_get_status(project_path: String) -> Result<GitStatusDto, String> {
   let branch = run_git_cmd(&project_path, &["branch", "--show-current"])
     .unwrap_or_else(|_| "main".to_string());
 
-  let status_out = run_git_cmd(&project_path, &["status", "--porcelain=v1"])
+  let status_out = run_git_cmd(&project_path, &["status", "--porcelain=v1", "-uall"])
     .unwrap_or_default();
 
   let mut changes = Vec::new();

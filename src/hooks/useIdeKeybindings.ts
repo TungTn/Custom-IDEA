@@ -13,6 +13,7 @@ export interface UseIdeKeybindingsOptions {
   handleOpenProject: () => void | Promise<void>;
   handleOpenFindInFiles: (mode: 'find' | 'replace') => void;
   handleOpenCurrentFileDiff: () => void;
+  onAnalyzeWithSonar?: () => void;
 }
 
 /**
@@ -31,6 +32,7 @@ export function useIdeKeybindings({
   handleOpenProject,
   handleOpenFindInFiles,
   handleOpenCurrentFileDiff,
+  onAnalyzeWithSonar,
 }: UseIdeKeybindingsOptions) {
   const { settings } = useSettingsStore();
   const {
@@ -295,6 +297,14 @@ export function useIdeKeybindings({
         return;
       }
 
+      // Alt + 0 (Toggle Commit tool window)
+      if (e.altKey && e.key === '0') {
+        e.preventDefault();
+        handleMenuAction('view.toggleCommit');
+        return;
+      }
+
+
       // Alt + 7 (Toggle Structure tool window)
       if (e.altKey && e.key === '7') {
         e.preventDefault();
@@ -320,6 +330,13 @@ export function useIdeKeybindings({
       if ((e.ctrlKey || e.metaKey) && e.shiftKey && (e.key.toLowerCase() === 'r' || e.key.toLowerCase() === 'h')) {
         e.preventDefault();
         handleOpenFindInFiles('replace');
+        return;
+      }
+
+      // Ctrl + Shift + S (Analyze with SonarQube for IDE)
+      if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === 's') {
+        e.preventDefault();
+        onAnalyzeWithSonar?.();
         return;
       }
 
@@ -392,6 +409,7 @@ export function useIdeKeybindings({
     isBranchesOpen, isRunConfigOpen, isNewProjectOpen, isProjectStructureOpen,
     isInvalidateCachesOpen, isLocalHistoryOpen, isRepairIdeOpen, isOpenProjectPromptOpen,
     isSearchOpen, isGoToLineOpen, isTipOpen, settings.doubleShiftTimeout,
+    onAnalyzeWithSonar,
   ]);
 
   // Custom IntelliJ Editor Events (dispatched from CodeMirror keymaps)

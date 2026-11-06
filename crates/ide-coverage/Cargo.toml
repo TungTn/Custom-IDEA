@@ -1,4 +1,4 @@
-﻿[package]
+[package]
 name = "ide-coverage"
 version.workspace = true
 edition.workspace = true

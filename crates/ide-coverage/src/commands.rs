@@ -95,6 +95,14 @@ pub fn coverage_get_summary() -> Result<Option<CoverageSummaryDto>, String> {
 }
 
 #[tauri::command]
+pub fn coverage_get_all_files() -> Result<Vec<FileCoverageDto>, String> {
+    let store = STORE.reports.read().map_err(|e| e.to_string())?;
+    let mut list: Vec<FileCoverageDto> = store.values().cloned().collect();
+    list.sort_by(|a, b| a.file_path.cmp(&b.file_path));
+    Ok(list)
+}
+
+#[tauri::command]
 pub fn coverage_detect_reports(project_path: String) -> Result<Vec<String>, String> {
     let root = Path::new(&project_path);
     if !root.exists() {

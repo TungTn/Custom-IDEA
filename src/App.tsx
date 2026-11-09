@@ -2067,6 +2067,10 @@ export const App: React.FC = () => {
           if (tabId === 'problems') notifyAction('Problems Tool Window', 'Alt+6');
           if (tabId === 'git') notifyAction('Git Tool Window', 'Alt+9');
           if (tabId === 'sonar') notifyAction('SonarLint Tool Window', 'Alt+8');
+          if (tabId === 'coverage') notifyAction('Coverage Tool Window', 'Ctrl+Alt+C');
+          if (tabId === 'todo') notifyAction('TODO Tool Window', 'Alt+7');
+          if (tabId === 'endpoints') notifyAction('Endpoints Tool Window', 'Alt+E');
+          if (tabId === 'profiler') notifyAction('Profiler Tool Window', 'Alt+P');
 
           if (bottomTab === tabId && isBottomOpen) {
             setIsBottomOpen(false);
@@ -2190,7 +2194,7 @@ export const App: React.FC = () => {
                 } else if (toolId === 'sonar') {
                   handleToggleBottomTab('sonar');
                 } else if (toolId === 'todo') {
-                  handleToggleBottomTab('problems');
+                  handleToggleBottomTab('todo');
                 } else if (toolId === 'bookmarks') {
                   setActiveSideTab('bookmarks');
                   setIsSideBarOpen(true);
@@ -2198,13 +2202,13 @@ export const App: React.FC = () => {
                   setActiveSideTab('structure');
                   setIsSideBarOpen(true);
                 } else if (toolId === 'coverage') {
-                  addToast('Coverage', 'Run with Coverage activated', 'info');
+                  handleToggleBottomTab('coverage');
                 } else if (toolId === 'endpoints') {
-                  addToast('Endpoints', 'Endpoints Explorer activated', 'info');
+                  handleToggleBottomTab('endpoints');
                 } else if (toolId === 'learn') {
-                  addToast('Learn', 'Interactive IDE Tutorials', 'info');
+                  useModalStore.getState().setIsLearnOpen(true);
                 } else if (toolId === 'profiler') {
-                  addToast('Profiler', 'Performance Profiler activated', 'info');
+                  handleToggleBottomTab('profiler');
                 }
               }}
             />

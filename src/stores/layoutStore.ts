@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 
-export type BottomTabType = 'find' | 'run' | 'debug' | 'terminal' | 'problems' | 'git' | 'tests' | 'sonar';
+export type BottomTabType = 'find' | 'run' | 'debug' | 'terminal' | 'problems' | 'git' | 'tests' | 'sonar' | 'coverage' | 'todo' | 'endpoints' | 'profiler';
 
 export interface LayoutState {
   activeSideTab: string;

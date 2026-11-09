@@ -59,6 +59,7 @@ pub fn get_ipc_handler() -> impl Fn(tauri::ipc::Invoke<tauri::Wry>) -> bool + Se
     coverage::coverage_load_file,
     coverage::coverage_get_for_file,
     coverage::coverage_get_summary,
+    coverage::coverage_get_all_files,
     coverage::coverage_detect_reports,
 
     // ─── 5. Window & Desktop App Commands ───
@@ -78,6 +79,7 @@ pub fn get_ipc_handler() -> impl Fn(tauri::ipc::Invoke<tauri::Wry>) -> bool + Se
     process::detect_installed_jdks,
     process::validate_and_parse_jdk,
     process::create_downloaded_jdk_placeholder,
+    process::download_real_jdk,
     process::execute_build_command,
     process::start_process,
     process::stop_process,

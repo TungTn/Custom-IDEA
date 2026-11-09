@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { RotateCcw, CheckCircle2, Plus, Trash2 } from 'lucide-react';
+import { RotateCcw, CheckCircle2, Plus, Trash2, Code, Eye, Key, Layers, FileCode, Sparkles, Sliders, Check } from 'lucide-react';
 import { SettingPanelProps } from './types';
 import { loadLiveTemplates, LiveTemplate } from '../../../editor/cm/snippetEngine';
 
@@ -61,6 +61,25 @@ export const EditorSettingsPanel: React.FC<SettingPanelProps> = ({
   const liveTemplates = liveTemplatesProp ?? localLiveTemplates;
   const setLiveTemplates = setLiveTemplatesProp ?? setLocalLiveTemplates;
   const [selectedTemplateId, setSelectedTemplateId] = useState(() => (liveTemplates[0]?.id || 'lt_sout'));
+
+  // File and Code Templates state
+  const [fileTemplates, setFileTemplates] = useState([
+    { id: 'ft_java_class', name: 'Java Class', ext: 'java', body: 'package ${PACKAGE_NAME};\n\npublic class ${NAME} {\n}' },
+    { id: 'ft_java_interface', name: 'Java Interface', ext: 'java', body: 'package ${PACKAGE_NAME};\n\npublic interface ${NAME} {\n}' },
+    { id: 'ft_java_record', name: 'Java Record', ext: 'java', body: 'package ${PACKAGE_NAME};\n\npublic record ${NAME}() {\n}' },
+    { id: 'ft_ts_comp', name: 'React Component', ext: 'tsx', body: 'import React from \'react\';\n\ninterface ${NAME}Props {}\n\nexport const ${NAME}: React.FC<${NAME}Props> = () => {\n  return <div>${NAME}</div>;\n};' },
+    { id: 'ft_rust_mod', name: 'Rust Module', ext: 'rs', body: '//! ${NAME} module\n\npub struct ${NAME} {\n}\n\nimpl ${NAME} {\n    pub fn new() -> Self {\n        Self {}\n    }\n}' },
+    { id: 'ft_html5', name: 'HTML5 Boilerplate', ext: 'html', body: '<!DOCTYPE html>\n<html lang="en">\n<head>\n  <meta charset="UTF-8">\n  <title>${NAME}</title>\n</head>\n<body>\n</body>\n</html>' },
+  ]);
+  const [selectedFileTemplateId, setSelectedFileTemplateId] = useState('ft_java_class');
+
+  // Language Injections state
+  const [languageInjections, setLanguageInjections] = useState([
+    { id: 'inj_sql', name: 'SQL in String Literals', lang: 'SQL', prefix: 'SELECT|INSERT|UPDATE|DELETE', enabled: true },
+    { id: 'inj_regex', name: 'RegExp in Pattern Strings', lang: 'RegExp', prefix: 'regex:|pattern:', enabled: true },
+    { id: 'inj_json', name: 'JSON in Strings', lang: 'JSON', prefix: 'json:', enabled: true },
+    { id: 'inj_html', name: 'HTML in Template Literals', lang: 'HTML', prefix: 'html`|<div', enabled: true },
+  ]);
 
   return (
     <div>
@@ -943,6 +962,469 @@ export const EditorSettingsPanel: React.FC<SettingPanelProps> = ({
                   </>
                 );
               })()}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Sub-page: Editor > General > Appearance */}
+      {selectedId === 'editor-appearance' && (
+        <div className="space-y-6 text-xs">
+          <div>
+            <h2 className="text-base font-semibold text-white mb-1">Appearance</h2>
+            <p className="text-xs text-[#868A91]">Configure editor visual elements, line numbers, caret behavior, and whitespace rendering.</p>
+          </div>
+
+          <div className="space-y-4 max-w-xl">
+            <div className="p-4 bg-[#26282B] border border-[#393B40] rounded space-y-3">
+              <label className="flex items-center gap-2.5 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={formSettings.lineNumbers ?? true}
+                  onChange={(e) => updateSetting('lineNumbers', e.target.checked)}
+                  className="accent-[#3574F0] rounded"
+                />
+                <span className="text-white font-medium">Show line numbers</span>
+              </label>
+
+              <label className="flex items-center gap-2.5 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={formSettings.editorCaretBlinking ?? true}
+                  onChange={(e) => updateSetting('editorCaretBlinking', e.target.checked)}
+                  className="accent-[#3574F0] rounded"
+                />
+                <span className="text-white font-medium">Caret blinking</span>
+              </label>
+
+              <label className="flex items-center gap-2.5 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={formSettings.editorSmoothScrolling ?? true}
+                  onChange={(e) => updateSetting('editorSmoothScrolling', e.target.checked)}
+                  className="accent-[#3574F0] rounded"
+                />
+                <span className="text-white font-medium">Smooth scrolling</span>
+              </label>
+
+              <label className="flex items-center gap-2.5 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={formSettings.editorShowWhitespaces ?? false}
+                  onChange={(e) => updateSetting('editorShowWhitespaces', e.target.checked)}
+                  className="accent-[#3574F0] rounded"
+                />
+                <span className="text-white font-medium">Show whitespaces (dots for spaces, arrows for tabs)</span>
+              </label>
+
+              <label className="flex items-center gap-2.5 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={formSettings.editorShowIndentGuides ?? true}
+                  onChange={(e) => updateSetting('editorShowIndentGuides', e.target.checked)}
+                  className="accent-[#3574F0] rounded"
+                />
+                <span className="text-white font-medium">Show indent guides</span>
+              </label>
+
+              <label className="flex items-center gap-2.5 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={formSettings.minimap ?? false}
+                  onChange={(e) => updateSetting('minimap', e.target.checked)}
+                  className="accent-[#3574F0] rounded"
+                />
+                <span className="text-white font-medium">Show code minimap scrollbar</span>
+              </label>
+            </div>
+
+            <div className="p-3.5 bg-[#26282B] border border-[#393B40] rounded flex items-center justify-between">
+              <span className="text-[#DFE1E5]">Hard wrap guide column:</span>
+              <input
+                type="number"
+                min={60}
+                max={200}
+                value={formSettings.editorHardWrapGuide ?? 120}
+                onChange={(e) => updateSetting('editorHardWrapGuide', Number(e.target.value))}
+                className="w-24 bg-[#1E1F22] border border-[#393B40] rounded px-2.5 py-1 text-white text-center outline-none"
+              />
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Sub-page: Editor > General > Smart Keys */}
+      {selectedId === 'editor-smart-keys' && (
+        <div className="space-y-6 text-xs">
+          <div>
+            <h2 className="text-base font-semibold text-white mb-1">Smart Keys</h2>
+            <p className="text-xs text-[#868A91]">Configure automatic bracket pairing, quote matching, and smart indentation behaviors.</p>
+          </div>
+
+          <div className="space-y-4 max-w-xl">
+            <div className="p-4 bg-[#26282B] border border-[#393B40] rounded space-y-3">
+              <div className="font-semibold text-white pb-1 border-b border-[#393B40]/60">Auto-insert and Matching:</div>
+              <label className="flex items-center gap-2.5 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={formSettings.editorAutoCloseBrackets ?? true}
+                  onChange={(e) => updateSetting('editorAutoCloseBrackets', e.target.checked)}
+                  className="accent-[#3574F0] rounded"
+                />
+                <span className="text-white">Insert paired brackets (), [], {}</span>
+              </label>
+
+              <label className="flex items-center gap-2.5 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={formSettings.editorAutoCloseQuotes ?? true}
+                  onChange={(e) => updateSetting('editorAutoCloseQuotes', e.target.checked)}
+                  className="accent-[#3574F0] rounded"
+                />
+                <span className="text-white">Insert paired quotes "" and ''</span>
+              </label>
+
+              <label className="flex items-center gap-2.5 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={formSettings.editorSurroundSelection ?? true}
+                  onChange={(e) => updateSetting('editorSurroundSelection', e.target.checked)}
+                  className="accent-[#3574F0] rounded"
+                />
+                <span className="text-white">Surround selection on typing quotes or brackets</span>
+              </label>
+            </div>
+
+            <div className="p-4 bg-[#26282B] border border-[#393B40] rounded space-y-3">
+              <div className="font-semibold text-white pb-1 border-b border-[#393B40]/60">Enter & Backspace:</div>
+              <label className="flex items-center gap-2.5 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={formSettings.editorSmartIndent ?? true}
+                  onChange={(e) => updateSetting('editorSmartIndent', e.target.checked)}
+                  className="accent-[#3574F0] rounded"
+                />
+                <span className="text-white">Smart indent on Enter</span>
+              </label>
+
+              <label className="flex items-center gap-2.5 cursor-pointer">
+                <input
+                  type="checkbox"
+                  defaultChecked={true}
+                  className="accent-[#3574F0] rounded"
+                />
+                <span className="text-white">Unindent on Backspace to previous indentation level</span>
+              </label>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Sub-page: Editor > General > Code Completion */}
+      {selectedId === 'editor-code-completion' && (
+        <div className="space-y-6 text-xs">
+          <div>
+            <h2 className="text-base font-semibold text-white mb-1">Code Completion</h2>
+            <p className="text-xs text-[#868A91]">Configure autocomplete popup timing, case matching, and suggestion insertion.</p>
+          </div>
+
+          <div className="space-y-4 max-w-xl">
+            <div className="p-4 bg-[#26282B] border border-[#393B40] rounded space-y-3.5">
+              <label className="flex items-center gap-2.5 cursor-pointer">
+                <input
+                  type="checkbox"
+                  defaultChecked={true}
+                  className="accent-[#3574F0] rounded"
+                />
+                <span className="text-white font-medium">Show suggestions as you type (Basic Completion)</span>
+              </label>
+
+              <div className="flex items-center justify-between pl-6">
+                <span className="text-[#868A91]">Completion popup delay (ms):</span>
+                <input
+                  type="number"
+                  min={0}
+                  max={1000}
+                  value={formSettings.editorCompletionDelay ?? 50}
+                  onChange={(e) => updateSetting('editorCompletionDelay', Number(e.target.value))}
+                  className="w-24 bg-[#1E1F22] border border-[#393B40] rounded px-2.5 py-1 text-white text-center outline-none"
+                />
+              </div>
+
+              <div className="flex items-center justify-between pl-6">
+                <span className="text-[#868A91]">Match case:</span>
+                <select
+                  value={formSettings.editorMatchCase || 'first'}
+                  onChange={(e) => updateSetting('editorMatchCase', e.target.value as any)}
+                  className="bg-[#1E1F22] border border-[#393B40] rounded px-3 py-1 text-white outline-none"
+                >
+                  <option value="first">First letter only</option>
+                  <option value="all">All letters</option>
+                  <option value="none">None (Case-insensitive)</option>
+                </select>
+              </div>
+
+              <label className="flex items-center gap-2.5 cursor-pointer pl-6">
+                <input
+                  type="checkbox"
+                  checked={formSettings.editorInsertOnSpace ?? false}
+                  onChange={(e) => updateSetting('editorInsertOnSpace', e.target.checked)}
+                  className="accent-[#3574F0] rounded"
+                />
+                <span className="text-white">Insert selected suggestion by Space key</span>
+              </label>
+
+              <label className="flex items-center gap-2.5 cursor-pointer pl-6">
+                <input
+                  type="checkbox"
+                  defaultChecked={true}
+                  className="accent-[#3574F0] rounded"
+                />
+                <span className="text-white">Show parameter name and type hints</span>
+              </label>
+
+              <label className="flex items-center gap-2.5 cursor-pointer pl-6">
+                <input
+                  type="checkbox"
+                  defaultChecked={true}
+                  className="accent-[#3574F0] rounded"
+                />
+                <span className="text-white">Sort completion items based on machine learning & relevance</span>
+              </label>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Sub-page: Editor > General > Code Folding */}
+      {selectedId === 'editor-code-folding' && (
+        <div className="space-y-6 text-xs">
+          <div>
+            <h2 className="text-base font-semibold text-white mb-1">Code Folding</h2>
+            <p className="text-xs text-[#868A91]">Configure code folding outlines and default initial folding states on file open.</p>
+          </div>
+
+          <div className="space-y-4 max-w-xl">
+            <div className="p-4 bg-[#26282B] border border-[#393B40] rounded space-y-3">
+              <label className="flex items-center gap-2.5 cursor-pointer pb-2 border-b border-[#393B40]/60">
+                <input
+                  type="checkbox"
+                  checked={formSettings.codeFolding ?? true}
+                  onChange={(e) => updateSetting('codeFolding', e.target.checked)}
+                  className="accent-[#3574F0] rounded"
+                />
+                <span className="text-white font-medium">Show code folding outline in gutter</span>
+              </label>
+
+              <div className="font-semibold text-white pt-1">Fold by default:</div>
+              <label className="flex items-center gap-2.5 cursor-pointer pl-2">
+                <input
+                  type="checkbox"
+                  checked={formSettings.editorFoldImports ?? true}
+                  onChange={(e) => updateSetting('editorFoldImports', e.target.checked)}
+                  className="accent-[#3574F0] rounded"
+                />
+                <span className="text-white">File header comments & imports</span>
+              </label>
+
+              <label className="flex items-center gap-2.5 cursor-pointer pl-2">
+                <input
+                  type="checkbox"
+                  checked={formSettings.editorFoldDocComments ?? false}
+                  onChange={(e) => updateSetting('editorFoldDocComments', e.target.checked)}
+                  className="accent-[#3574F0] rounded"
+                />
+                <span className="text-white">Documentation comments (Javadoc, Rustdoc, TSDoc)</span>
+              </label>
+
+              <label className="flex items-center gap-2.5 cursor-pointer pl-2">
+                <input
+                  type="checkbox"
+                  checked={formSettings.editorFoldMethodBodies ?? false}
+                  onChange={(e) => updateSetting('editorFoldMethodBodies', e.target.checked)}
+                  className="accent-[#3574F0] rounded"
+                />
+                <span className="text-white">Method bodies</span>
+              </label>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Sub-page: Editor > General > Breadcrumbs */}
+      {selectedId === 'editor-breadcrumbs' && (
+        <div className="space-y-6 text-xs">
+          <div>
+            <h2 className="text-base font-semibold text-white mb-1">Breadcrumbs</h2>
+            <p className="text-xs text-[#868A91]">Show navigation hierarchy breadcrumbs for classes, functions, and tags.</p>
+          </div>
+
+          <div className="space-y-4 max-w-xl">
+            <div className="p-4 bg-[#26282B] border border-[#393B40] rounded space-y-3.5">
+              <div className="flex items-center justify-between">
+                <span className="text-white font-medium">Breadcrumbs placement:</span>
+                <select
+                  value={formSettings.editorBreadcrumbsPosition || 'bottom'}
+                  onChange={(e) => updateSetting('editorBreadcrumbsPosition', e.target.value as any)}
+                  className="bg-[#1E1F22] border border-[#393B40] rounded px-3 py-1.5 text-white outline-none"
+                >
+                  <option value="bottom">At the bottom (IntelliJ Default)</option>
+                  <option value="top">At the top</option>
+                  <option value="none">Don't show</option>
+                </select>
+              </div>
+
+              <div className="pt-2 border-t border-[#393B40]/60 space-y-2">
+                <span className="text-[#868A91] block">Show breadcrumbs for languages:</span>
+                <div className="grid grid-cols-2 gap-2 pl-1">
+                  {['Java', 'TypeScript / JavaScript', 'Rust', 'Python', 'Go', 'HTML / XML', 'CSS / SCSS', 'JSON / YAML'].map((lang) => (
+                    <label key={lang} className="flex items-center gap-2 cursor-pointer">
+                      <input type="checkbox" defaultChecked={true} className="accent-[#3574F0] rounded" />
+                      <span className="text-[#DFE1E5]">{lang}</span>
+                    </label>
+                  ))}
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Sub-page: Editor > File and Code Templates */}
+      {selectedId === 'editor-file-templates' && (
+        <div className="space-y-5 text-xs">
+          <div>
+            <h2 className="text-base font-semibold text-white mb-1">File and Code Templates</h2>
+            <p className="text-xs text-[#868A91]">Customize the boilerplate structure generated when creating new files.</p>
+          </div>
+
+          <div className="grid grid-cols-3 gap-4 max-w-2xl">
+            <div className="border border-[#393B40] rounded bg-[#26282B] p-2 space-y-1">
+              <div className="font-semibold text-white px-2 py-1 border-b border-[#393B40]/60">Templates</div>
+              {fileTemplates.map((t) => (
+                <div
+                  key={t.id}
+                  onClick={() => setSelectedFileTemplateId(t.id)}
+                  className={`p-2 rounded cursor-pointer flex justify-between items-center transition-colors ${
+                    selectedFileTemplateId === t.id ? 'bg-[#2E436E] text-white font-medium' : 'text-[#DFE1E5] hover:bg-[#35373B]'
+                  }`}
+                >
+                  <span>{t.name}</span>
+                  <span className="text-[10px] text-[#868A91] font-mono">.{t.ext}</span>
+                </div>
+              ))}
+            </div>
+
+            <div className="col-span-2 p-3 bg-[#26282B] border border-[#393B40] rounded space-y-3">
+              {(() => {
+                const curr = fileTemplates.find(t => t.id === selectedFileTemplateId) || fileTemplates[0];
+                return (
+                  <>
+                    <div className="flex items-center justify-between pb-1 border-b border-[#393B40]/60">
+                      <span className="font-semibold text-white">{curr.name}</span>
+                      <span className="text-[11px] text-[#868A91] font-mono">Extension: {curr.ext}</span>
+                    </div>
+
+                    <div>
+                      <label className="text-[#868A91] block mb-1">Template Content (${`{NAME}`}, ${`{PACKAGE_NAME}`}):</label>
+                      <textarea
+                        rows={10}
+                        value={curr.body}
+                        onChange={(e) => {
+                          const val = e.target.value;
+                          setFileTemplates(prev => prev.map(t => t.id === curr.id ? { ...t, body: val } : t));
+                          setIsDirty(true);
+                        }}
+                        className="w-full bg-[#1E1F22] border border-[#393B40] focus:border-[#3574F0] rounded p-2.5 text-white font-mono text-[11.5px] outline-none resize-none leading-relaxed"
+                      />
+                    </div>
+                  </>
+                );
+              })()}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Sub-page: Editor > Emmet */}
+      {selectedId === 'editor-emmet' && (
+        <div className="space-y-6 text-xs">
+          <div>
+            <h2 className="text-base font-semibold text-white mb-1">Emmet</h2>
+            <p className="text-xs text-[#868A91]">Configure high-speed HTML and CSS abbreviation expansions.</p>
+          </div>
+
+          <div className="space-y-4 max-w-xl">
+            <div className="p-4 bg-[#26282B] border border-[#393B40] rounded space-y-3.5">
+              <label className="flex items-center gap-2.5 cursor-pointer pb-2 border-b border-[#393B40]/60">
+                <input
+                  type="checkbox"
+                  checked={formSettings.emmetEnabled ?? true}
+                  onChange={(e) => updateSetting('emmetEnabled', e.target.checked)}
+                  className="accent-[#3574F0] rounded"
+                />
+                <span className="text-white font-medium">Enable Emmet abbreviations</span>
+              </label>
+
+              <label className="flex items-center gap-2.5 cursor-pointer pl-2">
+                <input
+                  type="checkbox"
+                  checked={formSettings.editorEmmetTabExpand ?? true}
+                  onChange={(e) => updateSetting('editorEmmetTabExpand', e.target.checked)}
+                  className="accent-[#3574F0] rounded"
+                />
+                <span className="text-white">Expand abbreviation with Tab key</span>
+              </label>
+
+              <label className="flex items-center gap-2.5 cursor-pointer pl-2">
+                <input type="checkbox" defaultChecked={true} className="accent-[#3574F0] rounded" />
+                <span className="text-white">Enable in JSX and TSX templates</span>
+              </label>
+
+              <label className="flex items-center gap-2.5 cursor-pointer pl-2">
+                <input type="checkbox" defaultChecked={true} className="accent-[#3574F0] rounded" />
+                <span className="text-white">Automatically close generated XML / HTML tags</span>
+              </label>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Sub-page: Editor > Language Injections */}
+      {selectedId === 'editor-injections' && (
+        <div className="space-y-5 text-xs">
+          <div>
+            <h2 className="text-base font-semibold text-white mb-1">Language Injections</h2>
+            <p className="text-xs text-[#868A91]">Provide syntax highlighting and autocomplete for embedded code snippets (SQL, RegExp, JSON) inside strings.</p>
+          </div>
+
+          <div className="space-y-3 max-w-xl">
+            <div className="border border-[#393B40] rounded overflow-hidden bg-[#26282B]">
+              <div className="h-8 bg-[#212226] border-b border-[#393B40] px-3 flex items-center justify-between text-[11px] font-semibold text-[#868A91]">
+                <span>Name & Target</span>
+                <span>Injected Language</span>
+                <span>Active</span>
+              </div>
+              <div className="divide-y divide-[#393B40]/50">
+                {languageInjections.map((inj) => (
+                  <div key={inj.id} className="px-3 py-2.5 flex items-center justify-between hover:bg-[#35373B]/50 transition-colors">
+                    <div>
+                      <div className="text-white font-medium">{inj.name}</div>
+                      <div className="text-[10px] text-[#868A91] font-mono">Trigger: {inj.prefix}</div>
+                    </div>
+                    <span className="px-2 py-0.5 rounded text-[10px] bg-[#3574F0]/20 text-[#679EF5] font-mono">{inj.lang}</span>
+                    <input
+                      type="checkbox"
+                      checked={inj.enabled}
+                      onChange={(e) => {
+                        setLanguageInjections(prev => prev.map(item => item.id === inj.id ? { ...item, enabled: e.target.checked } : item));
+                        setIsDirty(true);
+                      }}
+                      className="accent-[#3574F0] rounded"
+                    />
+                  </div>
+                ))}
+              </div>
             </div>
           </div>
         </div>

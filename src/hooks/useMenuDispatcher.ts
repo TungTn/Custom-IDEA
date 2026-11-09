@@ -755,9 +755,25 @@ export function useMenuDispatcher({
         }
         break;
       }
-      case 'code.genOverride':
-        addToast('Generate Override', 'Select method to override (Ctrl+O)', 'info');
+      case 'code.genOverride': {
+        const curTab = tabs.find(t => t.id === activeTabId);
+        if (curTab) {
+          const ext = curTab.path?.split('.').pop()?.toLowerCase() || '';
+          let snippet = '\n    @Override\n    public void execute() {\n        super.execute();\n    }\n';
+          if (['ts', 'tsx', 'js', 'jsx'].includes(ext)) {
+            snippet = '\n  override render() {\n    return super.render();\n  }\n';
+          } else if (['rs'].includes(ext)) {
+            snippet = '\n    fn default() -> Self {\n        todo!()\n    }\n';
+          } else if (['py'].includes(ext)) {
+            snippet = '\n    def __str__(self):\n        return super().__str__()\n';
+          }
+          setTabs(prev => prev.map(t => t.id === curTab.id ? { ...t, content: t.content + snippet, isDirty: true } : t));
+          addToast('Generate Override', 'Generated overridden method in active class', 'success');
+        } else {
+          addToast('Generate Override', 'No active file open to generate override', 'warning');
+        }
         break;
+      }
       case 'code.surround':
         setIsSurroundWithOpen(true);
         break;
@@ -838,10 +854,14 @@ export function useMenuDispatcher({
               addToast('Run with Coverage', 'Running tests with coverage profiling', 'info');
             });
         }
+        setBottomTab('coverage');
+        setIsBottomOpen(true);
         break;
       case 'run.profile':
-        addToast('Profiler Attached', `Profiling '${projectName || 'Desktop IDE'}': CPU and Memory sampling active`, 'info');
         handleRun();
+        setBottomTab('profiler');
+        setIsBottomOpen(true);
+        addToast('Profiler Attached', `Profiling '${projectName || 'Desktop IDE'}': Live CPU and Memory sampling active`, 'info');
         break;
       case 'run.pinTab':
         addToast('Pin Tab', 'Run Console tab pinned', 'info');

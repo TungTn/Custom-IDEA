@@ -113,6 +113,8 @@ export interface ModalState {
   setIsTipOpen: (open: boolean) => void;
   isUpdateOpen: boolean;
   setIsUpdateOpen: (open: boolean) => void;
+  isLearnOpen: boolean;
+  setIsLearnOpen: (open: boolean) => void;
 }
 
 export const useModalStore = create<ModalState>((set) => ({
@@ -239,4 +241,6 @@ export const useModalStore = create<ModalState>((set) => ({
   setIsTipOpen: (open) => set({ isTipOpen: open }),
   isUpdateOpen: false,
   setIsUpdateOpen: (open) => set({ isUpdateOpen: open }),
+  isLearnOpen: false,
+  setIsLearnOpen: (open) => set({ isLearnOpen: open }),
 }));

@@ -37,6 +37,7 @@ const StashModal = React.lazy(() => import('../features/git/StashModal').then(m 
 const EvaluateExpressionModal = React.lazy(() => import('../features/debugger/EvaluateExpressionModal').then(m => ({ default: m.EvaluateExpressionModal })));
 const ClipboardHistoryModal = React.lazy(() => import('../editor/ClipboardHistoryModal').then(m => ({ default: m.ClipboardHistoryModal })));
 const StructuralSearchModal = React.lazy(() => import('../features/search/StructuralSearchModal').then(m => ({ default: m.StructuralSearchModal })));
+const LearnModal = React.lazy(() => import('../features/learn/LearnModal').then(m => ({ default: m.LearnModal })));
 
 export interface OverlayHostProps {
   // Callbacks & Handlers
@@ -375,6 +376,17 @@ export const OverlayHost: React.FC<OverlayHostProps> = (props) => {
               props.handleOpenFileAtLocation?.(filePath, line, 1);
             }}
             onShowToast={addToast}
+          />
+        )}
+
+        {/* Interactive Learn / Tutorials Modal */}
+        {modalStore.isLearnOpen && (
+          <LearnModal
+            isOpen={modalStore.isLearnOpen}
+            onClose={() => modalStore.setIsLearnOpen(false)}
+            onTriggerAction={(actionId) => {
+              props.handleSelectSearchAction?.({ id: actionId, title: actionId, category: 'Actions' } as any);
+            }}
           />
         )}
       </React.Suspense>

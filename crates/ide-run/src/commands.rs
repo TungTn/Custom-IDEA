@@ -682,6 +682,157 @@ pub fn create_downloaded_jdk_placeholder(target_dir: String, vendor: String, ver
   })
 }
 
+#[derive(Clone, Serialize, Deserialize)]
+pub struct JdkDownloadProgressEvent {
+  pub percent: f32,
+  pub message: String,
+  pub downloaded_bytes: u64,
+  pub total_bytes: u64,
+}
+
+#[tauri::command]
+pub async fn download_real_jdk(
+  app: tauri::AppHandle,
+  feature_version: u32,
+  vendor_slug: String,
+  vendor_name: String,
+  target_dir: String,
+) -> Result<JdkItemDto, String> {
+  let resolved_target = if target_dir.starts_with('~') {
+    let home = std::env::var("USERPROFILE")
+      .or_else(|_| std::env::var("HOME"))
+      .unwrap_or_else(|_| ".".to_string());
+    let suffix = target_dir.trim_start_matches('~').trim_start_matches(['/', '\\']);
+    std::path::PathBuf::from(home).join(suffix)
+  } else {
+    std::path::PathBuf::from(&target_dir)
+  };
+
+  std::fs::create_dir_all(&resolved_target)
+    .map_err(|e| format!("Failed to create destination folder: {}", e))?;
+
+  // Resolve official vendor binary URL
+  let v_slug = vendor_slug.to_lowercase();
+  let download_url = if v_slug.contains("corretto") {
+    format!("https://corretto.aws/downloads/latest/amazon-corretto-{}-x64-windows-jdk.zip", feature_version)
+  } else {
+    // Default to Eclipse Temurin (Adoptium standard)
+    format!("https://api.adoptium.net/v3/binary/latest/{}/ga/windows/x64/jdk/hotspot/normal/eclipse", feature_version)
+  };
+
+  let _ = app.emit("jdk_download_progress", JdkDownloadProgressEvent {
+    percent: 5.0,
+    message: format!("Connecting to {} repository...", vendor_name),
+    downloaded_bytes: 0,
+    total_bytes: 0,
+  });
+
+  let client = reqwest::Client::builder()
+    .redirect(reqwest::redirect::Policy::limited(10))
+    .build()
+    .map_err(|e| e.to_string())?;
+
+  let mut res = client.get(&download_url)
+    .header("User-Agent", "Custom-IDEA/0.1.0")
+    .send()
+    .await
+    .map_err(|e| format!("Failed to connect to JDK server: {}", e))?;
+
+  if !res.status().is_success() {
+    return Err(format!("JDK download returned HTTP error: {}", res.status()));
+  }
+
+  let total_size = res.content_length().unwrap_or(180 * 1024 * 1024);
+  let temp_zip = resolved_target.join("download_temp.zip");
+  let mut file = std::fs::File::create(&temp_zip)
+    .map_err(|e| format!("Failed to create temp archive file: {}", e))?;
+
+  let mut downloaded: u64 = 0;
+  let mut last_emit = std::time::Instant::now();
+
+  while let Some(chunk) = res.chunk().await.map_err(|e| format!("Error downloading chunk: {}", e))? {
+    std::io::Write::write_all(&mut file, &chunk)
+      .map_err(|e| format!("Error writing chunk to disk: {}", e))?;
+    downloaded += chunk.len() as u64;
+
+    if last_emit.elapsed().as_millis() > 150 || downloaded == total_size {
+      let pct = ((downloaded as f64 / total_size as f64) * 80.0) as f32 + 5.0;
+      let _ = app.emit("jdk_download_progress", JdkDownloadProgressEvent {
+        percent: pct.min(85.0),
+        message: format!("Downloading archive ({:.1} MB / {:.1} MB)...", downloaded as f64 / 1024.0 / 1024.0, total_size as f64 / 1024.0 / 1024.0),
+        downloaded_bytes: downloaded,
+        total_bytes: total_size,
+      });
+      last_emit = std::time::Instant::now();
+    }
+  }
+
+  drop(file);
+
+  let _ = app.emit("jdk_download_progress", JdkDownloadProgressEvent {
+    percent: 88.0,
+    message: "Extracting JDK archive...".to_string(),
+    downloaded_bytes: downloaded,
+    total_bytes: total_size,
+  });
+
+  // Extract Zip archive
+  let zip_file = std::fs::File::open(&temp_zip)
+    .map_err(|e| format!("Failed to open downloaded archive: {}", e))?;
+  let mut archive = zip::ZipArchive::new(zip_file)
+    .map_err(|e| format!("Failed to read zip archive: {}", e))?;
+
+  for i in 0..archive.len() {
+    let mut item = archive.by_index(i).map_err(|e| e.to_string())?;
+    let enclosed = match item.enclosed_name() {
+      Some(p) => p.to_owned(),
+      None => continue,
+    };
+    let outpath = resolved_target.join(enclosed);
+    if item.is_dir() {
+      let _ = std::fs::create_dir_all(&outpath);
+    } else {
+      if let Some(p) = outpath.parent() {
+        let _ = std::fs::create_dir_all(p);
+      }
+      let mut outfile = std::fs::File::create(&outpath).map_err(|e| e.to_string())?;
+      std::io::copy(&mut item, &mut outfile).map_err(|e| e.to_string())?;
+    }
+  }
+
+  // Remove temp zip
+  let _ = std::fs::remove_file(&temp_zip);
+
+  // If contents were extracted into a single root subfolder (e.g., jdk-21.0.3+9), flatten
+  if !resolved_target.join("bin").exists() {
+    if let Ok(entries) = std::fs::read_dir(&resolved_target) {
+      for entry in entries.flatten() {
+        if entry.path().is_dir() && entry.path().join("bin").exists() {
+          let sub_dir = entry.path();
+          if let Ok(sub_entries) = std::fs::read_dir(&sub_dir) {
+            for sub_e in sub_entries.flatten() {
+              let dest = resolved_target.join(sub_e.file_name());
+              let _ = std::fs::rename(sub_e.path(), dest);
+            }
+          }
+          let _ = std::fs::remove_dir_all(sub_dir);
+          break;
+        }
+      }
+    }
+  }
+
+  let _ = app.emit("jdk_download_progress", JdkDownloadProgressEvent {
+    percent: 100.0,
+    message: "Installation complete!".to_string(),
+    downloaded_bytes: total_size,
+    total_bytes: total_size,
+  });
+
+  let target_str = resolved_target.to_string_lossy().to_string();
+  validate_and_parse_jdk(target_str)
+}
+
 #[cfg(test)]
 mod tests {
   use super::*;

@@ -19,6 +19,22 @@ export const ToolsPanel: React.FC<SettingPanelProps> = ({
   updateSetting,
   onShowToast,
 }) => {
+  const [fileWatchersList, setFileWatchersList] = React.useState([
+    { id: 'w1', name: 'Prettier Formatter', pattern: '*.{ts,tsx,js,json,css}', enabled: true },
+    { id: 'w2', name: 'Rustfmt Auto', pattern: '*.rs', enabled: true },
+    { id: 'w3', name: 'Gofmt & Goimports', pattern: '*.go', enabled: true },
+  ]);
+  const [isAddWatcherOpen, setIsAddWatcherOpen] = React.useState(false);
+  const [newWatcherName, setNewWatcherName] = React.useState('');
+  const [newWatcherPattern, setNewWatcherPattern] = React.useState('');
+
+  const [externalToolsList, setExternalToolsList] = React.useState([
+    { id: 't1', name: 'Git Bash Terminal', exec: 'git-bash.exe', menu: 'Tools | External Tools' },
+    { id: 't2', name: 'Postman CLI', exec: 'postman.cmd', menu: 'Tools | External Tools' },
+  ]);
+  const [isAddToolOpen, setIsAddToolOpen] = React.useState(false);
+  const [newToolName, setNewToolName] = React.useState('');
+  const [newToolExec, setNewToolExec] = React.useState('');
   return (
     <div>
       {/* Sub-page: Tools > AI Assistant */}
@@ -85,7 +101,7 @@ export const ToolsPanel: React.FC<SettingPanelProps> = ({
               <p className="text-xs text-[#868A91]">Automatically run external formatters, transpilers, or build scripts when files are modified.</p>
             </div>
             <button
-              onClick={() => onShowToast?.('Watcher Added', 'Custom file watcher template created', 'info')}
+              onClick={() => setIsAddWatcherOpen(true)}
               className="px-3 py-1.5 bg-[#3574F0] hover:bg-[#3069D9] text-white rounded text-xs flex items-center gap-1.5"
             >
               <Plus size={12} />
@@ -108,26 +124,66 @@ export const ToolsPanel: React.FC<SettingPanelProps> = ({
               <div className="h-7 bg-[#212226] border-b border-[#393B40] px-3 flex items-center justify-between text-[11px] font-semibold text-[#868A91]">
                 <span>Watcher Name</span>
                 <span>Target Files</span>
-                <span>Status</span>
+                <span>Status & Actions</span>
               </div>
               <div className="divide-y divide-[#393B40]/40 p-1">
-                <div className="px-2 py-2 flex items-center justify-between">
-                  <span className="font-medium text-white">Prettier Formatter</span>
-                  <span className="text-[#868A91] font-mono text-[11px]">*.{'{'}ts,tsx,js,json,css{'}'}</span>
-                  <span className="text-[#59A869] text-[11px] flex items-center gap-1"><Check size={11} /> Active</span>
-                </div>
-                <div className="px-2 py-2 flex items-center justify-between">
-                  <span className="font-medium text-white">Rustfmt Auto</span>
-                  <span className="text-[#868A91] font-mono text-[11px]">*.rs</span>
-                  <span className="text-[#59A869] text-[11px] flex items-center gap-1"><Check size={11} /> Active</span>
-                </div>
-                <div className="px-2 py-2 flex items-center justify-between">
-                  <span className="font-medium text-white">Gofmt & Goimports</span>
-                  <span className="text-[#868A91] font-mono text-[11px]">*.go</span>
-                  <span className="text-[#59A869] text-[11px] flex items-center gap-1"><Check size={11} /> Active</span>
-                </div>
+                {fileWatchersList.map((watcher) => (
+                  <div key={watcher.id} className="px-2 py-2 flex items-center justify-between hover:bg-[#35373B]/40">
+                    <span className="font-medium text-white">{watcher.name}</span>
+                    <span className="text-[#868A91] font-mono text-[11px]">{watcher.pattern}</span>
+                    <div className="flex items-center gap-3">
+                      <span className="text-[#59A869] text-[11px] flex items-center gap-1"><Check size={11} /> Active</span>
+                      <button
+                        onClick={() => setFileWatchersList(prev => prev.filter(w => w.id !== watcher.id))}
+                        className="text-[#868A91] hover:text-[#E05555]"
+                      >
+                        <Trash2 size={12} />
+                      </button>
+                    </div>
+                  </div>
+                ))}
               </div>
             </div>
+
+            {isAddWatcherOpen && (
+              <div className="p-3 bg-[#26282B] border border-[#393B40] rounded space-y-2.5">
+                <div className="font-semibold text-white">Add New File Watcher</div>
+                <div className="grid grid-cols-2 gap-2">
+                  <input
+                    type="text"
+                    placeholder="Watcher Name (e.g. ESLint Auto-Fix)"
+                    value={newWatcherName}
+                    onChange={(e) => setNewWatcherName(e.target.value)}
+                    className="bg-[#1E1F22] border border-[#393B40] rounded px-2.5 py-1 text-white outline-none"
+                  />
+                  <input
+                    type="text"
+                    placeholder="File Glob (e.g. *.ts,*.tsx)"
+                    value={newWatcherPattern}
+                    onChange={(e) => setNewWatcherPattern(e.target.value)}
+                    className="bg-[#1E1F22] border border-[#393B40] rounded px-2.5 py-1 text-white outline-none font-mono text-[11px]"
+                  />
+                </div>
+                <div className="flex gap-2">
+                  <button
+                    onClick={() => {
+                      if (newWatcherName.trim() && newWatcherPattern.trim()) {
+                        setFileWatchersList(prev => [...prev, { id: `w_${Date.now()}`, name: newWatcherName.trim(), pattern: newWatcherPattern.trim(), enabled: true }]);
+                        setNewWatcherName('');
+                        setNewWatcherPattern('');
+                        setIsAddWatcherOpen(false);
+                      }
+                    }}
+                    className="px-3 py-1 bg-[#3574F0] text-white rounded text-xs"
+                  >
+                    Save Watcher
+                  </button>
+                  <button onClick={() => setIsAddWatcherOpen(false)} className="px-3 py-1 bg-[#35373B] text-white rounded text-xs">
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
         </div>
       )}
@@ -193,7 +249,7 @@ export const ToolsPanel: React.FC<SettingPanelProps> = ({
               <p className="text-xs text-[#868A91]">Define custom external commands, CLI utilities, and scripts to invoke from context menus and keybindings.</p>
             </div>
             <button
-              onClick={() => onShowToast?.('New External Tool', 'Tool configuration dialog ready', 'info')}
+              onClick={() => setIsAddToolOpen(true)}
               className="px-3 py-1.5 bg-[#3574F0] hover:bg-[#3069D9] text-white rounded text-xs flex items-center gap-1.5"
             >
               <Plus size={12} />
@@ -216,21 +272,66 @@ export const ToolsPanel: React.FC<SettingPanelProps> = ({
               <div className="h-7 bg-[#212226] border-b border-[#393B40] px-3 flex items-center justify-between text-[11px] font-semibold text-[#868A91]">
                 <span>Tool Name</span>
                 <span>Executable</span>
-                <span>Menu Location</span>
+                <span>Menu Location & Actions</span>
               </div>
               <div className="divide-y divide-[#393B40]/40 p-1">
-                <div className="px-2 py-2 flex items-center justify-between">
-                  <span className="font-medium text-white">Git Bash Terminal</span>
-                  <span className="text-[#868A91] font-mono text-[11px]">git-bash.exe</span>
-                  <span className="text-[#A5C0EE] text-[11px]">Tools | External Tools</span>
-                </div>
-                <div className="px-2 py-2 flex items-center justify-between">
-                  <span className="font-medium text-white">Postman CLI</span>
-                  <span className="text-[#868A91] font-mono text-[11px]">postman.cmd</span>
-                  <span className="text-[#A5C0EE] text-[11px]">Tools | External Tools</span>
-                </div>
+                {externalToolsList.map((tool) => (
+                  <div key={tool.id} className="px-2 py-2 flex items-center justify-between hover:bg-[#35373B]/40">
+                    <span className="font-medium text-white">{tool.name}</span>
+                    <span className="text-[#868A91] font-mono text-[11px]">{tool.exec}</span>
+                    <div className="flex items-center gap-3">
+                      <span className="text-[#A5C0EE] text-[11px]">{tool.menu}</span>
+                      <button
+                        onClick={() => setExternalToolsList(prev => prev.filter(t => t.id !== tool.id))}
+                        className="text-[#868A91] hover:text-[#E05555]"
+                      >
+                        <Trash2 size={12} />
+                      </button>
+                    </div>
+                  </div>
+                ))}
               </div>
             </div>
+
+            {isAddToolOpen && (
+              <div className="p-3 bg-[#26282B] border border-[#393B40] rounded space-y-2.5">
+                <div className="font-semibold text-white">Add New External Tool</div>
+                <div className="grid grid-cols-2 gap-2">
+                  <input
+                    type="text"
+                    placeholder="Tool Name (e.g. Docker CLI)"
+                    value={newToolName}
+                    onChange={(e) => setNewToolName(e.target.value)}
+                    className="bg-[#1E1F22] border border-[#393B40] rounded px-2.5 py-1 text-white outline-none"
+                  />
+                  <input
+                    type="text"
+                    placeholder="Program executable (e.g. docker.exe)"
+                    value={newToolExec}
+                    onChange={(e) => setNewToolExec(e.target.value)}
+                    className="bg-[#1E1F22] border border-[#393B40] rounded px-2.5 py-1 text-white outline-none font-mono text-[11px]"
+                  />
+                </div>
+                <div className="flex gap-2">
+                  <button
+                    onClick={() => {
+                      if (newToolName.trim() && newToolExec.trim()) {
+                        setExternalToolsList(prev => [...prev, { id: `t_${Date.now()}`, name: newToolName.trim(), exec: newToolExec.trim(), menu: 'Tools | External Tools' }]);
+                        setNewToolName('');
+                        setNewToolExec('');
+                        setIsAddToolOpen(false);
+                      }
+                    }}
+                    className="px-3 py-1 bg-[#3574F0] text-white rounded text-xs"
+                  >
+                    Save Tool
+                  </button>
+                  <button onClick={() => setIsAddToolOpen(false)} className="px-3 py-1 bg-[#35373B] text-white rounded text-xs">
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
         </div>
       )}

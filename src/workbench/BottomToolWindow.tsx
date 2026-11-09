@@ -16,6 +16,10 @@ import {
   DebugPanel, 
   FindUsagesPanel 
 } from '../features';
+import { CoverageToolWindow } from '../features/coverage/CoverageToolWindow';
+import { TodoToolWindow } from '../features/todo/TodoToolWindow';
+import { EndpointsPanel } from '../features/endpoints/EndpointsPanel';
+import { ProfilerToolWindow } from '../features/profiler/ProfilerToolWindow';
 import { SonarToolWindow, SonarIcon, SonarAnalysisProgress } from '../features/sonar/SonarToolWindow';
 import { BottomTabType } from '../stores/layoutStore';
 import { 
@@ -195,7 +199,7 @@ export const BottomToolWindow: React.FC<BottomToolWindowProps> = ({
       />
 
       {/* Bottom Tool Window Header (Clean Authentic Title & Controls - No horizontal tabs) */}
-      {bottomTab !== 'terminal' && bottomTab !== 'git' && bottomTab !== 'sonar' && (
+      {bottomTab !== 'terminal' && bottomTab !== 'git' && bottomTab !== 'sonar' && bottomTab !== 'coverage' && bottomTab !== 'todo' && bottomTab !== 'endpoints' && bottomTab !== 'profiler' && (
         <div className="h-7 bg-[#1E1F22] border-b border-[#2B2D30] px-3 flex items-center justify-between text-[11px] select-none">
           {/* Tool Window Title & Active Context */}
           <div className="flex items-center gap-2 h-full text-[#DFE1E5]">
@@ -367,6 +371,31 @@ export const BottomToolWindow: React.FC<BottomToolWindowProps> = ({
               No active find usages search. Place cursor on a symbol and press Alt+F7.
             </div>
           )
+        )}
+        {bottomTab === 'coverage' && (
+          <CoverageToolWindow
+            projectPath={currentProjectDirectory}
+            onOpenFileAtLocation={handleOpenFileAtLocation}
+            onShowToast={addToast}
+          />
+        )}
+        {bottomTab === 'todo' && (
+          <TodoToolWindow
+            projectPath={currentProjectDirectory}
+            activeTab={activeTab}
+            onOpenFileAtLocation={handleOpenFileAtLocation}
+            onShowToast={addToast}
+          />
+        )}
+        {bottomTab === 'endpoints' && (
+          <EndpointsPanel
+            projectPath={currentProjectDirectory}
+            onOpenFileAtLocation={handleOpenFileAtLocation}
+            onShowToast={addToast}
+          />
+        )}
+        {bottomTab === 'profiler' && (
+          <ProfilerToolWindow onShowToast={addToast} />
         )}
         {bottomTab === 'sonar' && (
           <SonarToolWindow

@@ -148,6 +148,62 @@ export interface IdeSettings {
   mavenRunnerEnv?: Record<string, string>;
   mavenSkipTests?: boolean;
   mavenOfflineMode?: boolean;
+  // Passwords Policy
+  passwordStoragePolicy?: 'keepass' | 'keychain' | 'memory';
+  passwordDatabasePath?: string;
+  passwordProtectWithMaster?: boolean;
+  // HTTP Proxy Settings
+  proxyType?: 'none' | 'auto' | 'manual';
+  proxyProtocol?: 'http' | 'socks';
+  proxyHost?: string;
+  proxyPort?: number;
+  proxyNoProxyFor?: string;
+  proxyAuthEnabled?: boolean;
+  proxyAuthLogin?: string;
+  // Menus and Toolbars
+  customMenuActions?: Array<{ id: string; name: string; menu: string; enabled: boolean }>;
+  // Editor Appearance & Smart Keys
+  editorCaretBlinking?: boolean;
+  editorSmoothScrolling?: boolean;
+  editorShowWhitespaces?: boolean;
+  editorShowIndentGuides?: boolean;
+  editorHardWrapGuide?: number;
+  editorAutoCloseBrackets?: boolean;
+  editorAutoCloseQuotes?: boolean;
+  editorSurroundSelection?: boolean;
+  editorSmartIndent?: boolean;
+  editorCompletionDelay?: number;
+  editorMatchCase?: 'all' | 'first' | 'none';
+  editorInsertOnSpace?: boolean;
+  editorFoldImports?: boolean;
+  editorFoldDocComments?: boolean;
+  editorFoldMethodBodies?: boolean;
+  editorBreadcrumbsPosition?: 'top' | 'bottom' | 'none';
+  editorEmmetTabExpand?: boolean;
+  // VCS Settings
+  vcsIssuePatterns?: Array<{ id: string; pattern: string; targetUrl: string }>;
+  vcsUseChangelists?: boolean;
+  vcsAutoActiveChangelist?: boolean;
+  vcsAutoShelveOnMerge?: boolean;
+  vcsShelfDirectory?: string;
+  // Build & Compiler Settings
+  gradleJvm?: string;
+  gradleDistribution?: 'wrapper' | 'local';
+  gradleUserHome?: string;
+  gradleParallel?: boolean;
+  gradleOffline?: boolean;
+  cargoClippy?: boolean;
+  cargoAllTargets?: boolean;
+  cargoOffline?: boolean;
+  javaBytecodeVersion?: string;
+  javaJavacOptions?: string;
+  javaAnnotationProcessing?: boolean;
+  compilerExcludes?: string[];
+  debuggerShowTypes?: boolean;
+  debuggerSkipSynthetic?: boolean;
+  debuggerHotSwap?: 'ask' | 'always' | 'never';
+  coverageEngine?: 'jacoco' | 'tarpaulin' | 'lcov' | 'istanbul';
+  remoteDevHost?: string;
 }
 
 
@@ -948,17 +1004,20 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             )}
 
             {/* Domain Panel Dispatcher */}
-            {(selectedId === 'appearance' || [
-              'theme-studio', 
-              'menus-toolbars', 
-              'system-settings', 
-              'file-colors', 
-              'scopes', 
-              'notifications', 
-              'data-editor', 
-              'quick-lists', 
-              'path-variables'
-            ].includes(selectedId)) && (
+            {(selectedId === 'appearance-behavior' ||
+              selectedId === 'appearance' ||
+              selectedId.startsWith('system-') ||
+              [
+                'theme-studio', 
+                'menus-toolbars', 
+                'system-settings', 
+                'file-colors', 
+                'scopes', 
+                'notifications', 
+                'data-editor', 
+                'quick-lists', 
+                'path-variables'
+              ].includes(selectedId)) && (
               <AppearanceBehaviorPanel {...panelProps} />
             )}
 

@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { RefreshCw, CheckCircle2, AlertTriangle, Check } from 'lucide-react';
+import { RefreshCw, CheckCircle2, AlertTriangle, Check, Plus, Trash2, Link, Layers, Archive, X } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
 import { SettingPanelProps } from './types';
 
@@ -12,6 +12,17 @@ export const VersionControlPanel: React.FC<SettingPanelProps> = ({
 }) => {
   const [gitTestStatus, setGitTestStatus] = useState<'idle' | 'testing' | 'success' | 'error'>('idle');
   const [gitTestMessage, setGitTestMessage] = useState('');
+
+  // Issue Navigation state
+  const [issuePatterns, setIssuePatterns] = useState<Array<{ id: string; pattern: string; targetUrl: string }>>(() => {
+    return formSettings.vcsIssuePatterns || [
+      { id: 'ip_1', pattern: '([A-Z]+-\\d+)', targetUrl: 'https://jira.example.com/browse/$1' },
+      { id: 'ip_2', pattern: '#(\\d+)', targetUrl: 'https://gitlab.mic.vn/tungtn/mic-idea/-/issues/$1' },
+    ];
+  });
+  const [isAddPatternOpen, setIsAddPatternOpen] = useState(false);
+  const [newIssuePattern, setNewIssuePattern] = useState('');
+  const [newIssueUrl, setNewIssueUrl] = useState('');
 
   const handleTestGit = async () => {
     setGitTestStatus('testing');
@@ -239,6 +250,180 @@ export const VersionControlPanel: React.FC<SettingPanelProps> = ({
               />
               <span>Sign commits with GPG key automatically</span>
             </label>
+          </div>
+        </div>
+      )}
+
+      {/* Sub-page: VCS > Issue Navigation */}
+      {selectedId === 'vcs-issue-navigation' && (
+        <div className="space-y-6 text-xs">
+          <div>
+            <h2 className="text-base font-semibold text-white mb-1">Issue Navigation</h2>
+            <p className="text-xs text-[#868A91]">Link commit message issue keys (e.g., JIRA, GitLab issue #123) to their web tracker.</p>
+          </div>
+
+          <div className="space-y-4 max-w-xl">
+            <div className="border border-[#393B40] rounded overflow-hidden bg-[#26282B]">
+              <div className="h-8 bg-[#212226] border-b border-[#393B40] px-3 flex items-center justify-between text-[11px] font-semibold text-[#868A91]">
+                <span>Issue Pattern (RegEx)</span>
+                <span>Target Issue Tracker URL</span>
+                <span>Action</span>
+              </div>
+              <div className="divide-y divide-[#393B40]/50 font-mono text-[11px]">
+                {issuePatterns.map((ip) => (
+                  <div key={ip.id} className="px-3 py-2 flex items-center justify-between hover:bg-[#35373B]/40">
+                    <span className="text-[#3574F0] font-semibold">{ip.pattern}</span>
+                    <span className="text-[#868A91] truncate max-w-xs">{ip.targetUrl}</span>
+                    <button
+                      onClick={() => {
+                        const updated = issuePatterns.filter(i => i.id !== ip.id);
+                        setIssuePatterns(updated);
+                        updateSetting('vcsIssuePatterns', updated);
+                      }}
+                      className="text-[#868A91] hover:text-[#E05555]"
+                    >
+                      <Trash2 size={12} />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {isAddPatternOpen ? (
+              <div className="p-3 bg-[#26282B] border border-[#393B40] rounded space-y-2.5">
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <label className="text-[#868A91] block mb-1">Issue Pattern (e.g. MIC-\d+):</label>
+                    <input
+                      type="text"
+                      placeholder="([A-Z]+-\d+)"
+                      value={newIssuePattern}
+                      onChange={(e) => setNewIssuePattern(e.target.value)}
+                      className="w-full bg-[#1E1F22] border border-[#393B40] rounded px-2.5 py-1 text-white font-mono text-[11px] outline-none"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-[#868A91] block mb-1">Issue URL ($1 replacement):</label>
+                    <input
+                      type="text"
+                      placeholder="https://gitlab.mic.vn/issues/$1"
+                      value={newIssueUrl}
+                      onChange={(e) => setNewIssueUrl(e.target.value)}
+                      className="w-full bg-[#1E1F22] border border-[#393B40] rounded px-2.5 py-1 text-white font-mono text-[11px] outline-none"
+                    />
+                  </div>
+                </div>
+                <div className="flex gap-2">
+                  <button
+                    onClick={() => {
+                      if (newIssuePattern.trim() && newIssueUrl.trim()) {
+                        const updated = [...issuePatterns, { id: `ip_${Date.now()}`, pattern: newIssuePattern.trim(), targetUrl: newIssueUrl.trim() }];
+                        setIssuePatterns(updated);
+                        updateSetting('vcsIssuePatterns', updated);
+                        setNewIssuePattern('');
+                        setNewIssueUrl('');
+                        setIsAddPatternOpen(false);
+                      }
+                    }}
+                    className="px-3 py-1 bg-[#3574F0] text-white rounded text-xs"
+                  >
+                    Add Pattern
+                  </button>
+                  <button onClick={() => setIsAddPatternOpen(false)} className="px-3 py-1 bg-[#35373B] text-white rounded text-xs">
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <button
+                onClick={() => setIsAddPatternOpen(true)}
+                className="px-3 py-1 bg-[#2B2D30] hover:bg-[#35373B] text-white border border-[#393B40] rounded text-xs flex items-center gap-1.5"
+              >
+                <Plus size={12} /> Add Issue Pattern...
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Sub-page: VCS > Changelists */}
+      {selectedId === 'vcs-changelists' && (
+        <div className="space-y-6 text-xs">
+          <div>
+            <h2 className="text-base font-semibold text-white mb-1">Changelists</h2>
+            <p className="text-xs text-[#868A91]">Organize pending file modifications into discrete logical changelists before committing.</p>
+          </div>
+
+          <div className="space-y-4 max-w-xl">
+            <div className="p-4 bg-[#26282B] border border-[#393B40] rounded space-y-3">
+              <label className="flex items-center gap-2.5 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={formSettings.vcsUseChangelists ?? true}
+                  onChange={(e) => updateSetting('vcsUseChangelists', e.target.checked)}
+                  className="accent-[#3574F0] rounded"
+                />
+                <span className="text-white font-medium">Enable Git changelists support instead of single staging area</span>
+              </label>
+
+              <label className="flex items-center gap-2.5 cursor-pointer pl-6">
+                <input
+                  type="checkbox"
+                  checked={formSettings.vcsAutoActiveChangelist ?? true}
+                  onChange={(e) => updateSetting('vcsAutoActiveChangelist', e.target.checked)}
+                  className="accent-[#3574F0] rounded"
+                />
+                <span className="text-white">Automatically create new changelist on branch checkout</span>
+              </label>
+
+              <label className="flex items-center gap-2.5 cursor-pointer pl-6">
+                <input type="checkbox" defaultChecked={true} className="accent-[#3574F0] rounded" />
+                <span className="text-white">Highlight files belonging to inactive changelists in Project tree</span>
+              </label>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Sub-page: VCS > Shelve */}
+      {selectedId === 'vcs-shelve' && (
+        <div className="space-y-6 text-xs">
+          <div>
+            <h2 className="text-base font-semibold text-white mb-1">Shelve</h2>
+            <p className="text-xs text-[#868A91]">Manage temporary shelved patches, separate from Git stash commits.</p>
+          </div>
+
+          <div className="space-y-4 max-w-xl">
+            <div className="p-4 bg-[#26282B] border border-[#393B40] rounded space-y-3.5">
+              <label className="flex items-center gap-2.5 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={formSettings.vcsAutoShelveOnMerge ?? true}
+                  onChange={(e) => updateSetting('vcsAutoShelveOnMerge', e.target.checked)}
+                  className="accent-[#3574F0] rounded"
+                />
+                <span className="text-white font-medium">Automatically shelve local changes before Git Pull or Rebase</span>
+              </label>
+
+              <div className="space-y-1.5 pt-2 border-t border-[#393B40]/60">
+                <label className="text-[#DFE1E5] block">Shelf storage folder:</label>
+                <input
+                  type="text"
+                  value={formSettings.vcsShelfDirectory || '.idea/shelf'}
+                  onChange={(e) => updateSetting('vcsShelfDirectory', e.target.value)}
+                  className="w-full bg-[#1E1F22] border border-[#393B40] rounded px-2.5 py-1 text-white font-mono text-[11px] outline-none"
+                />
+              </div>
+
+              <div className="flex items-center justify-between pt-1">
+                <span className="text-[#868A91]">Purge unshelved patches older than:</span>
+                <select className="bg-[#1E1F22] border border-[#393B40] rounded px-3 py-1 text-white outline-none">
+                  <option value="30">30 days</option>
+                  <option value="60">60 days</option>
+                  <option value="never">Never</option>
+                </select>
+              </div>
+            </div>
           </div>
         </div>
       )}

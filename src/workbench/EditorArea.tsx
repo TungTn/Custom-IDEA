@@ -67,6 +67,12 @@ export interface EditorAreaHandle {
   openAiPromptBar: () => void;
   undo: () => void;
   redo: () => void;
+  cut: () => void;
+  copy: () => void;
+  paste: (text?: string) => void;
+  selectAll: () => void;
+  toggleCase: () => void;
+  deleteSelection: () => void;
 }
 
 // Alias for backwards compatibility
@@ -525,6 +531,24 @@ export const EditorArea = forwardRef<EditorAreaHandle, EditorAreaProps>(
       },
       redo: () => {
         cmEditorRef.current?.redo();
+      },
+      cut: () => {
+        cmEditorRef.current?.cut();
+      },
+      copy: () => {
+        cmEditorRef.current?.copy();
+      },
+      paste: (text) => {
+        cmEditorRef.current?.paste(text);
+      },
+      selectAll: () => {
+        cmEditorRef.current?.selectAll();
+      },
+      toggleCase: () => {
+        cmEditorRef.current?.toggleCase();
+      },
+      deleteSelection: () => {
+        cmEditorRef.current?.deleteSelection();
       },
     }));
 

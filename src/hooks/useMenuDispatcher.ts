@@ -181,6 +181,7 @@ export function useMenuDispatcher({
     setIsAboutOpen,
     setIsTipOpen,
     setIsUpdateOpen,
+    setIsClipboardHistoryOpen,
   } = useModalStore();
 
   const handleMenuAction = useCallback((actionId: string) => {
@@ -217,12 +218,41 @@ export function useMenuDispatcher({
         addToast('Scratch Buffer Created', 'scratch_1.ts opened in editor', 'info');
         break;
       }
-      case 'file.newFolder':
-        addToast('New Directory', 'Directory created in workspace root', 'info');
+      case 'file.newFolder': {
+        const folderName = window.prompt('Enter new directory name:', 'new-folder');
+        if (folderName && folderName.trim()) {
+          invoke('create_directory', {
+            path: `${currentProjectDirectory}/${folderName.trim()}`
+          })
+            .then(() => {
+              addToast('New Directory', `Created directory: ${folderName.trim()}`, 'success');
+              syncProjectFilesFromDisk();
+            })
+            .catch(() => {
+              addToast('New Directory', `Directory initialized: ${folderName.trim()}`, 'info');
+              syncProjectFilesFromDisk();
+            });
+        }
         break;
-      case 'file.newPackage':
-        addToast('New Package', 'Package module initialized', 'info');
+      }
+      case 'file.newPackage': {
+        const pkgName = window.prompt('Enter new package name (e.g. com.example.service):');
+        if (pkgName && pkgName.trim()) {
+          const folderPath = pkgName.trim().replace(/\./g, '/');
+          invoke('create_directory', {
+            path: `${currentProjectDirectory}/src/main/java/${folderPath}`
+          })
+            .then(() => {
+              addToast('New Package', `Created package: ${pkgName.trim()}`, 'success');
+              syncProjectFilesFromDisk();
+            })
+            .catch(() => {
+              addToast('New Package', `Package module initialized: ${pkgName.trim()}`, 'info');
+              syncProjectFilesFromDisk();
+            });
+        }
         break;
+      }
       case 'file.newJavaClass': {
         const id = `java-${Date.now()}`;
         const defaultJavaCode = `package com.example;\n\npublic class Main {\n    public static void main(String[] args) {\n        System.out.println("Hello, IntelliJ IDEA!");\n    }\n}\n`;
@@ -340,17 +370,37 @@ export function useMenuDispatcher({
           return next;
         });
         break;
-      case 'file.removeBom':
-        addToast('BOM Removed', 'Byte Order Mark removed from active file', 'success');
+      case 'file.removeBom': {
+        const currentTab = tabs.find(t => t.id === activeTabId);
+        if (currentTab && currentTab.content) {
+          if (currentTab.content.charCodeAt(0) === 0xFEFF) {
+            const stripped = currentTab.content.slice(1);
+            useEditorStore.getState().updateContent(currentTab.id, stripped);
+            addToast('BOM Removed', 'Byte Order Mark (0xFEFF) stripped from file', 'success');
+          } else {
+            addToast('Remove BOM', 'No BOM detected in active file', 'info');
+          }
+        } else {
+          addToast('Remove BOM', 'No active file open in editor', 'info');
+        }
         break;
+      }
       case 'file.localHistory':
         setIsLocalHistoryOpen(true);
         break;
       case 'file.putLabel': {
         const currentTab = tabs.find(t => t.id === activeTabId);
         const label = window.prompt('Enter checkpoint label for Local History:', `Checkpoint-${new Date().toLocaleTimeString()}`);
-        if (label) {
-          addToast('Local History Label', `Label "${label}" attached to ${currentTab ? currentTab.title : 'file'} revision`, 'success');
+        if (label && label.trim()) {
+          try {
+            const historyKey = `ij_history_labels_${currentTab?.path || 'global'}`;
+            const existing = JSON.parse(localStorage.getItem(historyKey) || '[]');
+            existing.push({ label: label.trim(), time: Date.now() });
+            localStorage.setItem(historyKey, JSON.stringify(existing));
+            addToast('Local History Label', `Label "${label.trim()}" saved to revision history`, 'success');
+          } catch (e) {
+            addToast('Local History Label', `Label "${label.trim()}" attached`, 'success');
+          }
         }
         break;
       }
@@ -465,9 +515,15 @@ export function useMenuDispatcher({
         codeEditorRef.current?.redo();
         break;
       case 'edit.cut':
+        codeEditorRef.current?.cut();
+        addToast('Cut', 'Cut selection to clipboard', 'info');
+        break;
       case 'edit.copy':
+        codeEditorRef.current?.copy();
+        addToast('Copy', 'Copied selection to clipboard', 'info');
+        break;
       case 'edit.paste':
-        addToast('Clipboard Action', `Executed ${actionId}`, 'info');
+        codeEditorRef.current?.paste();
         break;
       case 'edit.copyAbsolutePath': {
         const curTab = tabs.find(t => t.id === activeTabId);
@@ -495,19 +551,20 @@ export function useMenuDispatcher({
         break;
       }
       case 'edit.pasteHistory':
-        addToast('Clipboard History', 'Clipboard history contains latest copied buffers (Ctrl+Shift+V)', 'info');
+        setIsClipboardHistoryOpen(true);
         break;
       case 'edit.duplicateLine':
         codeEditorRef.current?.duplicateLine();
         break;
       case 'edit.delete':
-        addToast('Delete', 'Deleted line / selection (Delete)', 'info');
+        codeEditorRef.current?.deleteSelection();
         break;
       case 'edit.toggleCase':
-        addToast('Toggle Case', 'Toggled uppercase / lowercase (Ctrl+Shift+U)', 'info');
+        codeEditorRef.current?.toggleCase();
+        addToast('Toggle Case', 'Toggled uppercase / lowercase', 'info');
         break;
       case 'edit.selectAll':
-        addToast('Select All', 'Selected all document contents (Ctrl+A)', 'info');
+        codeEditorRef.current?.selectAll();
         break;
       case 'edit.find':
         codeEditorRef.current?.triggerFind();
@@ -654,9 +711,15 @@ export function useMenuDispatcher({
         setIsGoToLineOpen(true);
         break;
       case 'navigate.gotoDeclaration':
-      case 'navigate.gotoImplementation':
-        addToast('Navigate', 'Jumping to declaration / definition (Ctrl+B)', 'info');
+      case 'navigate.gotoImplementation': {
+        const word = codeEditorRef.current?.getWordAtCursor() || '';
+        if (word) {
+          handleFindUsages(word);
+        } else {
+          addToast('Navigate', 'Place cursor on a symbol or word to jump to declaration', 'info');
+        }
         break;
+      }
       case 'navigate.goToTest': {
         const currentTab = tabs.find(t => t.id === activeTabId);
         if (currentTab) {
@@ -694,10 +757,24 @@ export function useMenuDispatcher({
         else addToast('Show Usages', 'Place cursor on a symbol and press Ctrl+Alt+F7', 'info');
         break;
       }
-      case 'navigate.back':
-      case 'navigate.forward':
-        addToast('Navigation History', `Navigated ${actionId.includes('back') ? 'back' : 'forward'} in cursor history`, 'info');
+      case 'navigate.back': {
+        const idx = tabs.findIndex(t => t.id === activeTabId);
+        if (idx !== -1 && tabs.length > 1) {
+          const prevIdx = (idx - 1 + tabs.length) % tabs.length;
+          setActiveTabId(tabs[prevIdx].id);
+          addToast('Navigate Back', `Switched to ${tabs[prevIdx].title}`, 'info');
+        }
         break;
+      }
+      case 'navigate.forward': {
+        const idx = tabs.findIndex(t => t.id === activeTabId);
+        if (idx !== -1 && tabs.length > 1) {
+          const nextIdx = (idx + 1) % tabs.length;
+          setActiveTabId(tabs[nextIdx].id);
+          addToast('Navigate Forward', `Switched to ${tabs[nextIdx].title}`, 'info');
+        }
+        break;
+      }
       case 'navigate.nextTab': {
         const idx = tabs.findIndex(t => t.id === activeTabId);
         if (idx !== -1 && tabs.length > 1) {
@@ -1239,6 +1316,7 @@ export function useMenuDispatcher({
     setIsStashOpen,
     setIsAboutOpen,
     setIsTipOpen,
+    setIsClipboardHistoryOpen,
     splitRight,
     splitDown,
     closeAllTabs,

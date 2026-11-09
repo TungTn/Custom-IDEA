@@ -116,6 +116,12 @@ export interface CmEditorHandle {
   unfoldAll: () => void;
   undo: () => void;
   redo: () => void;
+  cut: () => void;
+  copy: () => void;
+  paste: (textOverride?: string) => Promise<void>;
+  selectAll: () => void;
+  toggleCase: () => void;
+  deleteSelection: () => void;
 }
 
 interface CmEditorProps {
@@ -884,6 +890,123 @@ export const CmEditor = forwardRef<CmEditorHandle, CmEditorProps>(
       redo: () => {
         const view = viewRef.current;
         if (view) redo(view);
+      },
+      cut: () => {
+        const view = viewRef.current;
+        if (!view) return;
+        const sel = view.state.selection.main;
+        let text = '';
+        if (!sel.empty) {
+          text = view.state.sliceDoc(sel.from, sel.to);
+          view.dispatch({
+            changes: { from: sel.from, to: sel.to, insert: '' },
+            selection: { anchor: sel.from },
+            scrollIntoView: true,
+          });
+        } else {
+          const line = view.state.doc.lineAt(sel.head);
+          text = line.text + '\n';
+          const from = line.from;
+          const to = Math.min(line.to + 1, view.state.doc.length);
+          view.dispatch({
+            changes: { from, to, insert: '' },
+            selection: { anchor: from },
+            scrollIntoView: true,
+          });
+        }
+        if (text) {
+          navigator.clipboard.writeText(text).catch(() => {});
+        }
+        view.focus();
+      },
+      copy: () => {
+        const view = viewRef.current;
+        if (!view) return;
+        const sel = view.state.selection.main;
+        let text = '';
+        if (!sel.empty) {
+          text = view.state.sliceDoc(sel.from, sel.to);
+        } else {
+          const line = view.state.doc.lineAt(sel.head);
+          text = line.text + '\n';
+        }
+        if (text) {
+          navigator.clipboard.writeText(text).catch(() => {});
+        }
+      },
+      paste: async (textOverride?: string) => {
+        const view = viewRef.current;
+        if (!view) return;
+        let text = textOverride;
+        if (text === undefined) {
+          try {
+            text = await navigator.clipboard.readText();
+          } catch (_) {
+            text = '';
+          }
+        }
+        if (!text) return;
+        const sel = view.state.selection.main;
+        view.dispatch({
+          changes: { from: sel.from, to: sel.to, insert: text },
+          selection: { anchor: sel.from + text.length },
+          scrollIntoView: true,
+        });
+        view.focus();
+      },
+      selectAll: () => {
+        const view = viewRef.current;
+        if (!view) return;
+        view.dispatch({
+          selection: { anchor: 0, head: view.state.doc.length },
+        });
+        view.focus();
+      },
+      toggleCase: () => {
+        const view = viewRef.current;
+        if (!view) return;
+        const sel = view.state.selection.main;
+        if (sel.empty) {
+          const word = view.state.wordAt(sel.head);
+          if (!word) return;
+          const wordText = view.state.sliceDoc(word.from, word.to);
+          const isUpper = wordText === wordText.toUpperCase();
+          const newText = isUpper ? wordText.toLowerCase() : wordText.toUpperCase();
+          view.dispatch({
+            changes: { from: word.from, to: word.to, insert: newText },
+          });
+        } else {
+          const text = view.state.sliceDoc(sel.from, sel.to);
+          const isUpper = text === text.toUpperCase();
+          const newText = isUpper ? text.toLowerCase() : text.toUpperCase();
+          view.dispatch({
+            changes: { from: sel.from, to: sel.to, insert: newText },
+            selection: { anchor: sel.from, head: sel.from + newText.length },
+          });
+        }
+        view.focus();
+      },
+      deleteSelection: () => {
+        const view = viewRef.current;
+        if (!view) return;
+        const sel = view.state.selection.main;
+        if (!sel.empty) {
+          view.dispatch({
+            changes: { from: sel.from, to: sel.to, insert: '' },
+            selection: { anchor: sel.from },
+            scrollIntoView: true,
+          });
+        } else {
+          const line = view.state.doc.lineAt(sel.head);
+          const from = line.from;
+          const to = Math.min(line.to + 1, view.state.doc.length);
+          view.dispatch({
+            changes: { from, to, insert: '' },
+            selection: { anchor: from },
+            scrollIntoView: true,
+          });
+        }
+        view.focus();
       },
     }));
 

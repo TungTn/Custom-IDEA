@@ -78,6 +78,18 @@ const ACTION_SHORTCUT_MAP: Record<string, { name: string; shortcut: string }> = 
   'view.toolwindow.problems': { name: 'Problems Tool Window', shortcut: 'Alt+6' },
   'view.toolwindow.git': { name: 'Git Tool Window', shortcut: 'Alt+9' },
   'view.toolwindow.project': { name: 'Project Tool Window', shortcut: 'Alt+1' },
+  'window.minimize': { name: 'Minimize Window', shortcut: 'Ctrl+M' },
+  'window.zoom': { name: 'Zoom Window', shortcut: '' },
+  'window.close': { name: 'Close Window', shortcut: 'Ctrl+F4' },
+  'file.close': { name: 'Close Active Tab', shortcut: 'Ctrl+F4' },
+  'file.closeAll': { name: 'Close All Tabs', shortcut: 'Ctrl+Shift+F4' },
+  'editor.splitRight': { name: 'Split Right', shortcut: '' },
+  'editor.splitDown': { name: 'Split Down', shortcut: '' },
+  'window.nextProject': { name: 'Next Project Window', shortcut: 'Ctrl+Alt+]' },
+  'window.prevProject': { name: 'Previous Project Window', shortcut: 'Ctrl+Alt+[' },
+  'window.layoutDefault': { name: 'Default Layout', shortcut: '' },
+  'window.layoutSave': { name: 'Save Current Layout', shortcut: '' },
+  'run.tests': { name: 'Run All Tests', shortcut: '' },
 };
 
 export function useMenuDispatcher({
@@ -107,13 +119,26 @@ export function useMenuDispatcher({
   refreshGitStatus,
   syncProjectFilesFromDisk,
 }: UseMenuDispatcherOptions) {
-  const { tabs, setTabs, activeTabId, selectTab: setActiveTabId } = useEditorStore();
+  const {
+    tabs,
+    setTabs,
+    activeTabId,
+    selectTab: setActiveTabId,
+    splitRight,
+    splitDown,
+    closeAllTabs,
+    unsplit,
+  } = useEditorStore();
   const {
     activeSideTab, setActiveSideTab,
     isSideBarOpen, setIsSideBarOpen,
-    setBottomTab, setIsBottomOpen,
+    sideBarWidth, setSideBarWidth,
+    bottomHeight, setBottomHeight,
+    bottomTab, setBottomTab,
+    isBottomOpen, setIsBottomOpen,
     setActiveRightPanel,
     setPowerSaveMode,
+    toggleStatusBar,
   } = useLayoutStore();
   const { addToast, markAllNotificationsAsRead: handleMarkAllNotificationsRead } = useNotificationStore();
   const {
@@ -565,6 +590,7 @@ export function useMenuDispatcher({
         setActiveRightPanel(prev => prev === 'cargo' ? null : 'cargo');
         break;
       case 'view.toggleStatusBar':
+        toggleStatusBar();
         addToast('View Appearance', 'Status Bar visibility toggled', 'info');
         break;
       case 'view.toggleBreadcrumbs':
@@ -835,6 +861,12 @@ export function useMenuDispatcher({
       case 'run.run':
         handleRun();
         break;
+      case 'run.tests':
+        setBottomTab('tests');
+        setIsBottomOpen(true);
+        handleBuild('build');
+        addToast('Run Tests', 'Running project test suite', 'info');
+        break;
       case 'run.debug':
         handleStartDebug();
         break;
@@ -1015,6 +1047,93 @@ export function useMenuDispatcher({
           .catch(e => addToast('Git Unstash Failed', String(e), 'error'));
         break;
 
+      // ─── Window Actions ───
+      case 'window.minimize':
+        invoke('app_minimize_window').catch(() => {});
+        break;
+      case 'window.zoom':
+        invoke<boolean>('app_toggle_maximize_window').catch(() => {});
+        break;
+      case 'window.close':
+        invoke('app_close_window').catch(() => {});
+        break;
+      case 'file.close':
+        handleCloseActiveTab();
+        break;
+      case 'file.closeAll':
+        closeAllTabs();
+        addToast('Close All Tabs', 'All editor tabs closed', 'info');
+        break;
+      case 'editor.splitRight':
+        splitRight();
+        addToast('Split Editor', 'Editor split vertically (Split Right)', 'info');
+        break;
+      case 'editor.splitDown':
+        splitDown();
+        addToast('Split Editor', 'Editor split horizontally (Split Down)', 'info');
+        break;
+      case 'window.nextProject': {
+        const currentProjects = useProjectStore.getState().recentProjects;
+        const currentRoot = useProjectStore.getState().projectRootPath;
+        if (currentProjects.length > 1) {
+          const currentIndex = currentProjects.findIndex(p => p.path === currentRoot);
+          const nextIndex = (currentIndex + 1) % currentProjects.length;
+          const target = currentProjects[nextIndex];
+          if (target) {
+            handleOpenProjectPath(target.path);
+            addToast('Switch Project', `Switched to project: ${target.name}`, 'info');
+          }
+        } else {
+          addToast('Next Project', 'Only one project found in workspace history', 'info');
+        }
+        break;
+      }
+      case 'window.prevProject': {
+        const currentProjects = useProjectStore.getState().recentProjects;
+        const currentRoot = useProjectStore.getState().projectRootPath;
+        if (currentProjects.length > 1) {
+          const currentIndex = currentProjects.findIndex(p => p.path === currentRoot);
+          const prevIndex = (currentIndex - 1 + currentProjects.length) % currentProjects.length;
+          const target = currentProjects[prevIndex];
+          if (target) {
+            handleOpenProjectPath(target.path);
+            addToast('Switch Project', `Switched to project: ${target.name}`, 'info');
+          }
+        } else {
+          addToast('Previous Project', 'Only one project found in workspace history', 'info');
+        }
+        break;
+      }
+      case 'window.layoutDefault':
+        setIsSideBarOpen(true);
+        setActiveSideTab('project');
+        setSideBarWidth(320);
+        setIsBottomOpen(true);
+        setBottomTab('run');
+        setBottomHeight(240);
+        setActiveRightPanel(null);
+        unsplit();
+        addToast('Layout Restored', 'Restored default IDE layout', 'success');
+        break;
+      case 'window.layoutSave': {
+        const currentLayout = {
+          isSideBarOpen,
+          sideBarWidth,
+          activeSideTab,
+          isBottomOpen,
+          bottomTab: useLayoutStore.getState().bottomTab,
+          bottomHeight,
+          splitMode: useEditorStore.getState().splitMode,
+        };
+        try {
+          localStorage.setItem('ij_custom_layout', JSON.stringify(currentLayout));
+          addToast('Layout Saved', 'Current window layout saved as default preset', 'success');
+        } catch (e) {
+          addToast('Save Layout Error', 'Failed to save layout preset to local storage', 'error');
+        }
+        break;
+      }
+
       // ─── Help Actions ───
       case 'help.findAction':
         setIsSearchOpen(true);
@@ -1078,6 +1197,8 @@ export function useMenuDispatcher({
     setIsSideBarOpen,
     setActiveSideTab,
     setBottomTab,
+    bottomTab,
+    isBottomOpen,
     setIsBottomOpen,
     setActiveRightPanel,
     handleMarkAllNotificationsRead,
@@ -1118,6 +1239,15 @@ export function useMenuDispatcher({
     setIsStashOpen,
     setIsAboutOpen,
     setIsTipOpen,
+    splitRight,
+    splitDown,
+    closeAllTabs,
+    unsplit,
+    sideBarWidth,
+    setSideBarWidth,
+    bottomHeight,
+    setBottomHeight,
+    toggleStatusBar,
   ]);
 
   return { handleMenuAction };

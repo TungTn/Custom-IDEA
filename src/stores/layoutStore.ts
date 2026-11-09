@@ -12,6 +12,7 @@ export interface LayoutState {
   bottomHeight: number;
   hasOpenedTerminal: boolean;
   powerSaveMode: boolean;
+  isStatusBarVisible: boolean;
 
   setActiveSideTab: (tab: string) => void;
   toggleSideBar: () => void;
@@ -25,6 +26,8 @@ export interface LayoutState {
   setBottomHeight: (height: number | ((prev: number) => number)) => void;
   setHasOpenedTerminal: (opened: boolean) => void;
   setPowerSaveMode: (mode: boolean | ((prev: boolean) => boolean)) => void;
+  setIsStatusBarVisible: (visible: boolean | ((prev: boolean) => boolean)) => void;
+  toggleStatusBar: () => void;
 }
 
 export const useLayoutStore = create<LayoutState>((set) => ({
@@ -37,6 +40,7 @@ export const useLayoutStore = create<LayoutState>((set) => ({
   bottomHeight: 240,
   hasOpenedTerminal: false,
   powerSaveMode: false,
+  isStatusBarVisible: true,
 
   setActiveSideTab: (tab) => set({ activeSideTab: tab, isSideBarOpen: true }),
   toggleSideBar: () => set((state) => ({ isSideBarOpen: !state.isSideBarOpen })),
@@ -80,5 +84,16 @@ export const useLayoutStore = create<LayoutState>((set) => ({
     set((state) => ({
       powerSaveMode:
         typeof modeOrUpdater === 'function' ? modeOrUpdater(state.powerSaveMode) : modeOrUpdater,
+    })),
+  setIsStatusBarVisible: (visibleOrUpdater) =>
+    set((state) => ({
+      isStatusBarVisible:
+        typeof visibleOrUpdater === 'function'
+          ? visibleOrUpdater(state.isStatusBarVisible)
+          : visibleOrUpdater,
+    })),
+  toggleStatusBar: () =>
+    set((state) => ({
+      isStatusBarVisible: !state.isStatusBarVisible,
     })),
 }));

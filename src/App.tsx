@@ -100,6 +100,7 @@ export const App: React.FC = () => {
     bottomHeight, setBottomHeight,
     hasOpenedTerminal, setHasOpenedTerminal,
     powerSaveMode, setPowerSaveMode,
+    isStatusBarVisible,
   } = useLayoutStore();
 
   const {
@@ -2545,49 +2546,51 @@ export const App: React.FC = () => {
             </div>
 
             {/* Bottom Status Bar */}
-            <StatusBar
-            branch={currentBranch}
-            cursorLine={cursorPos.line}
-            cursorCol={cursorPos.col}
-            encoding={fileEncoding}
-            lineEnding={lineEnding}
-            tabSize={settings.tabSize || 4}
-            isIndexing={isIndexing}
-            onOpenBranches={() => setIsBranchesOpen(true)}
-            onShowToast={addToast}
-            editorEngine={editorEngine}
-            onToggleEngine={toggleEditorEngine}
-            onSelectTabSize={handleSelectTabSize}
-            onSelectLineEnding={handleSelectLineEnding}
-            onSelectEncoding={handleSelectEncoding}
-            onOpenGoToLine={() => setIsGoToLineOpen(true)}
-            isReadOnly={isReadOnly}
-            onToggleReadOnly={() => {
-              setIsReadOnly(prev => {
-                const next = !prev;
-                addToast('Read-Only Status', next ? 'File locked as Read-Only' : 'File unlocked (Editable)', 'info');
-                return next;
-              });
-            }}
-            languageName={(() => {
-              const active = tabs.find(t => t.id === activeTabId);
-              if (!active) return 'Code';
-              const ext = (active.path || active.title).split('.').pop()?.toLowerCase();
-              if (ext === 'vue') return 'Vue template';
-              if (ext === 'ts' || ext === 'tsx') return 'TypeScript';
-              if (ext === 'js' || ext === 'jsx') return 'JavaScript';
-              if (ext === 'rs') return 'Rust';
-              if (ext === 'java') return 'Java';
-              if (ext === 'css' || ext === 'scss') return 'CSS/SCSS';
-              return active.language || 'Code';
-            })()}
-            filePath={tabs.find(t => t.id === activeTabId)?.path || tabs.find(t => t.id === activeTabId)?.title}
-            projectName={projectName || 'mic-fe-personal'}
-            projectTree={files}
-            onSelectFile={handleFileSelect}
-            sonarAnalysisState={sonarAnalysisState}
-            onStopSonarAnalysis={() => setSonarCancelSignal(prev => prev + 1)}
-            />
+            {isStatusBarVisible && (
+              <StatusBar
+                branch={currentBranch}
+                cursorLine={cursorPos.line}
+                cursorCol={cursorPos.col}
+                encoding={fileEncoding}
+                lineEnding={lineEnding}
+                tabSize={settings.tabSize || 4}
+                isIndexing={isIndexing}
+                onOpenBranches={() => setIsBranchesOpen(true)}
+                onShowToast={addToast}
+                editorEngine={editorEngine}
+                onToggleEngine={toggleEditorEngine}
+                onSelectTabSize={handleSelectTabSize}
+                onSelectLineEnding={handleSelectLineEnding}
+                onSelectEncoding={handleSelectEncoding}
+                onOpenGoToLine={() => setIsGoToLineOpen(true)}
+                isReadOnly={isReadOnly}
+                onToggleReadOnly={() => {
+                  setIsReadOnly(prev => {
+                    const next = !prev;
+                    addToast('Read-Only Status', next ? 'File locked as Read-Only' : 'File unlocked (Editable)', 'info');
+                    return next;
+                  });
+                }}
+                languageName={(() => {
+                  const active = tabs.find(t => t.id === activeTabId);
+                  if (!active) return 'Code';
+                  const ext = (active.path || active.title).split('.').pop()?.toLowerCase();
+                  if (ext === 'vue') return 'Vue template';
+                  if (ext === 'ts' || ext === 'tsx') return 'TypeScript';
+                  if (ext === 'js' || ext === 'jsx') return 'JavaScript';
+                  if (ext === 'rs') return 'Rust';
+                  if (ext === 'java') return 'Java';
+                  if (ext === 'css' || ext === 'scss') return 'CSS/SCSS';
+                  return active.language || 'Code';
+                })()}
+                filePath={tabs.find(t => t.id === activeTabId)?.path || tabs.find(t => t.id === activeTabId)?.title}
+                projectName={projectName || 'mic-fe-personal'}
+                projectTree={files}
+                onSelectFile={handleFileSelect}
+                sonarAnalysisState={sonarAnalysisState}
+                onStopSonarAnalysis={() => setSonarCancelSignal(prev => prev + 1)}
+              />
+            )}
             </>
         )}
 

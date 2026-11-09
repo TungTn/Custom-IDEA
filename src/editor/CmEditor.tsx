@@ -1032,7 +1032,7 @@ export const CmEditor = forwardRef<CmEditorHandle, CmEditorProps>(
         view.dispatch({
           changes: [
             { from: line.from, insert: declaration },
-            { from: sel.from + declaration.length, to: sel.to + declaration.length, insert: varName },
+            { from: sel.from, to: sel.to, insert: varName },
           ],
           selection: { anchor: sel.from + declaration.length + varName.length },
           scrollIntoView: true,
@@ -1051,7 +1051,7 @@ export const CmEditor = forwardRef<CmEditorHandle, CmEditorProps>(
         view.dispatch({
           changes: [
             { from: 0, insert: declaration },
-            { from: sel.from + declaration.length, to: sel.to + declaration.length, insert: constName },
+            { from: sel.from, to: sel.to, insert: constName },
           ],
           selection: { anchor: sel.from + declaration.length + constName.length },
           scrollIntoView: true,
@@ -1102,6 +1102,7 @@ export const CmEditor = forwardRef<CmEditorHandle, CmEditorProps>(
             changes.push({ from: m.index, to: m.index + symbol.length, insert: val });
           }
           changes.push({ from: declStart, to: declEnd, insert: '' });
+          changes.sort((a, b) => a.from - b.from);
           view.dispatch({ changes });
           view.focus();
         }

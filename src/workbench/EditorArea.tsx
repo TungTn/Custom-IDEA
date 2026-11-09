@@ -73,6 +73,11 @@ export interface EditorAreaHandle {
   selectAll: () => void;
   toggleCase: () => void;
   deleteSelection: () => void;
+  extractVariable: (name?: string) => boolean;
+  extractConstant: (name?: string) => boolean;
+  extractMethod: (name?: string) => boolean;
+  inlineSymbol: () => void;
+  changeSignature: () => void;
 }
 
 // Alias for backwards compatibility
@@ -549,6 +554,21 @@ export const EditorArea = forwardRef<EditorAreaHandle, EditorAreaProps>(
       },
       deleteSelection: () => {
         cmEditorRef.current?.deleteSelection();
+      },
+      extractVariable: (name) => {
+        return cmEditorRef.current?.extractVariable(name) ?? false;
+      },
+      extractConstant: (name) => {
+        return cmEditorRef.current?.extractConstant(name) ?? false;
+      },
+      extractMethod: (name) => {
+        return cmEditorRef.current?.extractMethod(name) ?? false;
+      },
+      inlineSymbol: () => {
+        cmEditorRef.current?.inlineSymbol();
+      },
+      changeSignature: () => {
+        cmEditorRef.current?.changeSignature();
       },
     }));
 

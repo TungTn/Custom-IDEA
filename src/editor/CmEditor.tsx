@@ -122,6 +122,11 @@ export interface CmEditorHandle {
   selectAll: () => void;
   toggleCase: () => void;
   deleteSelection: () => void;
+  extractVariable: (name?: string) => boolean;
+  extractConstant: (name?: string) => boolean;
+  extractMethod: (name?: string) => boolean;
+  inlineSymbol: () => void;
+  changeSignature: () => void;
 }
 
 interface CmEditorProps {
@@ -1007,6 +1012,107 @@ export const CmEditor = forwardRef<CmEditorHandle, CmEditorProps>(
           });
         }
         view.focus();
+      },
+      extractVariable: (name?: string) => {
+        const view = viewRef.current;
+        if (!view) return false;
+        const sel = view.state.selection.main;
+        const expr = view.state.sliceDoc(sel.from, sel.to).trim();
+        if (!expr) return false;
+        const varName = name || window.prompt('Enter variable name:', 'extractedVar') || 'extractedVar';
+        const line = view.state.doc.lineAt(sel.from);
+        const indent = line.text.match(/^\s*/)?.[0] || '';
+        const declaration = `${indent}const ${varName} = ${expr};\n`;
+        view.dispatch({
+          changes: [
+            { from: line.from, insert: declaration },
+            { from: sel.from + declaration.length, to: sel.to + declaration.length, insert: varName },
+          ],
+          selection: { anchor: sel.from + declaration.length + varName.length },
+          scrollIntoView: true,
+        });
+        view.focus();
+        return true;
+      },
+      extractConstant: (name?: string) => {
+        const view = viewRef.current;
+        if (!view) return false;
+        const sel = view.state.selection.main;
+        const expr = view.state.sliceDoc(sel.from, sel.to).trim();
+        if (!expr) return false;
+        const constName = name || window.prompt('Enter constant name:', 'EXTRACTED_CONSTANT') || 'EXTRACTED_CONSTANT';
+        const declaration = `const ${constName} = ${expr};\n`;
+        view.dispatch({
+          changes: [
+            { from: 0, insert: declaration },
+            { from: sel.from + declaration.length, to: sel.to + declaration.length, insert: constName },
+          ],
+          selection: { anchor: sel.from + declaration.length + constName.length },
+          scrollIntoView: true,
+        });
+        view.focus();
+        return true;
+      },
+      extractMethod: (name?: string) => {
+        const view = viewRef.current;
+        if (!view) return false;
+        const sel = view.state.selection.main;
+        const bodyText = view.state.sliceDoc(sel.from, sel.to).trim();
+        if (!bodyText) return false;
+        const fnName = name || window.prompt('Enter method name:', 'extractedMethod') || 'extractedMethod';
+        const line = view.state.doc.lineAt(sel.from);
+        const indent = line.text.match(/^\s*/)?.[0] || '';
+        const callExpr = `${fnName}();`;
+        const fnDef = `\n${indent}function ${fnName}() {\n${indent}  ${bodyText.replace(/\n/g, '\n' + indent + '  ')}\n${indent}}\n`;
+        view.dispatch({
+          changes: [
+            { from: sel.from, to: sel.to, insert: callExpr },
+            { from: view.state.doc.length, insert: fnDef },
+          ],
+          selection: { anchor: sel.from + callExpr.length },
+          scrollIntoView: true,
+        });
+        view.focus();
+        return true;
+      },
+      inlineSymbol: () => {
+        const view = viewRef.current;
+        if (!view) return;
+        const word = view.state.wordAt(view.state.selection.main.head);
+        if (!word) return;
+        const symbol = view.state.sliceDoc(word.from, word.to);
+        const docText = view.state.doc.toString();
+        const declRegex = new RegExp(`(?:const|let|var)\\s+${symbol}\\s*=\\s*([^;\\n]+);?\\n?`);
+        const match = docText.match(declRegex);
+        if (match) {
+          const val = match[1].trim();
+          const declStart = match.index!;
+          const declEnd = declStart + match[0].length;
+          const allRegex = new RegExp(`\\b${symbol}\\b`, 'g');
+          let m;
+          const changes: any[] = [];
+          while ((m = allRegex.exec(docText)) !== null) {
+            if (m.index >= declStart && m.index < declEnd) continue;
+            changes.push({ from: m.index, to: m.index + symbol.length, insert: val });
+          }
+          changes.push({ from: declStart, to: declEnd, insert: '' });
+          view.dispatch({ changes });
+          view.focus();
+        }
+      },
+      changeSignature: () => {
+        const view = viewRef.current;
+        if (!view) return;
+        const sel = view.state.selection.main;
+        const line = view.state.doc.lineAt(sel.head);
+        const newSig = window.prompt('Update function / method signature:', line.text.trim());
+        if (newSig && newSig !== line.text.trim()) {
+          const indent = line.text.match(/^\s*/)?.[0] || '';
+          view.dispatch({
+            changes: { from: line.from, to: line.to, insert: indent + newSig },
+          });
+          view.focus();
+        }
       },
     }));
 

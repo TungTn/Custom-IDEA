@@ -1,5 +1,6 @@
-import React, { useState } from 'react';
-import { X, ExternalLink, Cpu, Copy, Check } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { X, Copy, Check } from 'lucide-react';
+import { getAppVersionInfo } from '../services/updaterService';
 
 interface AboutModalProps {
   isOpen: boolean;
@@ -8,15 +9,36 @@ interface AboutModalProps {
 
 export const AboutModal: React.FC<AboutModalProps> = ({ isOpen, onClose }) => {
   const [copied, setCopied] = useState(false);
+  const [versionInfo, setVersionInfo] = useState({
+    buildVersion: '#IC-261.1234.56',
+    builtOn: 'November 2026',
+  });
+
+  useEffect(() => {
+    if (!isOpen) return;
+    getAppVersionInfo().then((info) => {
+      if (info) {
+        const ver = info.version;
+        const formattedVer = ver && ver !== '0.1.0'
+          ? (ver.startsWith('#') ? ver : (ver.startsWith('IC-') ? `#${ver}` : `#IC-${ver}`))
+          : '#IC-261.1234.56';
+        const date = info.build_date || 'November 2026';
+        setVersionInfo({
+          buildVersion: formattedVer,
+          builtOn: date,
+        });
+      }
+    }).catch(() => {
+      // Fallback to default
+    });
+  }, [isOpen]);
+
   if (!isOpen) return null;
 
   const buildInfo = `Custom IDEA 2026.1 (Community Edition)
-Build #IC-261.1234.56, built on November 2026
+Build ${versionInfo.buildVersion}, built on ${versionInfo.builtOn}
 Runtime version: Microsoft Edge WebView2 Evergreen
-Core Stack: Tauri v2 + Rust 1.99 + React 18
-C++ Compiler: MSVC v143 (Visual Studio 2022)
-Editor Core: CodeMirror 6 with JetBrains New UI Dark
-OS: Windows 11 / Windows Server`;
+Powered by MIC Studio.`;
 
   const handleCopy = () => {
     navigator.clipboard.writeText(buildInfo);
@@ -53,36 +75,17 @@ OS: Windows 11 / Windows Server`;
           </button>
         </div>
 
-        {/* Body content */}
-        <div className="p-5 space-y-3.5 text-[12px] text-[#DFE1E5]">
+        {/* Body content - Only Build Version and Built on */}
+        <div className="p-5 space-y-3 text-[12px] text-[#DFE1E5]">
           <div className="space-y-1">
-            <div className="flex justify-between py-1 border-b border-[#393B40]">
+            <div className="flex justify-between py-1.5 border-b border-[#393B40]">
               <span className="text-[#868A91]">Build Version:</span>
-              <span className="font-mono text-[11px]">#IC-261.1234.56, built on November 2026</span>
+              <span className="font-mono text-[11px] font-medium text-[#DFE1E5]">{versionInfo.buildVersion}</span>
             </div>
-            <div className="flex justify-between py-1 border-b border-[#393B40]">
-              <span className="text-[#868A91]">Core Stack:</span>
-              <span className="font-mono text-[11px]">Tauri v2 + Rust 1.99 + React 18</span>
+            <div className="flex justify-between py-1.5">
+              <span className="text-[#868A91]">Built on:</span>
+              <span className="font-mono text-[11px] font-medium text-[#DFE1E5]">{versionInfo.builtOn}</span>
             </div>
-            <div className="flex justify-between py-1 border-b border-[#393B40]">
-              <span className="text-[#868A91]">Runtime Engine:</span>
-              <span className="font-mono text-[11px]">Microsoft Edge WebView2 Evergreen</span>
-            </div>
-            <div className="flex justify-between py-1 border-b border-[#393B40]">
-              <span className="text-[#868A91]">C++ Compiler:</span>
-              <span className="font-mono text-[11px]">MSVC v143 (Visual Studio 2022)</span>
-            </div>
-            <div className="flex justify-between py-1">
-              <span className="text-[#868A91]">Editor Core:</span>
-              <span className="font-mono text-[11px]">CodeMirror 6 with JetBrains New UI Dark</span>
-            </div>
-          </div>
-
-          <div className="bg-[#1E1F22] rounded-lg p-3 text-[11px] text-[#868A91] leading-relaxed flex items-center gap-2">
-            <Cpu size={18} className="text-[#3574F0] flex-shrink-0" />
-            <span>
-              Giải pháp IDE hiện đại, hiệu năng cao xây dựng trên kiến trúc Native Rust + Hybrid Web. Tối ưu hóa tài nguyên RAM và khởi động tức thì.
-            </span>
           </div>
         </div>
 

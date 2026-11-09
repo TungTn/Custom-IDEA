@@ -179,10 +179,24 @@ export async function applyUpdateAndRestart(buffer: ArrayBuffer): Promise<void> 
 /**
  * Lấy thông tin phiên bản hiện tại từ backend
  */
-export async function getAppVersionInfo(): Promise<{ version: string; isPortable?: boolean; exePath?: string }> {
+export async function getAppVersionInfo(): Promise<{
+  version: string;
+  isPortable?: boolean;
+  is_portable?: boolean;
+  exePath?: string;
+  exe_path?: string;
+  build_commit?: string;
+  build_date?: string;
+  target?: string;
+}> {
   try {
-    return await invoke('get_app_version_info');
+    const res = await invoke<any>('get_app_version_info');
+    return {
+      ...res,
+      isPortable: res.is_portable ?? res.isPortable ?? false,
+      exePath: res.exe_path ?? res.exePath ?? '',
+    };
   } catch (_) {
-    return { version: '0.1.0' };
+    return { version: '0.1.0', build_date: 'November 2026', isPortable: true };
   }
 }

@@ -41,10 +41,17 @@ import {
 import { invoke } from '@tauri-apps/api/core';
 import { MenuDropdown } from './MenuDropdown';
 import { IntelliJHamburgerMenu } from './IntelliJHamburgerMenu';
-import { menuRegistry, getFileMenuItems } from '../constants/menuRegistry';
+import { 
+  menuRegistry, 
+  getFileMenuItems, 
+  getViewMenuItems, 
+  getRunMenuItems, 
+  getBuildMenuItems 
+} from '../constants/menuRegistry';
 import { MenuCategoryName, MenuItem } from '../types/menu';
 import { GitBranchPopup } from '../features/git/GitBranchPopup';
 import { RunConfiguration } from '../types';
+import { useLayoutStore, useSettingsStore } from '../stores';
 
 export interface RecentProjectItem {
   name: string;
@@ -127,6 +134,19 @@ export const TopBar: React.FC<TopBarProps> = ({
   const [isMaximized, setIsMaximized] = useState(false);
   const [isConfirmExitOpen, setIsConfirmExitOpen] = useState(false);
 
+  // Dynamic layout & settings subscriptions for live menu checkmarks
+  const isStatusBarVisible = useLayoutStore((s) => s.isStatusBarVisible);
+  const { settings } = useSettingsStore();
+  const [isFullscreen, setIsFullscreen] = useState(false);
+
+  useEffect(() => {
+    const handleFsChange = () => {
+      setIsFullscreen(Boolean(typeof document !== 'undefined' && document.fullscreenElement));
+    };
+    document.addEventListener('fullscreenchange', handleFsChange);
+    return () => document.removeEventListener('fullscreenchange', handleFsChange);
+  }, []);
+
   const mainMenuRef = useRef<HTMLDivElement>(null);
   const projectDropdownRef = useRef<HTMLDivElement>(null);
   const runConfigRef = useRef<HTMLDivElement>(null);
@@ -177,6 +197,26 @@ export const TopBar: React.FC<TopBarProps> = ({
         fileEncoding,
         lineEnding,
         recentProjects,
+      });
+    }
+    if (menu === 'View') {
+      return getViewMenuItems({
+        isStatusBarVisible,
+        breadcrumbs: settings?.breadcrumbs ?? true,
+        lineNumbers: settings?.lineNumbers ?? true,
+        minimap: settings?.minimap ?? false,
+        wordWrap: settings?.wordWrap ?? false,
+        isFullscreen,
+      });
+    }
+    if (menu === 'Run') {
+      return getRunMenuItems({
+        activeConfigName: activeConfig?.name,
+      });
+    }
+    if (menu === 'Build') {
+      return getBuildMenuItems({
+        projectName,
       });
     }
     return menuRegistry[menu] || [];

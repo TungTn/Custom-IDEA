@@ -781,21 +781,23 @@ export const EditorArea = forwardRef<EditorAreaHandle, EditorAreaProps>(
                 )}
 
                 {/* Breadcrumbs */}
-                <div className="h-5 bg-[#1E1F22] border-b border-[#2B2D30] px-3 flex items-center justify-between text-[10.5px] text-[#868A91] select-none flex-shrink-0">
-                  <div className="flex items-center gap-1.5 font-sans overflow-hidden">
-                    {paneTab.path.replace(/\\/g, '/').split('/').filter(Boolean).map((part, index, arr) => {
-                      const isLast = index === arr.length - 1;
-                      return (
-                        <React.Fragment key={index}>
-                          {index > 0 && <ChevronRight size={9} className="text-[#4E5157]" />}
-                          <span className={isLast ? 'text-[#DFE1E5] font-medium' : 'hover:text-[#DFE1E5]'}>
-                            {part}
-                          </span>
-                        </React.Fragment>
-                      );
-                    })}
+                {settings?.breadcrumbs !== false && (
+                  <div className="h-5 bg-[#1E1F22] border-b border-[#2B2D30] px-3 flex items-center justify-between text-[10.5px] text-[#868A91] select-none flex-shrink-0">
+                    <div className="flex items-center gap-1.5 font-sans overflow-hidden">
+                      {paneTab.path.replace(/\\/g, '/').split('/').filter(Boolean).map((part, index, arr) => {
+                        const isLast = index === arr.length - 1;
+                        return (
+                          <React.Fragment key={index}>
+                            {index > 0 && <ChevronRight size={9} className="text-[#4E5157]" />}
+                            <span className={isLast ? 'text-[#DFE1E5] font-medium' : 'hover:text-[#DFE1E5]'}>
+                              {part}
+                            </span>
+                          </React.Fragment>
+                        );
+                      })}
+                    </div>
                   </div>
-                </div>
+                )}
 
                 {/* Content */}
                 <div className="flex-1 relative h-full overflow-hidden">
@@ -871,6 +873,8 @@ export const EditorArea = forwardRef<EditorAreaHandle, EditorAreaProps>(
                             content={paneTab.content}
                             language={paneTab.language}
                             isReadOnly={isReadOnly}
+                            lineNumbers={settings?.lineNumbers ?? true}
+                            wordWrap={settings?.wordWrap ?? false}
                             theme={settings?.theme}
                             fontSize={settings?.fontSize || 14}
                             fontFamily={settings?.fontFamily}

@@ -670,19 +670,19 @@ export function useMenuDispatcher({
         addToast('View Appearance', 'Status Bar visibility toggled', 'info');
         break;
       case 'view.toggleBreadcrumbs':
-        setSettings(s => ({ ...s, breadcrumbs: !s.breadcrumbs }));
+        setSettings(s => ({ ...s, breadcrumbs: !(s.breadcrumbs ?? true) }));
         addToast('Breadcrumbs', 'Navigation bar / breadcrumbs toggled', 'info');
         break;
       case 'view.toggleLineNumbers':
-        setSettings(s => ({ ...s, lineNumbers: !s.lineNumbers }));
+        setSettings(s => ({ ...s, lineNumbers: !(s.lineNumbers ?? true) }));
         addToast('Line Numbers', 'Editor line numbers toggled', 'info');
         break;
       case 'view.toggleMinimap':
-        setSettings(s => ({ ...s, minimap: !s.minimap }));
+        setSettings(s => ({ ...s, minimap: !(s.minimap ?? false) }));
         addToast('Minimap', 'Code minimap toggled', 'info');
         break;
       case 'view.toggleWordWrap':
-        setSettings(s => ({ ...s, wordWrap: !s.wordWrap }));
+        setSettings(s => ({ ...s, wordWrap: !(s.wordWrap ?? false) }));
         addToast('Word Wrap', 'Soft-wrap lines toggled', 'info');
         break;
       case 'view.toggleFullScreen':

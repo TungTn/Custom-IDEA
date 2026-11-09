@@ -164,6 +164,8 @@ interface CmEditorProps {
   onSelectMenuAction?: (actionId: string) => void;
   onShowToast?: (title: string, message: string, type?: 'info' | 'success' | 'warning' | 'error') => void;
   keymapProfile?: 'windows' | 'macos' | 'vscode' | 'eclipse' | 'netbeans' | string;
+  lineNumbers?: boolean;
+  wordWrap?: boolean;
 }
 
 function resolveEditorTheme(themeId?: IdeThemeId, customThemeJsonStr?: string): Extension {
@@ -212,6 +214,8 @@ export const CmEditor = forwardRef<CmEditorHandle, CmEditorProps>(
       onSelectMenuAction,
       onShowToast,
       keymapProfile,
+      lineNumbers: showLineNumbers = true,
+      wordWrap = false,
     },
     ref
   ) => {
@@ -504,6 +508,8 @@ export const CmEditor = forwardRef<CmEditorHandle, CmEditorProps>(
     const coverageCompartmentRef = useRef<Compartment>(new Compartment());
     const gitDiffCompartmentRef = useRef<Compartment>(new Compartment());
     const themeCompartmentRef = useRef<Compartment>(new Compartment());
+    const lineNumbersCompartmentRef = useRef<Compartment>(new Compartment());
+    const wordWrapCompartmentRef = useRef<Compartment>(new Compartment());
     const [gitDiffMap, setGitDiffMap] = useState<Map<number, GitDiffType> | null>(null);
     const isDispatchingRef = useRef(false);
 
@@ -1301,7 +1307,8 @@ export const CmEditor = forwardRef<CmEditorHandle, CmEditorProps>(
               setOccurrences(occs);
             }),
             colorPickerExtension,
-            lineNumbers(),
+            lineNumbersCompartmentRef.current.of(showLineNumbers ? lineNumbers() : []),
+            wordWrapCompartmentRef.current.of(wordWrap ? EditorView.lineWrapping : []),
             gitDiffCompartmentRef.current.of(createGitDiffGutter(gitDiffMap)),
             highlightActiveLineGutter(),
             highlightSpecialChars(),
@@ -1513,6 +1520,24 @@ export const CmEditor = forwardRef<CmEditorHandle, CmEditorProps>(
         effects: themeCompartmentRef.current.reconfigure(resolveEditorTheme(theme, customThemeJson)),
       });
     }, [theme, customThemeJson]);
+
+    // Dynamically toggle Line Numbers without destroying EditorView
+    useEffect(() => {
+      const view = viewRef.current;
+      if (!view) return;
+      view.dispatch({
+        effects: lineNumbersCompartmentRef.current.reconfigure(showLineNumbers ? lineNumbers() : []),
+      });
+    }, [showLineNumbers]);
+
+    // Dynamically toggle Soft-Wrap (Word Wrap) without destroying EditorView
+    useEffect(() => {
+      const view = viewRef.current;
+      if (!view) return;
+      view.dispatch({
+        effects: wordWrapCompartmentRef.current.reconfigure(wordWrap ? EditorView.lineWrapping : []),
+      });
+    }, [wordWrap]);
 
     // Fetch and track Git Diff for change markers (Blue/Green stripes on Gutter)
     useEffect(() => {

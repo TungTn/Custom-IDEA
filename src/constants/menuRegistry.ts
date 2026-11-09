@@ -74,6 +74,117 @@ export interface FileMenuOptions {
   recentProjects?: Array<{ name: string; path: string }>;
 }
 
+export interface ViewMenuOptions {
+  isStatusBarVisible?: boolean;
+  breadcrumbs?: boolean;
+  lineNumbers?: boolean;
+  minimap?: boolean;
+  wordWrap?: boolean;
+  isFullscreen?: boolean;
+}
+
+export interface BuildMenuOptions {
+  projectName?: string;
+}
+
+export interface RunMenuOptions {
+  activeConfigName?: string;
+}
+
+export function getViewMenuItems(options: ViewMenuOptions = {}): MenuItem[] {
+  const {
+    isStatusBarVisible = true,
+    breadcrumbs = true,
+    lineNumbers = true,
+    minimap = false,
+    wordWrap = false,
+    isFullscreen = false,
+  } = options;
+
+  return [
+    { 
+      id: 'v-tool-windows', 
+      label: 'Tool Windows',
+      icon: Layout,
+      children: [
+        { id: 'v-tw-project', label: 'Project', shortcut: 'Alt+1', icon: FolderTree, actionId: 'view.toggleProject' },
+        { id: 'v-tw-structure', label: 'Structure', shortcut: 'Alt+7', icon: Layers, actionId: 'view.toggleStructure' },
+        { id: 'v-tw-commit', label: 'Commit', shortcut: 'Alt+0', icon: GitCommit, actionId: 'view.toggleCommit' },
+        { id: 'v-tw-run', label: 'Run', shortcut: 'Alt+4', icon: PlaySquare, actionId: 'view.toggleRun' },
+        { id: 'v-tw-terminal', label: 'Terminal', shortcut: 'Alt+F12', icon: Terminal, actionId: 'view.toggleTerminal' },
+        { id: 'v-tw-git', label: 'Git', shortcut: 'Alt+9', icon: GitBranch, actionId: 'view.toggleGit' },
+        { id: 'v-tw-problems', label: 'Problems', icon: AlertCircle, actionId: 'view.toggleProblems' },
+        { id: 'v-tw-find', label: 'Find Usages', shortcut: 'Alt+F7', icon: Search, actionId: 'view.toggleFind' },
+        { id: 'v-tw-database', label: 'Database', icon: Database, actionId: 'view.toggleDatabase' },
+        { id: 'v-tw-build', label: 'Build Tools', icon: Package, actionId: 'view.toggleBuildTools' },
+      ]
+    },
+    { 
+      id: 'v-appearance', 
+      label: 'Appearance',
+      icon: Eye,
+      children: [
+        { id: 'v-app-statusbar', label: 'Status Bar', actionId: 'view.toggleStatusBar', checked: isStatusBarVisible },
+        { id: 'v-app-breadcrumbs', label: 'Navigation Bar / Breadcrumbs', actionId: 'view.toggleBreadcrumbs', checked: breadcrumbs },
+        { id: 'v-app-lineno', label: 'Line Numbers', actionId: 'view.toggleLineNumbers', checked: lineNumbers },
+        { id: 'v-app-minimap', label: 'Minimap', actionId: 'view.toggleMinimap', checked: minimap },
+        { id: 'v-app-wordwrap', label: 'Soft-Wrap Lines', actionId: 'view.toggleWordWrap', checked: wordWrap },
+        { id: 'v-app-annotate', label: 'Annotate with Git Blame', shortcut: 'Alt+Shift+B', icon: History, actionId: 'git.annotate' },
+        { id: 'v-app-sep-1', isSeparator: true },
+        { id: 'v-app-fullscreen', label: isFullscreen ? 'Exit Full Screen' : 'Enter Full Screen', shortcut: 'F11', icon: Maximize, actionId: 'view.toggleFullScreen' },
+      ]
+    },
+    { id: 'v-sep-1', isSeparator: true },
+    { id: 'v-recent-files', label: 'Recent Files...', shortcut: 'Ctrl+E', icon: Clock, actionId: 'view.recentFiles' },
+    { id: 'v-recent-locations', label: 'Recent Locations...', shortcut: 'Ctrl+Shift+E', actionId: 'view.recentLocations' },
+    { id: 'v-compare', label: 'Compare with HEAD / Diff', shortcut: 'Ctrl+Alt+D', icon: Columns, actionId: 'git.compareWithHead' },
+    { id: 'v-sep-2', isSeparator: true },
+    { id: 'v-zoom-in', label: 'Zoom In', shortcut: 'Ctrl+=', icon: ZoomIn, actionId: 'view.zoomIn' },
+    { id: 'v-zoom-out', label: 'Zoom Out', shortcut: 'Ctrl+-', icon: ZoomOut, actionId: 'view.zoomOut' },
+    { id: 'v-zoom-reset', label: 'Reset Zoom', shortcut: 'Ctrl+0', actionId: 'view.resetZoom' },
+  ];
+}
+
+export function getBuildMenuItems(options: BuildMenuOptions = {}): MenuItem[] {
+  const target = options.projectName || 'Main';
+  return [
+    { id: 'b-build', label: 'Build Project', shortcut: 'Ctrl+F9', icon: Hammer, actionId: 'build.build' },
+    { id: 'b-rebuild', label: 'Rebuild Project', icon: RefreshCw, actionId: 'build.rebuild' },
+    { id: 'b-clean', label: 'Clean Project Cache', icon: Trash2, actionId: 'build.clean' },
+    { id: 'b-sep-1', isSeparator: true },
+    { id: 'b-mod', label: `Build Module '${target}'`, actionId: 'build.buildModule' },
+    { id: 'b-artifacts', label: 'Generate Artifacts / Dist...', icon: Package, actionId: 'build.artifacts' },
+  ];
+}
+
+export function getRunMenuItems(options: RunMenuOptions = {}): MenuItem[] {
+  const target = options.activeConfigName || 'Desktop IDE';
+  return [
+    { id: 'rn-run', label: `Run '${target}'`, shortcut: 'Shift+F10', icon: Play, actionId: 'run.run' },
+    { id: 'rn-debug', label: `Debug '${target}'`, shortcut: 'Shift+F9', icon: Bug, actionId: 'run.debug' },
+    { id: 'rn-run-tests', label: 'Run All Tests', shortcut: 'Ctrl+Shift+F10', icon: CheckCircle2, actionId: 'run.tests' },
+    { id: 'rn-coverage', label: 'Run with Coverage', icon: Shield, actionId: 'run.coverage' },
+    { id: 'rn-stop', label: 'Stop', shortcut: 'Ctrl+F2', icon: Square, actionId: 'run.stop' },
+    { id: 'rn-sep-1', isSeparator: true },
+    { id: 'rn-edit-cfg', label: 'Edit Configurations...', shortcut: 'Alt+Shift+F10', icon: Sliders, actionId: 'run.editConfig' },
+    { id: 'rn-sep-2', isSeparator: true },
+    { 
+      id: 'rn-debug-actions', 
+      label: 'Debugging Actions', 
+      icon: Bug,
+      children: [
+        { id: 'rn-step-over', label: 'Step Over', shortcut: 'F8', actionId: 'run.stepOver' },
+        { id: 'rn-step-into', label: 'Step Into', shortcut: 'F7', actionId: 'run.stepInto' },
+        { id: 'rn-step-out', label: 'Step Out', shortcut: 'Shift+F8', actionId: 'run.stepOut' },
+        { id: 'rn-resume', label: 'Resume Program', shortcut: 'F9', actionId: 'run.resume' },
+      ]
+    },
+    { id: 'rn-toggle-bp', label: 'Toggle Line Breakpoint', shortcut: 'Ctrl+F8', actionId: 'run.toggleBreakpoint' },
+    { id: 'rn-view-bp', label: 'View Breakpoints...', shortcut: 'Ctrl+Shift+F8', actionId: 'run.viewBreakpoints' },
+    { id: 'rn-evaluate-expr', label: 'Evaluate Expression...', shortcut: 'Alt+F8', icon: Calculator, actionId: 'run.evaluateExpression' },
+  ];
+}
+
 export function getFileMenuItems(options: FileMenuOptions = {}): MenuItem[] {
   const {
     powerSaveMode = false,
@@ -244,48 +355,7 @@ export const menuRegistry: MenuRegistry = {
     { id: 'e-select-all', label: 'Select All', shortcut: 'Ctrl+A', actionId: 'edit.selectAll' },
   ],
 
-  View: [
-    { 
-      id: 'v-tool-windows', 
-      label: 'Tool Windows',
-      icon: Layout,
-      children: [
-        { id: 'v-tw-project', label: 'Project', shortcut: 'Alt+1', icon: FolderTree, actionId: 'view.toggleProject' },
-        { id: 'v-tw-structure', label: 'Structure', shortcut: 'Alt+7', icon: Layers, actionId: 'view.toggleStructure' },
-        { id: 'v-tw-commit', label: 'Commit', shortcut: 'Alt+0', icon: GitCommit, actionId: 'view.toggleCommit' },
-        { id: 'v-tw-run', label: 'Run', shortcut: 'Alt+4', icon: PlaySquare, actionId: 'view.toggleRun' },
-        { id: 'v-tw-terminal', label: 'Terminal', shortcut: 'Alt+F12', icon: Terminal, actionId: 'view.toggleTerminal' },
-        { id: 'v-tw-git', label: 'Git', shortcut: 'Alt+9', icon: GitBranch, actionId: 'view.toggleGit' },
-        { id: 'v-tw-problems', label: 'Problems', icon: AlertCircle, actionId: 'view.toggleProblems' },
-        { id: 'v-tw-find', label: 'Find Usages', shortcut: 'Alt+F7', icon: Search, actionId: 'view.toggleFind' },
-        { id: 'v-tw-database', label: 'Database', icon: Database, actionId: 'view.toggleDatabase' },
-        { id: 'v-tw-build', label: 'Build Tools', icon: Package, actionId: 'view.toggleBuildTools' },
-      ]
-    },
-    { 
-      id: 'v-appearance', 
-      label: 'Appearance',
-      icon: Eye,
-      children: [
-        { id: 'v-app-statusbar', label: 'Status Bar', actionId: 'view.toggleStatusBar', checked: true },
-        { id: 'v-app-breadcrumbs', label: 'Navigation Bar / Breadcrumbs', actionId: 'view.toggleBreadcrumbs', checked: true },
-        { id: 'v-app-lineno', label: 'Line Numbers', actionId: 'view.toggleLineNumbers', checked: true },
-        { id: 'v-app-minimap', label: 'Minimap', actionId: 'view.toggleMinimap', checked: true },
-        { id: 'v-app-wordwrap', label: 'Soft-Wrap Lines', actionId: 'view.toggleWordWrap' },
-        { id: 'v-app-annotate', label: 'Annotate with Git Blame', shortcut: 'Alt+Shift+B', icon: History, actionId: 'git.annotate' },
-        { id: 'v-app-sep-1', isSeparator: true },
-        { id: 'v-app-fullscreen', label: 'Enter Full Screen', shortcut: 'F11', icon: Maximize, actionId: 'view.toggleFullScreen' },
-      ]
-    },
-    { id: 'v-sep-1', isSeparator: true },
-    { id: 'v-recent-files', label: 'Recent Files...', shortcut: 'Ctrl+E', icon: Clock, actionId: 'view.recentFiles' },
-    { id: 'v-recent-locations', label: 'Recent Locations...', shortcut: 'Ctrl+Shift+E', actionId: 'view.recentLocations' },
-    { id: 'v-compare', label: 'Compare with HEAD / Diff', shortcut: 'Ctrl+Alt+D', icon: Columns, actionId: 'git.compareWithHead' },
-    { id: 'v-sep-2', isSeparator: true },
-    { id: 'v-zoom-in', label: 'Zoom In', shortcut: 'Ctrl+=', icon: ZoomIn, actionId: 'view.zoomIn' },
-    { id: 'v-zoom-out', label: 'Zoom Out', shortcut: 'Ctrl+-', icon: ZoomOut, actionId: 'view.zoomOut' },
-    { id: 'v-zoom-reset', label: 'Reset Zoom', shortcut: 'Ctrl+0', actionId: 'view.resetZoom' },
-  ],
+  View: getViewMenuItems(),
 
   Navigate: [
     { id: 'n-search-everywhere', label: 'Search Everywhere', shortcut: 'Double Shift', icon: Sparkles, actionId: 'navigate.searchEverywhere' },
@@ -383,39 +453,9 @@ export const menuRegistry: MenuRegistry = {
     { id: 'r-safe-del', label: 'Safe Delete...', shortcut: 'Alt+Delete', icon: Trash2, actionId: 'refactor.safeDelete' },
   ],
 
-  Build: [
-    { id: 'b-build', label: 'Build Project', shortcut: 'Ctrl+F9', icon: Hammer, actionId: 'build.build' },
-    { id: 'b-rebuild', label: 'Rebuild Project', icon: RefreshCw, actionId: 'build.rebuild' },
-    { id: 'b-clean', label: 'Clean Project Cache', icon: Trash2, actionId: 'build.clean' },
-    { id: 'b-sep-1', isSeparator: true },
-    { id: 'b-mod', label: 'Build Module \'Main\'', actionId: 'build.buildModule' },
-    { id: 'b-artifacts', label: 'Generate Artifacts / Dist...', icon: Package, actionId: 'build.artifacts' },
-  ],
+  Build: getBuildMenuItems(),
 
-  Run: [
-    { id: 'rn-run', label: 'Run \'Desktop IDE\'', shortcut: 'Shift+F10', icon: Play, actionId: 'run.run' },
-    { id: 'rn-debug', label: 'Debug \'Desktop IDE\'', shortcut: 'Shift+F9', icon: Bug, actionId: 'run.debug' },
-    { id: 'rn-run-tests', label: 'Run All Tests', shortcut: 'Ctrl+Shift+F10', icon: CheckCircle2, actionId: 'run.tests' },
-    { id: 'rn-coverage', label: 'Run with Coverage', icon: Shield, actionId: 'run.coverage' },
-    { id: 'rn-stop', label: 'Stop', shortcut: 'Ctrl+F2', icon: Square, actionId: 'run.stop' },
-    { id: 'rn-sep-1', isSeparator: true },
-    { id: 'rn-edit-cfg', label: 'Edit Configurations...', shortcut: 'Alt+Shift+F10', icon: Sliders, actionId: 'run.editConfig' },
-    { id: 'rn-sep-2', isSeparator: true },
-    { 
-      id: 'rn-debug-actions', 
-      label: 'Debugging Actions', 
-      icon: Bug,
-      children: [
-        { id: 'rn-step-over', label: 'Step Over', shortcut: 'F8', actionId: 'run.stepOver' },
-        { id: 'rn-step-into', label: 'Step Into', shortcut: 'F7', actionId: 'run.stepInto' },
-        { id: 'rn-step-out', label: 'Step Out', shortcut: 'Shift+F8', actionId: 'run.stepOut' },
-        { id: 'rn-resume', label: 'Resume Program', shortcut: 'F9', actionId: 'run.resume' },
-      ]
-    },
-    { id: 'rn-toggle-bp', label: 'Toggle Line Breakpoint', shortcut: 'Ctrl+F8', actionId: 'run.toggleBreakpoint' },
-    { id: 'rn-view-bp', label: 'View Breakpoints...', shortcut: 'Ctrl+Shift+F8', actionId: 'run.viewBreakpoints' },
-    { id: 'rn-evaluate-expr', label: 'Evaluate Expression...', shortcut: 'Alt+F8', icon: Calculator, actionId: 'run.evaluateExpression' },
-  ],
+  Run: getRunMenuItems(),
 
   Tools: [
     { id: 't-terminal', label: 'Open Terminal', shortcut: 'Alt+F12', icon: Terminal, actionId: 'tools.terminal' },

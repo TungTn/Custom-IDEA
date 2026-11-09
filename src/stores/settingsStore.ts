@@ -18,6 +18,7 @@ const DEFAULT_SETTINGS: IdeSettings = {
   minimap: false,
   lineNumbers: true,
   wordWrap: false,
+  breadcrumbs: true,
   fontFamily: 'JetBrains Mono',
   lineHeight: 1.45,
   ligatures: true,

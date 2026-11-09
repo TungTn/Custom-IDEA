@@ -18,6 +18,7 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const https = require('https');
+const { execSync } = require('child_process');
 
 const projectRoot = path.resolve(__dirname, '..');
 
@@ -226,6 +227,82 @@ function uploadFileToGitLab(config, filePath, remoteFileName) {
   });
 }
 
+// 8.1. TỰ ĐỘNG ĐỒNG BỘ VERSION VÀO CẢ 3 TỆP (package.json, tauri.conf.json, Cargo.toml)
+function bumpProjectVersions(targetVersion) {
+  console.log(`\n[*] Bắt đầu tự động đồng bộ version v${targetVersion} vào các tệp cấu hình dự án...`);
+
+  // 1. package.json
+  const pkgPath = path.join(projectRoot, 'package.json');
+  if (fs.existsSync(pkgPath)) {
+    try {
+      const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
+      if (pkg.version !== targetVersion) {
+        pkg.version = targetVersion;
+        fs.writeFileSync(pkgPath, JSON.stringify(pkg, null, 2) + '\n', 'utf8');
+        console.log(`  [✓] Đã cập nhật package.json -> v${targetVersion}`);
+      } else {
+        console.log(`  [-] package.json đã ở version v${targetVersion}`);
+      }
+    } catch (e) {
+      console.warn(`  [!] Lỗi cập nhật package.json: ${e.message}`);
+    }
+  }
+
+  // 2. src-tauri/tauri.conf.json
+  const tauriConfPath = path.join(projectRoot, 'src-tauri', 'tauri.conf.json');
+  if (fs.existsSync(tauriConfPath)) {
+    try {
+      const tauriConf = JSON.parse(fs.readFileSync(tauriConfPath, 'utf8'));
+      if (tauriConf.version !== targetVersion) {
+        tauriConf.version = targetVersion;
+        fs.writeFileSync(tauriConfPath, JSON.stringify(tauriConf, null, 2) + '\n', 'utf8');
+        console.log(`  [✓] Đã cập nhật src-tauri/tauri.conf.json -> v${targetVersion}`);
+      } else {
+        console.log(`  [-] src-tauri/tauri.conf.json đã ở version v${targetVersion}`);
+      }
+    } catch (e) {
+      console.warn(`  [!] Lỗi cập nhật tauri.conf.json: ${e.message}`);
+    }
+  }
+
+  // 3. Cargo.toml ([workspace.package])
+  const cargoPath = path.join(projectRoot, 'Cargo.toml');
+  if (fs.existsSync(cargoPath)) {
+    try {
+      const cargoContent = fs.readFileSync(cargoPath, 'utf8');
+      const updated = cargoContent.replace(
+        /(\[workspace\.package\][\s\S]*?version\s*=\s*")[^"]+(")/,
+        `$1${targetVersion}$2`
+      );
+      if (updated !== cargoContent) {
+        fs.writeFileSync(cargoPath, updated, 'utf8');
+        console.log(`  [✓] Đã cập nhật Cargo.toml -> v${targetVersion}`);
+      } else {
+        console.log(`  [-] Cargo.toml đã ở version v${targetVersion}`);
+      }
+    } catch (e) {
+      console.warn(`  [!] Lỗi cập nhật Cargo.toml: ${e.message}`);
+    }
+  }
+}
+
+// 8.2. BIÊN DỊCH BẢN PHÁT HÀNH MỚI BẰNG PNPM
+function buildPortableBinary() {
+  console.log('\n[*] Kích hoạt biên dịch bản phát hành độc lập mới bằng pnpm...');
+  console.log('    Lệnh: pnpm run build:portable\n');
+  try {
+    execSync('pnpm run build:portable', {
+      cwd: projectRoot,
+      stdio: 'inherit',
+      env: { ...process.env }
+    });
+    console.log('\n[OK] Biên dịch bản mới thành công!');
+  } catch (err) {
+    console.error('\n[LỖI] Quá trình biên dịch binary thất bại:', err.message);
+    process.exit(1);
+  }
+}
+
 // 9. HÀM CHÍNH THỰC THI (MAIN PIPELINE)
 async function main() {
   const config = loadEnv();
@@ -235,7 +312,7 @@ async function main() {
     process.exit(1);
   }
 
-  // Đọc version mặc định từ package.json nếu không truyền
+  // Đọc version hiện tại từ package.json
   let pkgVersion = '0.1.0';
   try {
     const pkg = JSON.parse(fs.readFileSync(path.join(projectRoot, 'package.json'), 'utf8'));
@@ -243,9 +320,36 @@ async function main() {
   } catch (_) {}
 
   const args = process.argv.slice(2);
-  const version = args[0] || pkgVersion;
-  const changelog = args[1] || 'Cập nhật phiên bản mới và tối ưu hiệu năng';
-  const isForceUpdate = args[2] !== undefined ? args[2] === 'true' || args[2] === '1' : false;
+  const positionalArgs = args.filter((a) => !a.startsWith('--'));
+  const rawVersion = positionalArgs[0];
+  const changelog = positionalArgs[1] || 'Cập nhật phiên bản mới và tối ưu hiệu năng';
+  const isForceUpdate = positionalArgs[2] !== undefined ? positionalArgs[2] === 'true' || positionalArgs[2] === '1' : false;
+
+  const shouldSkipBuild = args.includes('--no-build');
+  const shouldForceBuild = args.includes('--build');
+
+  const version = rawVersion || pkgVersion;
+  const isVersionChanged = rawVersion && rawVersion !== pkgVersion;
+
+  // Tự động đồng bộ version vào cả 3 file nếu có version được truyền vào
+  if (rawVersion) {
+    bumpProjectVersions(version);
+  }
+
+  // Tự động build lại binary nếu:
+  // 1. Version có thay đổi so với package.json cũ
+  // 2. Có cờ --build
+  // 3. Chưa có file .exe nào
+  const candidateExePaths = [
+    path.join(projectRoot, 'dist-portable', 'Custom-IDEA-Portable.exe'),
+    path.join(projectRoot, 'target', 'release', 'app.exe'),
+  ];
+  const hasExistingExe = candidateExePaths.some((p) => fs.existsSync(p));
+
+  if (!shouldSkipBuild && (isVersionChanged || shouldForceBuild || !hasExistingExe)) {
+    console.log(`\n[*] Cần biên dịch phiên bản mới v${version} để nhúng đúng version vào binary...`);
+    buildPortableBinary();
+  }
 
   console.log('===============================================================================');
   console.log('    XUẤT BẢN BẢN CẬP NHẬT LÊN GITLAB.MIC.VN (GENERIC PACKAGE)');
@@ -265,14 +369,14 @@ async function main() {
   }
 
   // TÌM TỆP THỰC THI NHỊ PHÂN NGUỒN (CHỌN FILE MỚI NHẤT ĐÃ ĐƯỢC BIÊN DỊCH)
-  const candidateExePaths = [
+  const fullCandidatePaths = [
     path.join(projectRoot, 'target', 'release', 'app.exe'),
     path.join(projectRoot, 'dist-portable', 'Custom-IDEA-Portable.exe'),
     path.join(releaseDir, `${config.packageName}.exe`),
     path.join(releaseDir, 'Custom-IDEA-Portable.exe')
   ];
 
-  const existingCandidates = candidateExePaths
+  const existingCandidates = fullCandidatePaths
     .filter((p) => fs.existsSync(p))
     .map((p) => ({ path: p, mtime: fs.statSync(p).mtimeMs }))
     .sort((a, b) => b.mtime - a.mtime);
@@ -282,8 +386,8 @@ async function main() {
   if (!sourceExePath) {
     console.error(`[LỖI] Không tìm thấy tệp nhị phân thực thi (.exe) sau build!`);
     console.error(`Đã tìm kiếm tại:`);
-    candidateExePaths.forEach((p) => console.error(`  - ${p}`));
-    console.error(`\nVui lòng biên dịch ứng dụng trước bằng lệnh: npm run build:portable`);
+    fullCandidatePaths.forEach((p) => console.error(`  - ${p}`));
+    console.error(`\nVui lòng biên dịch ứng dụng trước bằng lệnh: pnpm run build:portable`);
     process.exit(1);
   }
 

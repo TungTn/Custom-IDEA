@@ -4,6 +4,7 @@
   "version": "0.1.0",
   "license": "Apache-2.0",
   "author": "TungTN",
+  "packageManager": "pnpm@10.13.1",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -12,6 +13,7 @@
     "tauri": "tauri",
     "build:portable": "tauri build --no-bundle && powershell -Command \"New-Item -ItemType Directory -Path dist-portable -Force; try { Copy-Item target/release/app.exe dist-portable/Custom-IDEA-Portable.exe -Force } catch { Write-Warning 'File Custom-IDEA-Portable.exe dang mo, ban moi nam tai target/release/app.exe' }\"",
     "publish:update": "node scripts/publish-update.cjs",
+    "release": "node scripts/publish-update.cjs",
     "update:mock-server": "node scripts/mock-update-server.mjs",
     "gen:bindings": "cargo test -p app --test export_bindings"
   },

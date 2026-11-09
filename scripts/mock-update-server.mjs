@@ -65,7 +65,7 @@ const server = http.createServer((req, res) => {
   if (url.pathname === '/custom-idea-latest.exe') {
     if (!fs.existsSync(mockExePath)) {
       res.writeHead(404, { 'Content-Type': 'text/plain' });
-      res.end('File not found. Please run npm run build:portable first.');
+      res.end('File not found. Please run pnpm run build:portable first.');
       return;
     }
 

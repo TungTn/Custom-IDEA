@@ -10,7 +10,7 @@ interface AboutModalProps {
 export const AboutModal: React.FC<AboutModalProps> = ({ isOpen, onClose }) => {
   const [copied, setCopied] = useState(false);
   const [versionInfo, setVersionInfo] = useState({
-    buildVersion: '#IC-261.1234.56',
+    buildVersion: '0.1.0',
     builtOn: 'November 2026',
   });
 
@@ -18,13 +18,10 @@ export const AboutModal: React.FC<AboutModalProps> = ({ isOpen, onClose }) => {
     if (!isOpen) return;
     getAppVersionInfo().then((info) => {
       if (info) {
-        const ver = info.version;
-        const formattedVer = ver && ver !== '0.1.0'
-          ? (ver.startsWith('#') ? ver : (ver.startsWith('IC-') ? `#${ver}` : `#IC-${ver}`))
-          : '#IC-261.1234.56';
+        const ver = info.version || '0.1.0';
         const date = info.build_date || 'November 2026';
         setVersionInfo({
-          buildVersion: formattedVer,
+          buildVersion: ver,
           builtOn: date,
         });
       }

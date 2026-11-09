@@ -234,8 +234,8 @@ pub fn dap_start_session(
     &pending_requests,
     "initialize",
     serde_json::json!({
-      "clientID": "intellij-idea-clone",
-      "clientName": "IntelliJ IDEA Clone",
+      "clientID": "custom-idea",
+      "clientName": "Custom IDEA",
       "adapterID": debug_type,
       "linesStartAt1": true,
       "columnsStartAt1": true,

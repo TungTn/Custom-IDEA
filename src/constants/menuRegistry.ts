@@ -502,6 +502,6 @@ export const menuRegistry: MenuRegistry = {
     { id: 'h-keymap', label: 'Keymap Reference (Cheatsheet)', icon: FileText, actionId: 'help.keymap' },
     { id: 'h-sep-1', isSeparator: true },
     { id: 'h-updates', label: 'Check for Updates...', icon: RefreshCw, actionId: 'help.checkUpdates' },
-    { id: 'h-about', label: 'About IntelliJ IDEA Clone', icon: Info, actionId: 'help.about' },
+    { id: 'h-about', label: 'About Custom IDEA', icon: Info, actionId: 'help.about' },
   ],
 };

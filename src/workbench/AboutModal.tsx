@@ -1,5 +1,5 @@
-import React from 'react';
-import { X, ExternalLink, Cpu } from 'lucide-react';
+import React, { useState } from 'react';
+import { X, ExternalLink, Cpu, Copy, Check } from 'lucide-react';
 
 interface AboutModalProps {
   isOpen: boolean;
@@ -7,7 +7,22 @@ interface AboutModalProps {
 }
 
 export const AboutModal: React.FC<AboutModalProps> = ({ isOpen, onClose }) => {
+  const [copied, setCopied] = useState(false);
   if (!isOpen) return null;
+
+  const buildInfo = `Custom IDEA 2026.1 (Community Edition)
+Build #IC-261.1234.56, built on November 2026
+Runtime version: Microsoft Edge WebView2 Evergreen
+Core Stack: Tauri v2 + Rust 1.99 + React 18
+C++ Compiler: MSVC v143 (Visual Studio 2022)
+Editor Core: CodeMirror 6 with JetBrains New UI Dark
+OS: Windows 11 / Windows Server`;
+
+  const handleCopy = () => {
+    navigator.clipboard.writeText(buildInfo);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
 
   return (
     <div 
@@ -15,7 +30,7 @@ export const AboutModal: React.FC<AboutModalProps> = ({ isOpen, onClose }) => {
       onClick={onClose}
     >
       <div 
-        className="w-[480px] bg-[#2B2D30] border border-[#4E5157] rounded-xl shadow-2xl overflow-hidden flex flex-col"
+        className="w-[490px] bg-[#2B2D30] border border-[#4E5157] rounded-xl shadow-2xl overflow-hidden flex flex-col"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Banner with IntelliJ styling */}
@@ -43,7 +58,7 @@ export const AboutModal: React.FC<AboutModalProps> = ({ isOpen, onClose }) => {
           <div className="space-y-1">
             <div className="flex justify-between py-1 border-b border-[#393B40]">
               <span className="text-[#868A91]">Build Version:</span>
-              <span className="font-mono text-[11px]">#IC-261.1234.56, built on Oct 2026</span>
+              <span className="font-mono text-[11px]">#IC-261.1234.56, built on November 2026</span>
             </div>
             <div className="flex justify-between py-1 border-b border-[#393B40]">
               <span className="text-[#868A91]">Core Stack:</span>
@@ -66,14 +81,24 @@ export const AboutModal: React.FC<AboutModalProps> = ({ isOpen, onClose }) => {
           <div className="bg-[#1E1F22] rounded-lg p-3 text-[11px] text-[#868A91] leading-relaxed flex items-center gap-2">
             <Cpu size={18} className="text-[#3574F0] flex-shrink-0" />
             <span>
-              Xây dựng cục bộ trên máy tính cá nhân bằng giải pháp Hybrid Web + Native Rust. Tối ưu hiệu năng cao, tiêu tốn ít RAM và thời gian khởi động tức thì.
+              Giải pháp IDE hiện đại, hiệu năng cao xây dựng trên kiến trúc Native Rust + Hybrid Web. Tối ưu hóa tài nguyên RAM và khởi động tức thì.
             </span>
           </div>
         </div>
 
         {/* Footer */}
         <div className="h-10 bg-[#1E1F22] border-t border-[#393B40] px-5 flex items-center justify-between text-[11px] text-[#868A91]">
-          <span>© 2026 JetBrains Style Clone. Local edition.</span>
+          <div className="flex items-center gap-3">
+            <span>© 2026 Custom IDEA. Powered by MIC Studio.</span>
+            <button
+              onClick={handleCopy}
+              className="text-[#868A91] hover:text-[#DFE1E5] flex items-center gap-1 transition-colors text-[10.5px]"
+              title="Copy build information to clipboard"
+            >
+              {copied ? <Check size={12} className="text-[#59A869]" /> : <Copy size={12} />}
+              <span>{copied ? 'Copied' : 'Copy'}</span>
+            </button>
+          </div>
           <button 
             onClick={onClose}
             className="px-3 py-1 bg-[#3574F0] hover:bg-[#3069D9] text-white rounded text-xs font-medium"

@@ -2213,14 +2213,16 @@ export const App: React.FC = () => {
               }}
             />
 
-            {/* Middle Workspace Area (Left Sidebar Full Height, Center Zone: Editor on Top, Terminal on Bottom) */}
-            <div className="flex-1 flex flex-row h-full overflow-hidden min-w-0">
-              {/* Left Tool Window (Project Tree) */}
-            {isSideBarOpen && (
-                <div
-                style={{ width: `${sideBarWidth}px` }}
-                className="h-full border-r border-[#2B2D30] flex-shrink-0 flex flex-col overflow-hidden relative"
-                >
+            {/* Middle Workspace Area (Top: Left Sidebar + Editor; Bottom: Full Width Tool Window - 100% IntelliJ Standard) */}
+            <div className="flex-1 flex flex-col h-full overflow-hidden min-w-0">
+              {/* Upper Section: Left Tool Window (Project Tree) + Center Editor Area */}
+              <div className="flex-1 flex flex-row min-h-0 overflow-hidden min-w-0">
+                {/* Left Tool Window (Project Tree) */}
+                {isSideBarOpen && (
+                  <div
+                    style={{ width: `${sideBarWidth}px` }}
+                    className="h-full border-r border-[#2B2D30] flex-shrink-0 flex flex-col overflow-hidden relative"
+                  >
                 {activeSideTab === 'project' && (
                     <ProjectTree
                     files={files}
@@ -2400,8 +2402,7 @@ export const App: React.FC = () => {
                 </div>
             )}
 
-              {/* Center Zone: Editor on Top, Bottom Tool Window on Bottom (IntelliJ Standard) */}
-              <div className="flex-1 flex flex-col h-full overflow-hidden min-w-0">
+                {/* Center Zone: Editor */}
                 <div className="flex-1 min-w-0 min-h-0 overflow-hidden">
             <CodeEditor
             ref={codeEditorRef}
@@ -2457,8 +2458,9 @@ export const App: React.FC = () => {
             activePausedLine={debugState === 'paused' ? { filePath: activeTab?.path || '', line: cursorPos.line } : null}
             />
                 </div>
+              </div>
 
-                {/* Bottom Tool Window (Extracted in Phase 9) */}
+              {/* Bottom Tool Window (Full Width across Left Sidebar and Editor - 100% IntelliJ Standard) */}
             <BottomToolWindow
               isBottomOpen={isBottomOpen}
               setIsBottomOpen={setIsBottomOpen}
@@ -2518,7 +2520,6 @@ export const App: React.FC = () => {
               sonarTargetScanPath={sonarTargetScanPath}
               sonarCancelSignal={sonarCancelSignal}
             />
-              </div>
             </div>
 
             {/* Right Tool Window Activity Bar */}

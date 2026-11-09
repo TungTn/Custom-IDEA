@@ -72,7 +72,7 @@ checksum = "330a5ed07fa54e4702c9d6c4174f74427fc0ef6e214bbd677ae50a5099946470"
 
 [[package]]
 name = "app"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "ide-coverage",
  "ide-dap",
@@ -2035,7 +2035,7 @@ dependencies = [
 
 [[package]]
 name = "ide-coverage"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "log",
  "serde",
@@ -2048,7 +2048,7 @@ dependencies = [
 
 [[package]]
 name = "ide-dap"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "serde",
  "serde_json",
@@ -2057,7 +2057,7 @@ dependencies = [
 
 [[package]]
 name = "ide-db"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "log",
  "serde",
@@ -2070,7 +2070,7 @@ dependencies = [
 
 [[package]]
 name = "ide-docker"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "log",
  "serde",
@@ -2082,7 +2082,7 @@ dependencies = [
 
 [[package]]
 name = "ide-http"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "log",
  "reqwest 0.12.28",
@@ -2095,7 +2095,7 @@ dependencies = [
 
 [[package]]
 name = "ide-index"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "log",
  "nucleo-matcher",
@@ -2110,7 +2110,7 @@ dependencies = [
 
 [[package]]
 name = "ide-lsp"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "serde",
  "serde_json",
@@ -2119,7 +2119,7 @@ dependencies = [
 
 [[package]]
 name = "ide-run"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "reqwest 0.12.28",
  "serde",
@@ -2132,7 +2132,7 @@ dependencies = [
 
 [[package]]
 name = "ide-terminal"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "portable-pty",
  "serde",
@@ -2143,7 +2143,7 @@ dependencies = [
 
 [[package]]
 name = "ide-vcs"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "serde",
  "serde_json",
@@ -2153,7 +2153,7 @@ dependencies = [
 
 [[package]]
 name = "ide-vfs"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "notify",
  "notify-debouncer-mini",

@@ -37,6 +37,7 @@ import {
 import type { IdeSettings } from './features';
 import type { SonarAnalysisProgress } from './features/sonar/SonarToolWindow';
 import { ImportSettingsModal, ExportSettingsModal } from './features/settings';
+import { UpdateModal, useAutoUpdate } from './features/update';
 import type { ImportedSettingsResult } from './services/intellijSettingsService';
 import {
   useEditorStore,
@@ -159,7 +160,16 @@ export const App: React.FC = () => {
     diffBaseContent, setDiffBaseContent,
     diffLocalContent, setDiffLocalContent,
     isDiffModalOpen, setIsDiffModalOpen,
+    isUpdateOpen, setIsUpdateOpen,
   } = useModalStore();
+
+  const autoUpdate = useAutoUpdate(addToast);
+
+  useEffect(() => {
+    if (isUpdateOpen) {
+      autoUpdate.checkNow(true);
+    }
+  }, [isUpdateOpen]);
 
   const currentProjectDirectory = useMemo(() => {
       if (projectRootPath) return projectRootPath;
@@ -2146,6 +2156,7 @@ export const App: React.FC = () => {
             onRefreshGitStatus={refreshGitStatus}
             activeRightPanel={activeRightPanel}
             unreadNotificationsCount={notifications.filter(n => !n.read).length}
+            hasUpdateAvailable={autoUpdate.hasUpdateAvailable}
             />
 
             {/* Main Workspace Body */}
@@ -2673,6 +2684,25 @@ export const App: React.FC = () => {
           onClose={() => setIsExportSettingsOpen(false)}
           currentSettings={settings}
           onSuccessToast={(title, msg) => addToast(title, msg, 'success')}
+        />
+
+        {/* Auto Update Modal (MIC Studio Standard via gitlab.mic.vn) */}
+        <UpdateModal
+          isOpen={isUpdateOpen || autoUpdate.isModalOpen}
+          onClose={() => {
+            setIsUpdateOpen(false);
+            autoUpdate.setIsModalOpen(false);
+          }}
+          status={autoUpdate.status}
+          metadata={autoUpdate.metadata}
+          currentVersion={autoUpdate.currentVersion}
+          progress={autoUpdate.progress}
+          errorMessage={autoUpdate.errorMessage}
+          onCheckAgain={() => autoUpdate.checkNow(true)}
+          onStartDownload={autoUpdate.startDownload}
+          onCancelDownload={autoUpdate.cancelDownload}
+          onApplyRestart={autoUpdate.applyRestart}
+          onIgnoreVersion={autoUpdate.ignoreVersion}
         />
 
         {/* Key Promoter X Toast Notification (learn IntelliJ shortcuts) */}

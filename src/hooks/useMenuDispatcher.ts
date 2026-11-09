@@ -155,6 +155,7 @@ export function useMenuDispatcher({
     setIsStashOpen,
     setIsAboutOpen,
     setIsTipOpen,
+    setIsUpdateOpen,
   } = useModalStore();
 
   const handleMenuAction = useCallback((actionId: string) => {
@@ -1008,7 +1009,7 @@ export function useMenuDispatcher({
         setIsSettingsOpen(true);
         break;
       case 'help.checkUpdates':
-        addToast('Check for Updates', 'You are running the latest version of IntelliJ IDEA Clone (2025.1.0)', 'info');
+        setIsUpdateOpen(true);
         break;
 
       default:

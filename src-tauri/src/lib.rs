@@ -12,6 +12,14 @@ pub use ide_coverage as coverage;
 
 pub mod window;
 pub mod commands;
+pub mod updater;
+
+pub fn cleanup_ide_subsystems() {
+  let _ = process::stop_all_processes();
+  pty::kill_all_pty_sessions();
+  lsp::stop_all_lsp_servers();
+  dap::stop_all_dap_sessions();
+}
 
 pub fn run() {
   tauri::Builder::default()
@@ -24,10 +32,7 @@ pub fn run() {
         let app = window.app_handle();
         let windows = app.webview_windows();
         if windows.len() <= 1 {
-          let _ = process::stop_all_processes();
-          pty::kill_all_pty_sessions();
-          lsp::stop_all_lsp_servers();
-          dap::stop_all_dap_sessions();
+          cleanup_ide_subsystems();
           std::process::exit(0);
         }
       }

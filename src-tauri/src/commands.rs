@@ -162,6 +162,10 @@ pub fn get_ipc_handler() -> impl Fn(tauri::ipc::Invoke<tauri::Wry>) -> bool + Se
     // ─── 12. HTTP REST Client Commands (ide-http) ───
     http::http_execute_request,
     http::http_parse_file,
-    http::http_execute_file_block
+    http::http_execute_file_block,
+
+    // ─── 13. Auto-Updater Commands (MIC Studio Standard) ───
+    crate::updater::apply_update_and_restart,
+    crate::updater::get_app_version_info
   ]
 }

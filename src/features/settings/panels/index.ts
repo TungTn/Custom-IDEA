@@ -9,3 +9,4 @@ export * from './LanguagesFrameworksPanel';
 export * from './ToolsPanel';
 export * from './BackupSyncPanel';
 export * from './AdvancedSettingsPanel';
+export * from './UpdatesSettingsPanel';

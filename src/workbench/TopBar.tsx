@@ -79,6 +79,7 @@ interface TopBarProps {
   onCreateBranch?: (branch: string) => void;
   onShowToast?: (title: string, message: string, type?: 'info' | 'success' | 'warning' | 'error') => void;
   onRefreshGitStatus?: () => void;
+  hasUpdateAvailable?: boolean;
 }
 
 export const TopBar: React.FC<TopBarProps> = ({
@@ -93,6 +94,7 @@ export const TopBar: React.FC<TopBarProps> = ({
   configurations = [],
   activeConfigId,
   onSelectConfig,
+  hasUpdateAvailable = false,
   onOpenEditConfigs,
   onRun,
   onStop,
@@ -859,13 +861,16 @@ export const TopBar: React.FC<TopBarProps> = ({
           <button 
             onClick={() => setIsSettingsMenuOpen(prev => !prev)}
             title="Settings (Ctrl+Alt+S)"
-            className={`p-1.5 rounded transition-colors cursor-pointer ${
+            className={`p-1.5 rounded transition-colors cursor-pointer relative ${
               isSettingsMenuOpen 
                 ? 'bg-[#2B2D30] text-[#DFE1E5]' 
                 : 'hover:bg-[#2B2D30] text-[#868A91] hover:text-[#DFE1E5]'
             }`}
           >
             <Settings size={14} />
+            {hasUpdateAvailable && (
+              <span className="absolute top-1 right-1 w-2 h-2 rounded-full bg-[#3574F0] ring-2 ring-[#1E1F22] animate-pulse" />
+            )}
           </button>
 
           {isSettingsMenuOpen && (
@@ -943,10 +948,15 @@ export const TopBar: React.FC<TopBarProps> = ({
                   setIsSettingsMenuOpen(false);
                   onSelectMenuAction('help.checkUpdates');
                 }}
-                className="px-3 py-1.5 hover:bg-[#2B2D30] text-[#DFE1E5] cursor-pointer flex items-center gap-2 transition-colors"
+                className="px-3 py-1.5 hover:bg-[#2B2D30] text-[#DFE1E5] cursor-pointer flex items-center justify-between transition-colors"
               >
-                <RotateCw size={13} className="text-[#868A91]" />
-                <span>Check for Updates...</span>
+                <div className="flex items-center gap-2">
+                  <RotateCw size={13} className="text-[#868A91]" />
+                  <span>Check for Updates...</span>
+                </div>
+                {hasUpdateAvailable && (
+                  <span className="w-1.5 h-1.5 rounded-full bg-[#3574F0]" />
+                )}
               </div>
 
               <div 

@@ -13,16 +13,18 @@ import { SettingPanelProps } from './types';
 import { ThemeDefinition } from '../../../types/theme';
 import { getAllThemes, saveCustomTheme, applyIdeTheme } from '../../../themes/themeManager';
 import { importIntelliJTheme } from '../../../editor/cm/themeImporter';
+import { UpdatesSettingsPanel } from './UpdatesSettingsPanel';
 
-export const AppearanceBehaviorPanel: React.FC<SettingPanelProps> = ({
-  selectedId,
-  formSettings,
-  updateSetting,
-  setIsDirty,
-  onShowToast,
-  onOpenThemeStudio,
-  setSelectedId,
-}) => {
+export const AppearanceBehaviorPanel: React.FC<SettingPanelProps> = (props) => {
+  const {
+    selectedId,
+    formSettings,
+    updateSetting,
+    setIsDirty,
+    onShowToast,
+    onOpenThemeStudio,
+    setSelectedId,
+  } = props;
   // Themes Management
   const [availableThemes, setAvailableThemes] = useState<ThemeDefinition[]>(() => getAllThemes());
   const [isThemeActionOpen, setIsThemeActionOpen] = useState(false);
@@ -518,6 +520,11 @@ export const AppearanceBehaviorPanel: React.FC<SettingPanelProps> = ({
             </div>
           </div>
         </div>
+      )}
+
+      {/* Sub-page: System Settings -> Updates (MIC Studio Standard) */}
+      {selectedId === 'system-updates' && (
+        <UpdatesSettingsPanel {...props} />
       )}
 
       {/* Sub-page: File Colors */}

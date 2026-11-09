@@ -10,7 +10,9 @@
     "build": "tsc && vite build",
     "preview": "vite preview",
     "tauri": "tauri",
-    "build:portable": "tauri build --no-bundle && powershell -Command \"New-Item -ItemType Directory -Path dist-portable -Force; Copy-Item target/release/app.exe dist-portable/Custom-IDEA-Portable.exe -Force\"",
+    "build:portable": "tauri build --no-bundle && powershell -Command \"New-Item -ItemType Directory -Path dist-portable -Force; try { Copy-Item target/release/app.exe dist-portable/Custom-IDEA-Portable.exe -Force } catch { Write-Warning 'File Custom-IDEA-Portable.exe dang mo, ban moi nam tai target/release/app.exe' }\"",
+    "publish:update": "node scripts/publish-update.cjs",
+    "update:mock-server": "node scripts/mock-update-server.mjs",
     "gen:bindings": "cargo test -p app --test export_bindings"
   },
   "dependencies": {

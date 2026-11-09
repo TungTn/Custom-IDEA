@@ -111,6 +111,8 @@ export interface ModalState {
   setIsSurroundWithOpen: (open: boolean) => void;
   isTipOpen: boolean;
   setIsTipOpen: (open: boolean) => void;
+  isUpdateOpen: boolean;
+  setIsUpdateOpen: (open: boolean) => void;
 }
 
 export const useModalStore = create<ModalState>((set) => ({
@@ -235,4 +237,6 @@ export const useModalStore = create<ModalState>((set) => ({
   setIsSurroundWithOpen: (open) => set({ isSurroundWithOpen: open }),
   isTipOpen: false,
   setIsTipOpen: (open) => set({ isTipOpen: open }),
+  isUpdateOpen: false,
+  setIsUpdateOpen: (open) => set({ isUpdateOpen: open }),
 }));

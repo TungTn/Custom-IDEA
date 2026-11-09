@@ -1,7 +1,7 @@
 ---
 title: "Auto Update System for Custom IDEA via gitlab.mic.vn"
 description: "Hệ thống tự động cập nhật phần mềm (Auto Update System) chuẩn hóa cho Custom IDEA theo tiêu chuẩn MIC Studio: Phân phối qua GitLab Generic Package Registry (gitlab.mic.vn), tuân thủ Ba Thiết Luật Bắt Buộc (tên file -latest, Package riêng biệt, không commit binary vào Git), cơ chế cập nhật 2 tầng (Hot-patch nhị phân & Full Setup), xác thực tính toàn vẹn SHA-256, và giao diện JetBrains New UI."
-status: pending
+status: completed
 priority: P1
 branch: "main"
 tags: [updater, gitlab-mic-vn, package-registry, sha256, hot-patch, jetbrains-ui, tauri-v2]
@@ -20,10 +20,10 @@ Hệ thống **Tự động Cập nhật (Auto Update System)** cho **Custom IDE
 
 ### 3 Thiết Luật Bắt Buộc (Three Iron Rules)
 1. **Lưu trữ tại Package Registry - CẤM commit file build vào Git repo:** Toàn bộ tệp `.exe`, bộ cài, thư mục `release/` tuyệt đối không được đưa vào Git. Mọi bản phát hành được đẩy trực tiếp lên GitLab Generic Package Registry của dự án.
-2. **Tạo mục (Package) riêng biệt cho ứng dụng:** Package độc lập mang tên `custom-idea`, phiên bản định danh luôn là **`latest`** (Generic Package).
+2. **Tạo mục (Package) riêng biệt cho ứng dụng:** Package độc lập mang tên `mic-idea`, phiên bản định danh luôn là **`latest`** (Generic Package).
 3. **Tên file KHÔNG chứa số version - CHỈ dùng đuôi `-latest` & dọn sạch bản cũ:**
-   - Hot-patch nhị phân: `custom-idea-latest.exe`
-   - Bộ cài đặt Windows Setup: `custom-idea-Setup-latest.exe`
+   - Hot-patch nhị phân: `mic-idea-latest.exe`
+   - Bộ cài đặt Windows Setup: `mic-idea-Setup-latest.exe`
    - Metadata: `version.json`
    - Cơ chế Purge & Clean: Tự động xóa sạch toàn bộ file cũ và package version cũ trước khi upload tệp mới.
 
@@ -38,10 +38,10 @@ Hệ thống **Tự động Cập nhật (Auto Update System)** cho **Custom IDE
 
 | Phase | Title | Status | Priority | Effort | File |
 | :--- | :--- | :--- | :--- | :--- | :--- |
-| **Phase 1** | Kịch Bản Đóng Gói, Dọn Dẹp & Tải Lên GitLab Package Registry | Pending | P1 | 2.5h | [`phase-01-gitlab-package-registry-publish-script.md`](./phase-01-gitlab-package-registry-publish-script.md) |
-| **Phase 2** | Client Update Engine: Metadata Check, SHA-256 & Atomic Swapper | Pending | P1 | 3h | [`phase-02-client-update-engine-sha256-swapper.md`](./phase-02-client-update-engine-sha256-swapper.md) |
-| **Phase 3** | Giao Diện JetBrains Update Modal, Progress Stream & Force Update | Pending | P1 | 2.5h | [`phase-03-jetbrains-update-modal-force-update-ui.md`](./phase-03-jetbrains-update-modal-force-update-ui.md) |
-| **Phase 4** | Tích Hợp System Settings, Menu TopBar & Kiểm Thử E2E Cục Bộ | Pending | P2 | 2h | [`phase-04-settings-menu-integration-and-e2e-testing.md`](./phase-04-settings-menu-integration-and-e2e-testing.md) |
+| **Phase 1** | Kịch Bản Đóng Gói, Dọn Dẹp & Tải Lên GitLab Package Registry | Completed | P1 | 2.5h | [`phase-01-gitlab-package-registry-publish-script.md`](./phase-01-gitlab-package-registry-publish-script.md) |
+| **Phase 2** | Client Update Engine: Metadata Check, SHA-256 & Atomic Swapper | Completed | P1 | 3h | [`phase-02-client-update-engine-sha256-swapper.md`](./phase-02-client-update-engine-sha256-swapper.md) |
+| **Phase 3** | Giao Diện JetBrains Update Modal, Progress Stream & Force Update | Completed | P1 | 2.5h | [`phase-03-jetbrains-update-modal-force-update-ui.md`](./phase-03-jetbrains-update-modal-force-update-ui.md) |
+| **Phase 4** | Tích Hợp System Settings, Menu TopBar & Kiểm Thử E2E Cục Bộ | Completed | P2 | 2h | [`phase-04-settings-menu-integration-and-e2e-testing.md`](./phase-04-settings-menu-integration-and-e2e-testing.md) |
 
 ---
 

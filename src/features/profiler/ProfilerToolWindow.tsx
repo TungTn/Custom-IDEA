@@ -38,16 +38,34 @@ export const ProfilerToolWindow: React.FC<ProfilerToolWindowProps> = ({ onShowTo
   useEffect(() => {
     if (!isProfiling) return;
 
-    const interval = setInterval(() => {
-      // Sample process memory from performance.memory if available, or simulate realistic IDE load
-      let memMb = 150;
-      if (typeof performance !== 'undefined' && (performance as any).memory) {
-        memMb = Math.round((performance as any).memory.usedJSHeapSize / (1024 * 1024) * 10) / 10;
+    let isMounted = true;
+    const isTauri = typeof window !== 'undefined' && ('__TAURI_INTERNALS__' in window || '__TAURI__' in window);
+
+    const sampleMetrics = async () => {
+      let cpu = 0;
+      let memMb = 120;
+
+      if (isTauri) {
+        try {
+          const metrics = await invoke<{ cpu_percent: number; memory_mb: number; system_total_mb: number; cores_count: number }>('get_process_metrics');
+          if (metrics) {
+            cpu = metrics.cpu_percent;
+            memMb = metrics.memory_mb;
+          }
+        } catch (e) {
+          console.warn('get_process_metrics error:', e);
+        }
       } else {
-        memMb = Math.round((140 + Math.random() * 25) * 10) / 10;
+        if (typeof performance !== 'undefined' && (performance as any).memory) {
+          memMb = Math.round((performance as any).memory.usedJSHeapSize / (1024 * 1024) * 10) / 10;
+        } else {
+          memMb = 120;
+        }
+        cpu = 1.5;
       }
 
-      const cpu = Math.round((8 + Math.random() * 18) * 10) / 10;
+      if (!isMounted) return;
+
       setCpuUsage(cpu);
       setMemoryUsage(memMb);
 
@@ -58,9 +76,15 @@ export const ProfilerToolWindow: React.FC<ProfilerToolWindowProps> = ({ onShowTo
         const next = [...prev, { time: timeStr, cpuPercent: cpu, memoryMb: memMb }];
         return next.slice(-40); // Keep last 40 samples
       });
-    }, 1000);
+    };
 
-    return () => clearInterval(interval);
+    sampleMetrics();
+    const interval = setInterval(sampleMetrics, 1000);
+
+    return () => {
+      isMounted = false;
+      clearInterval(interval);
+    };
   }, [isProfiling]);
 
   // Render CPU / Memory waveform graph on Canvas

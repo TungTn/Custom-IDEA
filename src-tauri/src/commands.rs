@@ -168,6 +168,9 @@ pub fn get_ipc_handler() -> impl Fn(tauri::ipc::Invoke<tauri::Wry>) -> bool + Se
 
     // ─── 13. Auto-Updater Commands (MIC Studio Standard) ───
     crate::updater::apply_update_and_restart,
-    crate::updater::get_app_version_info
+    crate::updater::get_app_version_info,
+
+    // ─── 14. Profiler & System Metrics Commands ───
+    crate::profiler::get_process_metrics
   ]
 }

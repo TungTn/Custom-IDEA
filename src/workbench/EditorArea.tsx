@@ -10,7 +10,7 @@ import { DataSourceConnection, getDataSourceUrl } from '../types/database';
 import { IdeSettings } from '../features/settings/SettingsModal';
 import { useEditorStore } from '../stores/editorStore';
 import { DatabaseTableGrid } from '../features/database/DatabaseTableGrid';
-import { RenameModal } from '../features/project/RenameModal';
+const RenameModal = React.lazy(() => import('../features/project/RenameModal').then(m => ({ default: m.RenameModal })));
 import { lspService, LspPosition } from '../services/lspService';
 import { SqlQueryConsole } from '../features/database/SqlQueryConsole';
 import { DiffEditorTab } from '../features/git/DiffEditorTab';
@@ -1036,15 +1036,17 @@ export const EditorArea = forwardRef<EditorAreaHandle, EditorAreaProps>(
         )}
         {/* Project-Wide Symbol Rename Modal (Shift+F6) */}
         {isRenameOpen && renameTarget && (
-          <RenameModal
-            isOpen={isRenameOpen}
-            onClose={() => {
-              setIsRenameOpen(false);
-              setRenameTarget(null);
-            }}
-            currentName={renameTarget.symbol}
-            onRename={handleExecuteRename}
-          />
+          <React.Suspense fallback={null}>
+            <RenameModal
+              isOpen={isRenameOpen}
+              onClose={() => {
+                setIsRenameOpen(false);
+                setRenameTarget(null);
+              }}
+              currentName={renameTarget.symbol}
+              onRename={handleExecuteRename}
+            />
+          </React.Suspense>
         )}
         {/* IntelliJ Authentic Tab Context Menu */}
         {tabContextMenu && (() => {

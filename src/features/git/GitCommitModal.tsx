@@ -12,7 +12,8 @@ import {
   Columns,
   Maximize2
 } from 'lucide-react';
-import { DiffViewerModal } from './DiffViewerModal';
+
+const DiffViewerModal = React.lazy(() => import('./DiffViewerModal').then(m => ({ default: m.DiffViewerModal })));
 
 interface GitCommitModalProps {
   isOpen: boolean;
@@ -371,19 +372,23 @@ export const GitCommitModal: React.FC<GitCommitModalProps> = ({
       </div>
 
       {/* Side-by-Side Diff Modal */}
-      <DiffViewerModal
-        isOpen={isFullDiffOpen}
-        onClose={() => setIsFullDiffOpen(false)}
-        fileName={activeFileForDiff || ''}
-        baseContent={fullDiffBase}
-        localContent={fullDiffLocal}
-        onRollback={() => {
-          if (activeFileForDiff) {
-            handleRollbackFile(activeFileForDiff);
-            setIsFullDiffOpen(false);
-          }
-        }}
-      />
+      {isFullDiffOpen && (
+        <React.Suspense fallback={null}>
+          <DiffViewerModal
+            isOpen={isFullDiffOpen}
+            onClose={() => setIsFullDiffOpen(false)}
+            fileName={activeFileForDiff || ''}
+            baseContent={fullDiffBase}
+            localContent={fullDiffLocal}
+            onRollback={() => {
+              if (activeFileForDiff) {
+                handleRollbackFile(activeFileForDiff);
+                setIsFullDiffOpen(false);
+              }
+            }}
+          />
+        </React.Suspense>
+      )}
     </>
   );
 };

@@ -30,7 +30,7 @@ pub fn get_app_version_info() -> Result<AppVersionInfo, String> {
 }
 
 fn chrono_like_now() -> String {
-    "November 2026".to_string()
+    chrono::Local::now().format("%B %Y").to_string()
 }
 
 #[tauri::command]

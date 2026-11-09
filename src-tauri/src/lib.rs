@@ -13,6 +13,7 @@ pub use ide_coverage as coverage;
 pub mod window;
 pub mod commands;
 pub mod updater;
+pub mod profiler;
 
 pub fn cleanup_ide_subsystems() {
   let _ = process::stop_all_processes();

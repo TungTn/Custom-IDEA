@@ -58,7 +58,6 @@ import { localHistoryService } from './services/localHistoryService';
 import { applyIdeTheme } from './themes/themeManager';
 import { IdeThemeId, SyntaxTokenColors } from './types/theme';
 import { Terminal, PlaySquare, Play, Bug, AlertCircle, Search, GitBranch, Maximize2, Minus, X, Bookmark, Trash2 } from 'lucide-react';
-import { initialFiles } from './constants/mockFiles';
 import { detectLanguage } from './utils/languageDetector';
 export { detectLanguage } from './utils/languageDetector';
 import { useIdeKeybindings, useMenuDispatcher, useProcessRunner, useIdeDebugger, useProjectWorkspace } from './hooks';
@@ -75,7 +74,7 @@ const getInitialProjectPath = (): string => {
       if (savedPath) return savedPath;
     }
   } catch (e) {}
-  return 'D:\\IDE';
+  return '';
 };
 
 export const App: React.FC = () => {

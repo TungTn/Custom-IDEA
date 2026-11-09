@@ -14,7 +14,7 @@ const getInitialProjectPath = (): string => {
       if (savedPath) return savedPath;
     }
   } catch (e) {}
-  return 'D:\\IDE';
+  return '';
 };
 
 const getInitialRecentProjects = (): RecentProjectItem[] => {

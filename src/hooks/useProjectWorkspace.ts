@@ -294,6 +294,7 @@ export function useProjectWorkspace({
           }
         } catch (err) {
           console.error('Failed to auto-load project in new window:', err);
+          setProjectRootPath('');
           addToast('Open Failed', `Failed to load project at ${targetPath}`, 'error');
         }
       }

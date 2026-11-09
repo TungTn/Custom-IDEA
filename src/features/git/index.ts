@@ -1,6 +1,4 @@
-export * from './DiffViewerModal';
 export * from './GitBranchesModal';
-export * from './GitCommitModal';
 export * from './GitResetModal';
 export * from './GitToolWindow';
 export * from './InteractiveRebaseModal';

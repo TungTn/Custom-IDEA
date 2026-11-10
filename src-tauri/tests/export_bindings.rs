@@ -5,7 +5,7 @@ use ts_rs::{Config, TS};
 use ide_vfs::{FileNodeDto, SearchFileResultDto, SearchTextResultDto, VfsChangeEventDto};
 use ide_terminal::AvailableShell;
 use ide_run::{ProcessOutputPayload, ProcessExitPayload, BuildCommandResult, ToolchainInfo, JdkItemDto};
-use ide_vcs::{GitFileChangeDto, GitStatusDto, GitCommitItemDto, GitCommitDetailsDto, GitBlameLineDto, GitBranchInfoDto, GitStashItemDto};
+use ide_vcs::{GitFileChangeDto, GitStatusDto, GitCommitItemDto, GitCommitDetailsDto, GitBlameLineDto, GitBranchInfoDto, GitStashItemDto, GitLabUserDto, GitLabProjectDto};
 use ide_db::{DbColumnDto, DbIndexDto, DbTableDto, DbSchemaDto, DbQueryResultDto, DbTestConnectionResultDto};
 use ide_http::{HttpRequestDto, HttpResponseDto, HttpBlockDto};
 
@@ -44,6 +44,8 @@ fn export_all_bindings() {
         ("GitBlameLineDto", GitBlameLineDto::decl(&cfg)),
         ("GitBranchInfoDto", GitBranchInfoDto::decl(&cfg)),
         ("GitStashItemDto", GitStashItemDto::decl(&cfg)),
+        ("GitLabUserDto", GitLabUserDto::decl(&cfg)),
+        ("GitLabProjectDto", GitLabProjectDto::decl(&cfg)),
 
         // ─── ide-db ───
         ("DbColumnDto", DbColumnDto::decl(&cfg)),

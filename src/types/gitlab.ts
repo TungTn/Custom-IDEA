@@ -1,31 +1,12 @@
-export interface GitLabUser {
-  id: number;
-  username: string;
-  name: string;
-  email?: string | null;
-  avatar_url?: string | null;
-  web_url?: string | null;
-}
+import type { GitLabUserDto, GitLabProjectDto } from '../bindings';
 
-export interface GitLabProject {
-  id: number;
-  name: string;
-  name_with_namespace: string;
-  path_with_namespace: string;
-  http_url_to_repo: string;
-  ssh_url_to_repo: string;
-  default_branch?: string | null;
-  visibility?: string | null;
-  description?: string | null;
-  last_activity_at?: string | null;
-  web_url?: string | null;
-  star_count?: number | null;
-}
+export type GitLabUser = GitLabUserDto;
+export type GitLabProject = GitLabProjectDto;
 
 export interface GitLabAccount {
   id: string;
   host: string;
-  token: string;
+  allowSelfSigned?: boolean;
   user?: GitLabUser;
   createdAt: number;
   lastVerifiedAt?: number;

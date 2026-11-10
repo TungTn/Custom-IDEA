@@ -1,10 +1,11 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { RefreshCw, CheckCircle2, AlertTriangle, Check, Plus, Trash2, Link, Layers, Archive, X, Globe } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
 import { SettingPanelProps } from './types';
 import { GitLabAccount } from '../../../types/gitlab';
 import {
   getGitLabAccounts,
+  migrateLegacyGitLabTokens,
   saveGitLabAccount,
   removeGitLabAccount,
   getActiveGitLabAccountId,
@@ -39,8 +40,21 @@ export const VersionControlPanel: React.FC<SettingPanelProps> = ({
   const [isAddGitLabOpen, setIsAddGitLabOpen] = useState(false);
   const [glHost, setGlHost] = useState('');
   const [glToken, setGlToken] = useState('');
+  const [glAllowSelfSigned, setGlAllowSelfSigned] = useState(false);
   const [glTesting, setGlTesting] = useState(false);
   const [glError, setGlError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let active = true;
+    migrateLegacyGitLabTokens()
+      .then((updated) => {
+        if (active) setGitlabAccounts(updated);
+      })
+      .catch(() => {});
+    return () => {
+      active = false;
+    };
+  }, []);
 
   const handleAddGitLabAccount = async () => {
     if (!glHost.trim()) {
@@ -55,21 +69,24 @@ export const VersionControlPanel: React.FC<SettingPanelProps> = ({
     setGlTesting(true);
     setGlError(null);
     try {
-      const user = await testGitLabConnection(glHost.trim(), glToken.trim());
-      const newAcc: GitLabAccount = {
-        id: `gl_${Date.now()}`,
-        host: glHost.trim(),
-        token: glToken.trim(),
-        user,
-        createdAt: Date.now(),
-        lastVerifiedAt: Date.now(),
-      };
-      const updated = saveGitLabAccount(newAcc);
+      const user = await testGitLabConnection(glHost.trim(), glToken.trim(), glAllowSelfSigned);
+      const { accounts: updated, savedAccount } = await saveGitLabAccount(
+        {
+          host: glHost.trim(),
+          allowSelfSigned: glAllowSelfSigned,
+          user,
+          createdAt: Date.now(),
+          lastVerifiedAt: Date.now(),
+        },
+        glToken.trim()
+      );
       setGitlabAccounts(updated);
-      setActiveGitlabId(newAcc.id);
+      setActiveGitlabId(savedAccount.id);
+      setActiveGitLabAccountId(savedAccount.id);
       setIsAddGitLabOpen(false);
       setGlHost('');
       setGlToken('');
+      setGlAllowSelfSigned(false);
       onShowToast?.('GitLab Connected', `Đã kết nối tài khoản @${user.username} (${user.name})`, 'success');
     } catch (err: any) {
       setGlError(typeof err === 'string' ? err : err.message || 'Kết nối thất bại');
@@ -78,11 +95,15 @@ export const VersionControlPanel: React.FC<SettingPanelProps> = ({
     }
   };
 
-  const handleRemoveGitLabAccount = (id: string) => {
-    const updated = removeGitLabAccount(id);
-    setGitlabAccounts(updated);
-    setActiveGitlabId(getActiveGitLabAccountId());
-    onShowToast?.('Account Removed', 'Đã xóa tài khoản GitLab', 'info');
+  const handleRemoveGitLabAccount = async (id: string) => {
+    try {
+      const updated = await removeGitLabAccount(id);
+      setGitlabAccounts(updated);
+      setActiveGitlabId(getActiveGitLabAccountId());
+      onShowToast?.('Account Removed', 'Đã xóa tài khoản GitLab', 'info');
+    } catch (err: any) {
+      onShowToast?.('Remove Failed', typeof err === 'string' ? err : err.message || 'Không thể xóa tài khoản', 'error');
+    }
   };
 
   const handleSelectActiveGitLab = (id: string) => {
@@ -283,14 +304,15 @@ export const VersionControlPanel: React.FC<SettingPanelProps> = ({
                     <Globe size={14} className="text-[#FC6D26]" />
                     <span>GitLab Accounts</span>
                   </h3>
-                  <p className="text-[11px] text-[#868A91]">Kết nối tài khoản GitLab (gitlab.com hoặc server nội bộ gitlab.mic.vn).</p>
+                  <p className="text-[11px] text-[#868A91]">Kết nối tài khoản GitLab (gitlab.com hoặc GitLab server riêng).</p>
                 </div>
                 {!isAddGitLabOpen && (
                   <button
                     type="button"
                     onClick={() => {
-                      setGlHost('https://gitlab.mic.vn');
+                      setGlHost('https://gitlab.example.com');
                       setGlToken('');
+                      setGlAllowSelfSigned(false);
                       setGlError(null);
                       setIsAddGitLabOpen(true);
                     }}
@@ -321,7 +343,7 @@ export const VersionControlPanel: React.FC<SettingPanelProps> = ({
                       type="text"
                       value={glHost}
                       onChange={(e) => setGlHost(e.target.value)}
-                      placeholder="https://gitlab.mic.vn hoặc https://gitlab.com"
+                      placeholder="https://gitlab.example.com hoặc https://gitlab.com"
                       className="w-full bg-[#1E1F22] border border-[#393B40] focus:border-[#3574F0] rounded px-3 py-1.5 text-white font-mono outline-none"
                     />
                   </div>
@@ -336,6 +358,16 @@ export const VersionControlPanel: React.FC<SettingPanelProps> = ({
                       className="w-full bg-[#1E1F22] border border-[#393B40] focus:border-[#3574F0] rounded px-3 py-1.5 text-white font-mono outline-none"
                     />
                   </div>
+
+                  <label className="flex items-center gap-2 text-[11px] text-[#868A91] cursor-pointer select-none">
+                    <input
+                      type="checkbox"
+                      checked={glAllowSelfSigned}
+                      onChange={(e) => setGlAllowSelfSigned(e.target.checked)}
+                      className="accent-[#3574F0]"
+                    />
+                    <span>Allow self-signed SSL certificate (chỉ dùng cho server lab nội bộ)</span>
+                  </label>
 
                   {glError && (
                     <div className="text-[11px] text-[#E05555] bg-[#362222] border border-[#E05555]/30 rounded p-2 flex items-start gap-1.5">
@@ -418,6 +450,11 @@ export const VersionControlPanel: React.FC<SettingPanelProps> = ({
                             </div>
                             <div className="text-[11px] text-[#868A91] font-mono flex items-center gap-1.5 mt-0.5">
                               <span>{acc.host}</span>
+                              {acc.allowSelfSigned && (
+                                <span className="bg-[#4E3C1E]/60 text-[#F1A23A] text-[10px] px-1.5 py-0.2 rounded font-sans border border-[#F1A23A]/30">
+                                  Self-signed SSL
+                                </span>
+                              )}
                               {acc.user?.email && <span>• {acc.user.email}</span>}
                             </div>
                           </div>

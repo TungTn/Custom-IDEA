@@ -538,23 +538,201 @@ pub fn git_checkout_branch(project_path: String, branch: String, create_new: boo
   }
 }
 
+fn validate_clone_url(url: &str) -> Result<(), String> {
+  let trimmed = url.trim();
+  if trimmed.is_empty() {
+    return Err("Repository URL cannot be empty".to_string());
+  }
+  if trimmed.starts_with('-') {
+    return Err("Invalid repository URL: cannot start with '-'".to_string());
+  }
+  let lower = trimmed.to_ascii_lowercase();
+  if lower.starts_with("ext::") || lower.starts_with("file://") {
+    return Err("Unsupported repository protocol".to_string());
+  }
+  Ok(())
+}
+
+fn extract_http_origin(url: &str) -> Option<(String, String)> {
+  let trimmed = url.trim();
+  let (scheme, rest) = if let Some(r) = trimmed.strip_prefix("https://").or_else(|| {
+    if trimmed.len() >= 8 && trimmed[..8].eq_ignore_ascii_case("https://") {
+      Some(&trimmed[8..])
+    } else {
+      None
+    }
+  }) {
+    ("https".to_string(), r)
+  } else if let Some(r) = trimmed.strip_prefix("http://").or_else(|| {
+    if trimmed.len() >= 7 && trimmed[..7].eq_ignore_ascii_case("http://") {
+      Some(&trimmed[7..])
+    } else {
+      None
+    }
+  }) {
+    ("http".to_string(), r)
+  } else {
+    return None;
+  };
+
+  let authority = rest.split(['/', '?', '#']).next()?.trim();
+  if authority.is_empty() || authority.contains('@') || authority.contains('\\') {
+    return None;
+  }
+  Some((scheme.clone(), format!("{}://{}", scheme, authority.to_ascii_lowercase())))
+}
+
+fn encode_base64(input: &[u8]) -> String {
+  const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+  let mut out = String::with_capacity(input.len().div_ceil(3) * 4);
+  for chunk in input.chunks(3) {
+    let b0 = chunk[0] as u32;
+    let b1 = if chunk.len() > 1 { chunk[1] as u32 } else { 0 };
+    let b2 = if chunk.len() > 2 { chunk[2] as u32 } else { 0 };
+    let triple = (b0 << 16) | (b1 << 8) | b2;
+    out.push(TABLE[((triple >> 18) & 0x3F) as usize] as char);
+    out.push(TABLE[((triple >> 12) & 0x3F) as usize] as char);
+    out.push(if chunk.len() > 1 { TABLE[((triple >> 6) & 0x3F) as usize] as char } else { '=' });
+    out.push(if chunk.len() > 2 { TABLE[(triple & 0x3F) as usize] as char } else { '=' });
+  }
+  out
+}
+
+fn build_git_clone_config_env(
+  url: &str,
+  token: Option<&str>,
+  expected_host: Option<&str>,
+  allow_self_signed: bool,
+) -> Result<Vec<(String, String)>, String> {
+  let mut configs: Vec<(String, String)> = Vec::new();
+  let origin_info = extract_http_origin(url);
+
+  if let Some(tok) = token {
+    let trimmed_tok = tok.trim();
+    if trimmed_tok.is_empty() {
+      return Err("Stored GitLab token is empty. Please reconnect your account.".to_string());
+    }
+    let (scheme, origin) = origin_info
+      .as_ref()
+      .ok_or_else(|| "GitLab token authentication requires an HTTPS repository URL".to_string())?;
+    if scheme != "https" {
+      return Err("Refusing to send GitLab token over insecure http:// URL. Use https:// or SSH.".to_string());
+    }
+    if let Some(host) = expected_host {
+      let (_, expected_origin) = extract_http_origin(host)
+        .ok_or_else(|| "Invalid stored GitLab account host".to_string())?;
+      if *origin != expected_origin {
+        return Err(format!(
+          "Repository origin '{}' does not match saved GitLab account host '{}'",
+          origin, expected_origin
+        ));
+      }
+    }
+    let basic = encode_base64(format!("oauth2:{}", trimmed_tok).as_bytes());
+    configs.push((
+      format!("http.{}.extraHeader", origin),
+      format!("Authorization: Basic {}", basic),
+    ));
+  }
+
+  if allow_self_signed {
+    if let Some((_, origin)) = origin_info {
+      configs.push((format!("http.{}.sslVerify", origin), "false".to_string()));
+    }
+  }
+
+  if configs.is_empty() {
+    return Ok(Vec::new());
+  }
+
+  let mut envs = vec![("GIT_CONFIG_COUNT".to_string(), configs.len().to_string())];
+  for (idx, (k, v)) in configs.into_iter().enumerate() {
+    envs.push((format!("GIT_CONFIG_KEY_{}", idx), k));
+    envs.push((format!("GIT_CONFIG_VALUE_{}", idx), v));
+  }
+  Ok(envs)
+}
+
+fn redact_secrets(text: &str) -> String {
+  text
+    .lines()
+    .map(|line| {
+      if line.to_ascii_lowercase().contains("authorization:") {
+        "Authorization: [REDACTED]".to_string()
+      } else {
+        line.to_string()
+      }
+    })
+    .collect::<Vec<_>>()
+    .join("\n")
+}
+
 #[tauri::command]
-pub fn git_clone(url: String, target_dir: String) -> Result<String, String> {
-  let target = std::path::Path::new(&target_dir);
+pub fn git_clone(
+  url: String,
+  target_dir: String,
+  account_id: Option<String>,
+  allow_self_signed: Option<bool>,
+) -> Result<String, String> {
+  let trimmed_url = url.trim();
+  let trimmed_dir = target_dir.trim();
+  validate_clone_url(trimmed_url)?;
+  if trimmed_dir.is_empty() {
+    return Err("Target directory cannot be empty".to_string());
+  }
+
+  let git_bin = get_git_executable();
+  if git_bin != "git" && !std::path::Path::new(&git_bin).is_file() {
+    return Err(format!("Configured Git executable not found: {}", git_bin));
+  }
+
+  let secret = if let Some(ref acc_id) = account_id {
+    let trimmed_id = acc_id.trim();
+    if trimmed_id.is_empty() {
+      None
+    } else {
+      Some(load_gitlab_secret(trimmed_id)?)
+    }
+  } else {
+    None
+  };
+
+  let envs = build_git_clone_config_env(
+    trimmed_url,
+    secret.as_ref().map(|s| s.token.as_str()),
+    secret.as_ref().map(|s| s.host.as_str()),
+    allow_self_signed.unwrap_or(false),
+  )?;
+
+  let target = std::path::Path::new(trimmed_dir);
   if let Some(parent) = target.parent() {
     let _ = std::fs::create_dir_all(parent);
   }
-  let mut cmd = Command::new("git");
-  cmd.args(&["clone", &url, &target_dir]);
+
+  let mut cmd = Command::new(&git_bin);
+  for (k, _) in std::env::vars() {
+    if k.starts_with("GIT_CONFIG_")
+      || matches!(k.as_str(), "GIT_TRACE" | "GIT_TRACE_CURL" | "GIT_CURL_VERBOSE")
+    {
+      cmd.env_remove(&k);
+    }
+  }
+  cmd.env("GIT_TERMINAL_PROMPT", "0");
+  cmd.env("GCM_INTERACTIVE", "never");
+  for (k, v) in envs {
+    cmd.env(k, v);
+  }
+  cmd.args(["clone", "--", trimmed_url, trimmed_dir]);
   #[cfg(windows)]
   cmd.creation_flags(0x08000000);
+
   let output = cmd.output().map_err(|e| format!("Failed to run git clone: {}", e))?;
   if !output.status.success() {
     let stderr = String::from_utf8_lossy(&output.stderr);
     let stdout = String::from_utf8_lossy(&output.stdout);
-    return Err(format!("Git clone failed: {}\n{}", stderr, stdout));
+    return Err(redact_secrets(&format!("Git clone failed: {}\n{}", stderr, stdout)));
   }
-  Ok(target_dir)
+  Ok(trimmed_dir.to_string())
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug, TS)]
@@ -884,9 +1062,18 @@ pub fn git_resolve_conflict(project_path: String, file_path: String, resolved_co
   run_git_cmd(&project_path, &["add", "--", trimmed])
 }
 
+const GITLAB_KEYRING_SERVICE: &str = "custom-idea-gitlab";
+
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+struct StoredGitLabSecret {
+  host: String,
+  token: String,
+}
+
 #[derive(Debug, serde::Serialize, serde::Deserialize, TS)]
 #[ts(export)]
 pub struct GitLabUserDto {
+  #[ts(type = "number")]
   pub id: i64,
   pub username: String,
   pub name: String,
@@ -898,6 +1085,7 @@ pub struct GitLabUserDto {
 #[derive(Debug, serde::Serialize, serde::Deserialize, TS)]
 #[ts(export)]
 pub struct GitLabProjectDto {
+  #[ts(type = "number")]
   pub id: i64,
   pub name: String,
   pub name_with_namespace: String,
@@ -909,33 +1097,141 @@ pub struct GitLabProjectDto {
   pub description: Option<String>,
   pub last_activity_at: Option<String>,
   pub web_url: Option<String>,
+  #[ts(type = "number | null")]
   pub star_count: Option<i64>,
 }
 
-fn normalize_gitlab_base_url(host: &str) -> String {
-  let trimmed = host.trim().trim_end_matches('/');
-  if !trimmed.starts_with("http://") && !trimmed.starts_with("https://") {
-    format!("https://{}", trimmed)
+fn normalize_gitlab_base_url(host: &str) -> Result<String, String> {
+  let trimmed = host.trim();
+  if trimmed.is_empty() {
+    return Err("GitLab Server URL cannot be empty".to_string());
+  }
+  let lower = trimmed.to_ascii_lowercase();
+  let candidate = if lower.starts_with("http://") {
+    return Err("HTTPS is required for GitLab authentication".to_string());
+  } else if let Some(scheme_sep) = lower.find("://") {
+    if &lower[..scheme_sep] != "https" {
+      return Err("Unsupported GitLab URL scheme (https:// required)".to_string());
+    }
+    trimmed.trim_end_matches('/').to_string()
+  } else if lower.ends_with(':') {
+    return Err("Invalid GitLab Server URL".to_string());
   } else {
-    trimmed.to_string()
+    format!("https://{}", trimmed.trim_end_matches('/'))
+  };
+
+  if extract_http_origin(&candidate).is_none() {
+    return Err("Invalid GitLab Server URL".to_string());
+  }
+  Ok(candidate)
+}
+
+fn save_gitlab_secret(account_id: &str, host: &str, token: &str) -> Result<(), String> {
+  let entry = keyring::Entry::new(GITLAB_KEYRING_SERVICE, account_id)
+    .map_err(|e| format!("Failed to access OS credential manager: {}", e))?;
+  let payload = serde_json::to_string(&StoredGitLabSecret {
+    host: host.to_string(),
+    token: token.to_string(),
+  })
+  .map_err(|e| format!("Failed to serialize GitLab credential: {}", e))?;
+  entry
+    .set_password(&payload)
+    .map_err(|e| format!("Failed to save GitLab token in OS credential manager: {}", e))
+}
+
+fn load_gitlab_secret(account_id: &str) -> Result<StoredGitLabSecret, String> {
+  let entry = keyring::Entry::new(GITLAB_KEYRING_SERVICE, account_id)
+    .map_err(|e| format!("Failed to access OS credential manager: {}", e))?;
+  let raw = entry.get_password().map_err(|e| match e {
+    keyring::Error::NoEntry => {
+      "GitLab token not found in OS Credential Manager. Please reconnect your account.".to_string()
+    }
+    other => format!("Failed to read GitLab token from OS credential manager: {}", other),
+  })?;
+  serde_json::from_str::<StoredGitLabSecret>(&raw).map_err(|e| {
+    format!(
+      "Stored GitLab credential is corrupted ({}). Please reconnect your account.",
+      e
+    )
+  })
+}
+
+fn delete_gitlab_secret(account_id: &str) -> Result<(), String> {
+  let entry = keyring::Entry::new(GITLAB_KEYRING_SERVICE, account_id)
+    .map_err(|e| format!("Failed to access OS credential manager: {}", e))?;
+  match entry.delete_credential() {
+    Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
+    Err(e) => Err(format!("Failed to delete GitLab token from OS credential manager: {}", e)),
   }
 }
 
 #[tauri::command]
-pub async fn gitlab_test_connection(host: String, token: String) -> Result<GitLabUserDto, String> {
-  let base_url = normalize_gitlab_base_url(&host);
-  let api_url = format!("{}/api/v4/user", base_url);
+pub fn gitlab_save_token(account_id: String, host: String, token: String) -> Result<(), String> {
+  let trimmed_id = account_id.trim();
+  let trimmed_token = token.trim();
+  if trimmed_id.is_empty() {
+    return Err("Account ID cannot be empty".to_string());
+  }
+  if trimmed_token.is_empty() {
+    return Err("Personal Access Token cannot be empty".to_string());
+  }
+  let norm_host = normalize_gitlab_base_url(&host)?;
+  save_gitlab_secret(trimmed_id, &norm_host, trimmed_token)
+}
 
-  let client = reqwest::Client::builder()
-    .danger_accept_invalid_certs(true)
-    .timeout(std::time::Duration::from_secs(12))
+#[tauri::command]
+pub fn gitlab_delete_token(account_id: String) -> Result<(), String> {
+  let trimmed_id = account_id.trim();
+  if trimmed_id.is_empty() {
+    return Ok(());
+  }
+  delete_gitlab_secret(trimmed_id)
+}
+
+static GITLAB_CLIENT_VERIFIED: LazyLock<Result<reqwest::Client, String>> = LazyLock::new(|| {
+  reqwest::Client::builder()
+    .danger_accept_invalid_certs(false)
+    .timeout(std::time::Duration::from_secs(15))
     .build()
-    .map_err(|e| format!("Failed to create HTTP client: {}", e))?;
+    .map_err(|e| format!("Failed to create HTTP client: {}", e))
+});
 
-  let res = client
+static GITLAB_CLIENT_INSECURE: LazyLock<Result<reqwest::Client, String>> = LazyLock::new(|| {
+  reqwest::Client::builder()
+    .danger_accept_invalid_certs(true)
+    .timeout(std::time::Duration::from_secs(15))
+    .build()
+    .map_err(|e| format!("Failed to create insecure HTTP client: {}", e))
+});
+
+fn get_gitlab_http_client(allow_self_signed: bool) -> Result<&'static reqwest::Client, String> {
+  let slot = if allow_self_signed {
+    &*GITLAB_CLIENT_INSECURE
+  } else {
+    &*GITLAB_CLIENT_VERIFIED
+  };
+  slot.as_ref().map_err(|e| e.clone())
+}
+
+async fn gitlab_get<T: serde::de::DeserializeOwned>(
+  base_url: &str,
+  path: &str,
+  token: &str,
+  allow_self_signed: bool,
+  query: &[(&str, &str)],
+) -> Result<T, String> {
+  let client = get_gitlab_http_client(allow_self_signed)?;
+  let api_url = format!("{}{}", base_url, path);
+
+  let mut req = client
     .get(&api_url)
     .header("PRIVATE-TOKEN", token.trim())
-    .header("User-Agent", "Custom-IDEA-GitLab/1.0")
+    .header("User-Agent", "Custom-IDEA-GitLab/1.0");
+  if !query.is_empty() {
+    req = req.query(query);
+  }
+
+  let res = req
     .send()
     .await
     .map_err(|e| format!("Connection error to GitLab ({}): {}", base_url, e))?;
@@ -946,24 +1242,50 @@ pub async fn gitlab_test_connection(host: String, token: String) -> Result<GitLa
     return Err(format!("GitLab returned HTTP {}: {}", status, body));
   }
 
-  let user: GitLabUserDto = res
-    .json()
+  res
+    .json::<T>()
     .await
-    .map_err(|e| format!("Failed to parse GitLab user response: {}", e))?;
+    .map_err(|e| format!("Failed to parse GitLab response: {}", e))
+}
 
-  Ok(user)
+#[tauri::command]
+pub async fn gitlab_test_connection(
+  host: String,
+  token: String,
+  allow_self_signed: Option<bool>,
+) -> Result<GitLabUserDto, String> {
+  let base_url = normalize_gitlab_base_url(&host)?;
+  gitlab_get(
+    &base_url,
+    "/api/v4/user",
+    token.trim(),
+    allow_self_signed.unwrap_or(false),
+    &[],
+  )
+  .await
 }
 
 #[tauri::command]
 pub async fn gitlab_list_projects(
   host: String,
-  token: String,
+  account_id: String,
+  allow_self_signed: Option<bool>,
   search: Option<String>,
   page: Option<u32>,
   per_page: Option<u32>,
 ) -> Result<Vec<GitLabProjectDto>, String> {
-  let base_url = normalize_gitlab_base_url(&host);
-  let api_url = format!("{}/api/v4/projects", base_url);
+  let base_url = normalize_gitlab_base_url(&host)?;
+  let trimmed_id = account_id.trim();
+  if trimmed_id.is_empty() {
+    return Err("GitLab account ID is required".to_string());
+  }
+  let secret = load_gitlab_secret(trimmed_id)?;
+  let req_origin = extract_http_origin(&base_url);
+  let saved_origin = extract_http_origin(&secret.host);
+  if req_origin != saved_origin {
+    return Err("GitLab host does not match saved credential origin".to_string());
+  }
+
   let p = page.unwrap_or(1).to_string();
   let pp = per_page.unwrap_or(50).to_string();
 
@@ -985,33 +1307,113 @@ pub async fn gitlab_list_projects(
     }
   }
 
-  let client = reqwest::Client::builder()
-    .danger_accept_invalid_certs(true)
-    .timeout(std::time::Duration::from_secs(15))
-    .build()
-    .map_err(|e| format!("Failed to create HTTP client: {}", e))?;
+  gitlab_get(
+    &base_url,
+    "/api/v4/projects",
+    &secret.token,
+    allow_self_signed.unwrap_or(false),
+    &query_params,
+  )
+  .await
+}
 
-  let res = client
-    .get(&api_url)
-    .query(&query_params)
-    .header("PRIVATE-TOKEN", token.trim())
-    .header("User-Agent", "Custom-IDEA-GitLab/1.0")
-    .send()
-    .await
-    .map_err(|e| format!("Connection error to GitLab ({}): {}", base_url, e))?;
+#[cfg(test)]
+mod tests {
+  use super::*;
 
-  if !res.status().is_success() {
-    let status = res.status();
-    let body = res.text().await.unwrap_or_default();
-    return Err(format!("GitLab returned HTTP {}: {}", status, body));
+  #[test]
+  fn test_normalize_gitlab_base_url() {
+    assert_eq!(normalize_gitlab_base_url("gitlab.com/").unwrap(), "https://gitlab.com");
+    assert_eq!(normalize_gitlab_base_url(" https://gitlab.example.com/// ").unwrap(), "https://gitlab.example.com");
+    assert!(normalize_gitlab_base_url("").is_err());
+    assert!(normalize_gitlab_base_url("https://").is_err());
+    assert!(normalize_gitlab_base_url("https:").is_err());
+    assert!(normalize_gitlab_base_url("http://gitlab.example.com").is_err());
+    assert!(normalize_gitlab_base_url("ftp://gitlab.example.com").is_err());
+    assert!(extract_http_origin("https://evil.com\\@gitlab.example.com/group/app.git").is_none());
+    assert!(extract_http_origin("https://user@/repo").is_none());
   }
 
-  let projects: Vec<GitLabProjectDto> = res
-    .json()
-    .await
-    .map_err(|e| format!("Failed to parse GitLab projects response: {}", e))?;
+  #[test]
+  fn test_validate_clone_url() {
+    assert!(validate_clone_url("https://gitlab.example.com/team/app.git").is_ok());
+    assert!(validate_clone_url("git@gitlab.example.com:team/app.git").is_ok());
+    assert!(validate_clone_url("--upload-pack=calc.exe").is_err());
+    assert!(validate_clone_url(" -c core.sshCommand=evil").is_err());
+    assert!(validate_clone_url("ext::sh -c id").is_err());
+    assert!(validate_clone_url("file:///C:/repo").is_err());
+  }
 
-  Ok(projects)
+  #[test]
+  fn test_encode_base64() {
+    assert_eq!(encode_base64(b"oauth2:glpat-123"), "b2F1dGgyOmdscGF0LTEyMw==");
+  }
+
+  #[test]
+  fn test_build_git_clone_config_env() {
+    let envs = build_git_clone_config_env(
+      "https://gitlab.example.com/group/app.git",
+      Some("secret-pat"),
+      Some("https://gitlab.example.com"),
+      true,
+    )
+    .unwrap();
+    assert_eq!(envs[0], ("GIT_CONFIG_COUNT".to_string(), "2".to_string()));
+    assert_eq!(envs[1], ("GIT_CONFIG_KEY_0".to_string(), "http.https://gitlab.example.com.extraHeader".to_string()));
+    assert!(envs[2].1.starts_with("Authorization: Basic "));
+    assert_eq!(envs[3], ("GIT_CONFIG_KEY_1".to_string(), "http.https://gitlab.example.com.sslVerify".to_string()));
+    assert_eq!(envs[4], ("GIT_CONFIG_VALUE_1".to_string(), "false".to_string()));
+
+    // Origin mismatch fails
+    assert!(build_git_clone_config_env(
+      "https://evil.example.com/group/app.git",
+      Some("secret-pat"),
+      Some("https://gitlab.example.com"),
+      false,
+    ).is_err());
+
+    // Cleartext http:// rejects token
+    assert!(build_git_clone_config_env(
+      "http://gitlab.example.com/group/app.git",
+      Some("secret-pat"),
+      Some("https://gitlab.example.com"),
+      false,
+    ).is_err());
+
+    // SSH URL without token gets no HTTP env config
+    let ssh_envs = build_git_clone_config_env("git@gitlab.example.com:group/app.git", None, None, true).unwrap();
+    assert!(ssh_envs.is_empty());
+  }
+
+  #[test]
+  fn test_redact_secrets() {
+    let raw = "fatal: header\n> Authorization: Basic b2F1dGgyOnNlY3JldA==\nfatal: auth failed";
+    let safe = redact_secrets(raw);
+    assert!(!safe.contains("b2F1dGgy"));
+    assert!(safe.contains("Authorization: [REDACTED]"));
+  }
+
+  #[test]
+  fn test_gitlab_project_dto_deserialize_with_nulls() {
+    let raw = r#"{
+      "id": 42,
+      "name": "Custom IDEA",
+      "name_with_namespace": "Tools / Custom IDEA",
+      "path_with_namespace": "tools/custom-idea",
+      "http_url_to_repo": "https://gitlab.example.com/tools/custom-idea.git",
+      "ssh_url_to_repo": "git@gitlab.example.com:tools/custom-idea.git",
+      "default_branch": null,
+      "visibility": "private",
+      "description": null,
+      "last_activity_at": "2026-11-10T01:00:00Z",
+      "web_url": "https://gitlab.example.com/tools/custom-idea",
+      "star_count": null
+    }"#;
+    let dto: GitLabProjectDto = serde_json::from_str(raw).unwrap();
+    assert_eq!(dto.id, 42);
+    assert_eq!(dto.star_count, None);
+    assert_eq!(dto.path_with_namespace, "tools/custom-idea");
+  }
 }
 
 

@@ -1,6 +1,6 @@
 /**
  * ===============================================================================
- * SCRIPT PHÁT HÀNH BẢN CẬP NHẬT TỰ ĐỘNG LÊN GITLAB.MIC.VN (GENERIC PACKAGE)
+ * SCRIPT PHÁT HÀNH BẢN CẬP NHẬT TỰ ĐỘNG LÊN GITLAB (GENERIC PACKAGE REGISTRY)
  * ===============================================================================
  * Thiết luật tuân thủ (MIC Studio Standard):
  *   1. Tuyệt đối CẤM commit file nhị phân vào Git repo.
@@ -43,7 +43,8 @@ function loadEnv() {
     host: env.GITLAB_HOST || 'gitlab.example.com',
     projectId: env.GITLAB_PROJECT_ID,
     token: env.GITLAB_TOKEN,
-    packageName: env.PACKAGE_NAME || 'custom-idea'
+    packageName: env.PACKAGE_NAME || 'custom-idea',
+    allowSelfSignedTls: env.ALLOW_SELF_SIGNED_TLS === 'true'
   };
 }
 
@@ -59,122 +60,104 @@ function calculateSha256(filePath) {
 }
 
 // 3. GỌI API GITLAB ĐỂ LẤY DANH SÁCH PACKAGES CỦA DỰ ÁN
-function getGitLabPackages(config) {
+function getGitLabPackages(config, httpClient = https) {
   return new Promise((resolve) => {
-    const req = https.request({
+    const req = httpClient.request({
       hostname: config.host,
       port: 443,
       path: `/api/v4/projects/${config.projectId}/packages?package_name=${encodeURIComponent(config.packageName)}&per_page=100`,
       method: 'GET',
       headers: { 'PRIVATE-TOKEN': config.token },
-      rejectUnauthorized: false
+      rejectUnauthorized: !config.allowSelfSignedTls
     }, (res) => {
       let data = '';
       res.on('data', (chunk) => { data += chunk; });
       res.on('end', () => {
-        try {
-          resolve(res.statusCode >= 200 && res.statusCode < 300 ? JSON.parse(data) : []);
-        } catch (_) {
-          resolve([]);
+        if (res.statusCode >= 200 && res.statusCode < 300) {
+          try {
+            const parsed = JSON.parse(data);
+            resolve({ ok: true, statusCode: res.statusCode, packages: Array.isArray(parsed) ? parsed : [] });
+          } catch (err) {
+            resolve({ ok: false, statusCode: res.statusCode, packages: [], message: `JSON parse error: ${err.message}` });
+          }
+        } else {
+          resolve({ ok: false, statusCode: res.statusCode, packages: [], message: data });
         }
       });
     });
-    req.on('error', () => resolve([]));
+    req.on('error', (err) => resolve({ ok: false, statusCode: 0, packages: [], message: err.message }));
     req.end();
   });
 }
 
-// 4. LẤY DANH SÁCH TỆP TIN TRONG MỘT PACKAGE
-function getPackageFiles(config, packageId) {
+// 4. XÓA HẲN MỘT PACKAGE PHIÊN BẢN CŨ KHỎI GITLAB (DELETE API)
+function deletePackage(config, packageId, version, httpClient = https) {
   return new Promise((resolve) => {
-    const req = https.request({
-      hostname: config.host,
-      port: 443,
-      path: `/api/v4/projects/${config.projectId}/packages/${packageId}/package_files?per_page=100`,
-      method: 'GET',
-      headers: { 'PRIVATE-TOKEN': config.token },
-      rejectUnauthorized: false
-    }, (res) => {
-      let data = '';
-      res.on('data', (chunk) => { data += chunk; });
-      res.on('end', () => {
-        try {
-          resolve(res.statusCode >= 200 && res.statusCode < 300 ? JSON.parse(data) : []);
-        } catch (_) {
-          resolve([]);
-        }
-      });
-    });
-    req.on('error', () => resolve([]));
-    req.end();
-  });
-}
-
-// 5. XÓA MỘT TỆP TIN CỤ THỂ KHỎI PACKAGE (DELETE API)
-function deletePackageFile(config, packageId, fileId, fileName) {
-  return new Promise((resolve) => {
-    const req = https.request({
-      hostname: config.host,
-      port: 443,
-      path: `/api/v4/projects/${config.projectId}/packages/${packageId}/package_files/${fileId}`,
-      method: 'DELETE',
-      headers: { 'PRIVATE-TOKEN': config.token },
-      rejectUnauthorized: false
-    }, (res) => {
-      if (res.statusCode >= 200 && res.statusCode < 300) {
-        console.log(`[*] [DỌN DẸP] Đã xóa tệp cũ: ${fileName} (File ID: ${fileId})`);
-      }
-      resolve(true);
-    });
-    req.on('error', () => resolve(false));
-    req.end();
-  });
-}
-
-// 6. XÓA HẲN MỘT PACKAGE PHIÊN BẢN CŨ KHỎI GITLAB (DELETE API)
-function deletePackage(config, packageId, version) {
-  return new Promise((resolve) => {
-    const req = https.request({
+    const req = httpClient.request({
       hostname: config.host,
       port: 443,
       path: `/api/v4/projects/${config.projectId}/packages/${packageId}`,
       method: 'DELETE',
       headers: { 'PRIVATE-TOKEN': config.token },
-      rejectUnauthorized: false
+      rejectUnauthorized: !config.allowSelfSignedTls
     }, (res) => {
-      if (res.statusCode >= 200 && res.statusCode < 300) {
-        console.log(`[*] [DỌN DẸP] Đã xóa package phiên bản cũ: v${version} (ID: ${packageId})`);
-      }
-      resolve(true);
+      let body = '';
+      res.on('data', (chunk) => { body += chunk; });
+      res.on('end', () => {
+        if (res.statusCode >= 200 && res.statusCode < 300) {
+          console.log(`[*] [DỌN DẸP] Đã xóa package phiên bản cũ: v${version} (ID: ${packageId})`);
+          resolve({ ok: true, statusCode: res.statusCode });
+        } else if (res.statusCode === 404) {
+          resolve({ ok: true, statusCode: 404 });
+        } else {
+          resolve({ ok: false, statusCode: res.statusCode, message: body });
+        }
+      });
     });
-    req.on('error', () => resolve(false));
+    req.on('error', (err) => resolve({ ok: false, statusCode: 0, message: err.message }));
     req.end();
   });
 }
 
-// 7. CƠ CHẾ DỌN DẸP TRIỆT ĐỂ: XÓA SẠCH PACKAGE CŨ TRƯỚC KHI TẢI BẢN MỚI
-async function purgeOldReleases(config) {
+// 5. CƠ CHẾ DỌN DẸP TRIỆT ĐỂ: XÓA SẠCH PACKAGE CŨ TRƯỚC KHI TẢI BẢN MỚI
+async function purgeOldReleases(config, httpClient = https) {
   console.log('\n[*] Bắt đầu kiểm tra và dọn dẹp triệt để các package cũ trên GitLab...');
-  try {
-    const packages = await getGitLabPackages(config);
-
-    // Xóa TOÀN BỘ các package cũ trùng tên (bao gồm cả package "latest" hiện có)
-    // Để tránh việc GitLab Generic Package Registry lưu đè nhiều bản asset cũ vào cùng 1 package
-    const existingPackages = packages.filter((p) => p.name === config.packageName);
-    if (existingPackages.length > 0) {
-      for (const pkg of existingPackages) {
-        await deletePackage(config, pkg.id, pkg.version);
-      }
-      console.log(`[OK] Đã dọn sạch ${existingPackages.length} package cũ của '${config.packageName}'.`);
-    } else {
-      console.log(`[*] Chưa có package nào của '${config.packageName}' trên máy chủ.`);
-    }
-  } catch (err) {
-    console.warn(`[!] Cảnh báo dọn dẹp: ${err.message}`);
+  const listRes = await getGitLabPackages(config, httpClient);
+  if (!listRes.ok) {
+    console.warn(`[!] Không thể liệt kê package cũ (HTTP ${listRes.statusCode}): ${listRes.message || 'Unknown error'}`);
+    return { ok: false, reason: 'list_failed', statusCode: listRes.statusCode, message: listRes.message };
   }
+
+  const existingPackages = listRes.packages.filter((p) => p.name === config.packageName);
+  if (existingPackages.length === 0) {
+    console.log(`[*] Chưa có package nào của '${config.packageName}' trên máy chủ.`);
+    return { ok: true, deletedCount: 0 };
+  }
+
+  const failures = [];
+  let deletedCount = 0;
+  for (const pkg of existingPackages) {
+    const delRes = await deletePackage(config, pkg.id, pkg.version, httpClient);
+    if (delRes.ok) {
+      deletedCount += 1;
+    } else {
+      failures.push({ id: pkg.id, version: pkg.version, statusCode: delRes.statusCode, message: delRes.message });
+    }
+  }
+
+  if (failures.length > 0) {
+    for (const f of failures) {
+      const hint = f.statusCode === 403 ? ' (cần token quyền Maintainer/Owner để xóa Package)' : '';
+      console.warn(`[!] Xóa package v${f.version} (ID: ${f.id}) thất bại (HTTP ${f.statusCode})${hint}: ${f.message || ''}`);
+    }
+    return { ok: false, reason: 'delete_failed', failures, deletedCount };
+  }
+
+  console.log(`[OK] Đã dọn sạch ${deletedCount} package cũ của '${config.packageName}'.`);
+  return { ok: true, deletedCount };
 }
 
-// 8. UPLOAD TỆP TIN LÊN GITLAB GENERIC PACKAGE REGISTRY (DẠNG STREAM)
+// 6. UPLOAD TỆP TIN LÊN GITLAB GENERIC PACKAGE REGISTRY (DẠNG STREAM)
 function uploadFileToGitLab(config, filePath, remoteFileName) {
   return new Promise((resolve) => {
     const stat = fs.statSync(filePath);
@@ -192,7 +175,7 @@ function uploadFileToGitLab(config, filePath, remoteFileName) {
         'Content-Type': 'application/octet-stream',
         'Content-Length': stat.size
       },
-      rejectUnauthorized: false
+      rejectUnauthorized: !config.allowSelfSignedTls
     }, (res) => {
       let body = '';
       res.on('data', (chunk) => { body += chunk; });
@@ -321,6 +304,7 @@ async function main() {
 
   const shouldSkipBuild = args.includes('--no-build');
   const shouldForceBuild = args.includes('--build');
+  const allowDirtyRegistry = args.includes('--allow-dirty-registry');
 
   const version = rawVersion || pkgVersion;
   const isVersionChanged = rawVersion && rawVersion !== pkgVersion;
@@ -346,7 +330,7 @@ async function main() {
   }
 
   console.log('===============================================================================');
-  console.log('    XUẤT BẢN BẢN CẬP NHẬT LÊN GITLAB.MIC.VN (GENERIC PACKAGE)');
+  console.log(`    XUẤT BẢN BẢN CẬP NHẬT LÊN ${config.host.toUpperCase()} (GENERIC PACKAGE)`);
   console.log('===============================================================================');
   console.log(`- Máy chủ GitLab       : https://${config.host}`);
   console.log(`- Project ID           : ${config.projectId}`);
@@ -395,7 +379,12 @@ async function main() {
   fs.copyFileSync(sourceExePath, latestExePath);
 
   // BƯỚC 1: DỌN DẸP SẠCH TOÀN BỘ CÁC TỆP CŨ VÀ PACKAGE CŨ TRÊN GITLAB
-  await purgeOldReleases(config);
+  const purgeRes = await purgeOldReleases(config);
+  if (!purgeRes.ok && !allowDirtyRegistry) {
+    console.error('\n[LỖI] Dọn dẹp package cũ thất bại — dừng upload để tránh tạo asset trùng lặp trên GitLab.');
+    console.error('      Hãy dùng token có quyền Maintainer hoặc truyền cờ --allow-dirty-registry nếu bạn chủ ý bỏ qua.');
+    process.exit(1);
+  }
 
   // BƯỚC 2: TÍNH TOÁN SHA-256 CHO TỆP -latest.exe
   console.log('\n[1/3] Đang tính toán mã băm SHA-256 dạng stream...');
@@ -454,7 +443,7 @@ async function main() {
 
   if (uploadExeOk && uploadMetaOk) {
     console.log('\n===============================================================================');
-    console.log(' [THÀNH CÔNG RỰC RỠ] ĐÃ PHÁT HÀNH BẢN CẬP NHẬT LÊN GITLAB.MIC.VN!');
+    console.log(` [THÀNH CÔNG] ĐÃ PHÁT HÀNH BẢN CẬP NHẬT LÊN ${config.host.toUpperCase()}!`);
     console.log(` - Mục Package : ${config.packageName}`);
     console.log(` - Metadata URL: https://${config.host}/api/v4/projects/${config.projectId}/packages/generic/${config.packageName}/latest/version.json`);
     console.log(` - Download URL: ${downloadUrl}`);
@@ -465,7 +454,15 @@ async function main() {
   }
 }
 
-main().catch((err) => {
-  console.error('[FATAL ERROR]:', err);
-  process.exit(1);
-});
+if (require.main === module) {
+  main().catch((err) => {
+    console.error('[FATAL ERROR]:', err);
+    process.exit(1);
+  });
+}
+
+module.exports = {
+  getGitLabPackages,
+  deletePackage,
+  purgeOldReleases,
+};

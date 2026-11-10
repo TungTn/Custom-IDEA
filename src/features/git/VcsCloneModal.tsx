@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import {
   X,
@@ -11,18 +11,20 @@ import {
   Search,
   RefreshCw,
   Lock,
-  Plus,
   Check,
 } from 'lucide-react';
 import { FileNode } from '../../types';
 import { GitLabAccount, GitLabProject } from '../../types/gitlab';
 import {
-  getGitLabAccounts,
   getActiveGitLabAccount,
+  getActiveGitLabAccountId,
+  migrateLegacyGitLabTokens,
   setActiveGitLabAccountId,
   saveGitLabAccount,
   testGitLabConnection,
   fetchGitLabProjects,
+  getGitLabHostname,
+  sanitizeRepoFolderName,
 } from '../../services/gitlabService';
 
 interface VcsCloneModalProps {
@@ -53,13 +55,16 @@ export const VcsCloneModal: React.FC<VcsCloneModalProps> = ({
 
   // Generic URL tab state
   const [url, setUrl] = useState('');
+  const [baseParentDir, setBaseParentDir] = useState<string>(() => getBaseDir());
   const [directory, setDirectory] = useState<string>(() => getBaseDir());
+  const [urlAllowSelfSigned, setUrlAllowSelfSigned] = useState(false);
   const [isCloning, setIsCloning] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
   // GitLab tab state
   const [accounts, setAccounts] = useState<GitLabAccount[]>([]);
   const [selectedAccount, setSelectedAccount] = useState<GitLabAccount | null>(null);
+  const [isGitLabReady, setIsGitLabReady] = useState(false);
   const [projects, setProjects] = useState<GitLabProject[]>([]);
   const [selectedProject, setSelectedProject] = useState<GitLabProject | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
@@ -68,47 +73,105 @@ export const VcsCloneModal: React.FC<VcsCloneModalProps> = ({
   const [cloneProtocol, setCloneProtocol] = useState<'https' | 'ssh'>('https');
 
   // Quick login state when no account exists
-  const [quickHost, setQuickHost] = useState('https://gitlab.mic.vn');
+  const [quickHost, setQuickHost] = useState('https://gitlab.example.com');
   const [quickToken, setQuickToken] = useState('');
+  const [quickAllowSelfSigned, setQuickAllowSelfSigned] = useState(false);
   const [quickTesting, setQuickTesting] = useState(false);
   const [quickError, setQuickError] = useState<string | null>(null);
 
+  const searchDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const requestSeqRef = useRef(0);
+
+  const clearPendingSearch = () => {
+    if (searchDebounceRef.current) {
+      clearTimeout(searchDebounceRef.current);
+      searchDebounceRef.current = null;
+    }
+  };
+
+  const joinTargetDir = (parent: string, folderName: string) => {
+    if (!parent) return folderName;
+    const sep = parent.includes('/') && !parent.includes('\\') ? '/' : '\\';
+    return `${parent.replace(/[/\\]+$/, '')}${sep}${folderName}`;
+  };
+
   useEffect(() => {
+    let active = true;
     if (isOpen) {
+      clearPendingSearch();
+      requestSeqRef.current += 1;
       setUrl('');
       setErrorMessage(null);
+      setProjectError(null);
       setIsCloning(false);
+      setIsGitLabReady(false);
+      setUrlAllowSelfSigned(false);
+      setQuickAllowSelfSigned(false);
       const base = getBaseDir();
+      setBaseParentDir(base);
       setDirectory(base);
-
-      // Load GitLab accounts
-      const accList = getGitLabAccounts();
-      setAccounts(accList);
-      const active = getActiveGitLabAccount();
-      setSelectedAccount(active);
       setSelectedProject(null);
       setSearchQuery('');
+
+      migrateLegacyGitLabTokens()
+        .then((accList) => {
+          if (!active) return;
+          setAccounts(accList);
+          const activeId = getActiveGitLabAccountId();
+          const chosen =
+            (activeId ? accList.find((a) => a.id === activeId) : undefined) ||
+            accList[0] ||
+            getActiveGitLabAccount() ||
+            null;
+          setSelectedAccount(chosen);
+          setIsGitLabReady(true);
+        })
+        .catch(() => {
+          if (active) setIsGitLabReady(true);
+        });
+    } else {
+      clearPendingSearch();
+      requestSeqRef.current += 1;
+      setIsGitLabReady(false);
     }
+
+    return () => {
+      active = false;
+      clearPendingSearch();
+    };
   }, [isOpen]);
 
-  // Fetch projects when selectedAccount changes or tab switches to gitlab
+  // Fetch projects when selectedAccount changes or tab switches to gitlab (after legacy migration)
   useEffect(() => {
-    if (isOpen && activeTab === 'gitlab' && selectedAccount) {
+    clearPendingSearch();
+    if (isOpen && isGitLabReady && activeTab === 'gitlab' && selectedAccount) {
       loadProjects(selectedAccount, searchQuery);
     }
-  }, [isOpen, activeTab, selectedAccount]);
+  }, [isOpen, isGitLabReady, activeTab, selectedAccount]);
 
   const loadProjects = async (account: GitLabAccount, search: string = '') => {
+    const reqId = ++requestSeqRef.current;
     setIsLoadingProjects(true);
     setProjectError(null);
     try {
-      const list = await fetchGitLabProjects(account.host, account.token, search);
-      setProjects(list);
+      const list = await fetchGitLabProjects(
+        account.host,
+        account.id,
+        Boolean(account.allowSelfSigned),
+        search
+      );
+      if (reqId === requestSeqRef.current) {
+        setProjects(list);
+      }
     } catch (err: any) {
       console.error('Failed to fetch GitLab projects:', err);
-      setProjectError(typeof err === 'string' ? err : err.message || 'Không thể tải danh sách dự án');
+      if (reqId === requestSeqRef.current) {
+        setProjectError(typeof err === 'string' ? err : err.message || 'Không thể tải danh sách dự án');
+      }
     } finally {
-      setIsLoadingProjects(false);
+      if (reqId === requestSeqRef.current) {
+        setIsLoadingProjects(false);
+      }
     }
   };
 
@@ -120,20 +183,22 @@ export const VcsCloneModal: React.FC<VcsCloneModalProps> = ({
     setQuickTesting(true);
     setQuickError(null);
     try {
-      const user = await testGitLabConnection(quickHost.trim(), quickToken.trim());
-      const newAcc: GitLabAccount = {
-        id: `gl_${Date.now()}`,
-        host: quickHost.trim(),
-        token: quickToken.trim(),
-        user,
-        createdAt: Date.now(),
-        lastVerifiedAt: Date.now(),
-      };
-      const updated = saveGitLabAccount(newAcc);
+      const user = await testGitLabConnection(quickHost.trim(), quickToken.trim(), quickAllowSelfSigned);
+      const { accounts: updated, savedAccount } = await saveGitLabAccount(
+        {
+          host: quickHost.trim(),
+          allowSelfSigned: quickAllowSelfSigned,
+          user,
+          createdAt: Date.now(),
+          lastVerifiedAt: Date.now(),
+        },
+        quickToken.trim()
+      );
       setAccounts(updated);
-      setSelectedAccount(newAcc);
-      setActiveGitLabAccountId(newAcc.id);
+      setSelectedAccount(savedAccount);
+      setActiveGitLabAccountId(savedAccount.id);
       setQuickToken('');
+      setQuickAllowSelfSigned(false);
       onShowToast('GitLab Connected', `Đã kết nối tài khoản @${user.username}`, 'success');
     } catch (err: any) {
       setQuickError(typeof err === 'string' ? err : err.message || 'Kết nối thất bại');
@@ -149,8 +214,9 @@ export const VcsCloneModal: React.FC<VcsCloneModalProps> = ({
     const targetUrl = cloneProtocol === 'ssh' ? proj.ssh_url_to_repo : proj.http_url_to_repo;
     setUrl(targetUrl);
 
-    const base = getBaseDir();
-    setDirectory(base ? `${base}\\${proj.name}` : proj.name);
+    const slug = sanitizeRepoFolderName(proj.path_with_namespace || proj.name);
+    const parent = baseParentDir || getBaseDir();
+    setDirectory(joinTargetDir(parent, slug));
   };
 
   const handleProtocolChange = (proto: 'https' | 'ssh') => {
@@ -162,21 +228,16 @@ export const VcsCloneModal: React.FC<VcsCloneModalProps> = ({
 
   const handleUrlChange = (newUrl: string) => {
     setUrl(newUrl);
+    setSelectedProject(null);
     setErrorMessage(null);
     try {
       const trimmed = newUrl.trim();
       if (trimmed) {
-        const parts = trimmed.split('/');
-        let lastPart = parts[parts.length - 1] || '';
-        if (lastPart.endsWith('.git')) {
-          lastPart = lastPart.slice(0, -4);
-        }
-        if (lastPart) {
-          const base = getBaseDir();
-          setDirectory(base ? `${base}\\${lastPart}` : lastPart);
-        }
+        const slug = sanitizeRepoFolderName(trimmed);
+        const parent = baseParentDir || getBaseDir();
+        setDirectory(joinTargetDir(parent, slug));
       }
-    } catch (e) {
+    } catch {
       // ignore
     }
   };
@@ -186,7 +247,15 @@ export const VcsCloneModal: React.FC<VcsCloneModalProps> = ({
       if (typeof window !== 'undefined' && ('__TAURI_INTERNALS__' in window || '__TAURI__' in window)) {
         const picked = await invoke<string | null>('select_directory', { defaultPath: directory });
         if (picked) {
-          setDirectory(picked);
+          setBaseParentDir(picked);
+          if (selectedProject) {
+            const slug = sanitizeRepoFolderName(selectedProject.path_with_namespace || selectedProject.name);
+            setDirectory(joinTargetDir(picked, slug));
+          } else if (url.trim()) {
+            setDirectory(joinTargetDir(picked, sanitizeRepoFolderName(url.trim())));
+          } else {
+            setDirectory(picked);
+          }
         }
       }
     } catch (err) {
@@ -210,11 +279,16 @@ export const VcsCloneModal: React.FC<VcsCloneModalProps> = ({
     setIsCloning(true);
     setErrorMessage(null);
 
+    const isGitLabHttps = activeTab === 'gitlab' && cloneProtocol === 'https' && Boolean(selectedAccount);
+
     try {
       if (typeof window !== 'undefined' && ('__TAURI_INTERNALS__' in window || '__TAURI__' in window)) {
         await invoke('git_clone', {
           url: trimmedUrl,
           targetDir: trimmedDir,
+          accountId: isGitLabHttps ? selectedAccount?.id ?? null : null,
+          allowSelfSigned:
+            activeTab === 'gitlab' ? Boolean(selectedAccount?.allowSelfSigned) : urlAllowSelfSigned,
         });
 
         // Open newly cloned folder
@@ -262,7 +336,15 @@ export const VcsCloneModal: React.FC<VcsCloneModalProps> = ({
           <div className="w-48 bg-[#1E1F22] border-r border-[#393B40] flex flex-col p-2 gap-1 select-none flex-shrink-0">
             <button
               type="button"
-              onClick={() => setActiveTab('url')}
+              onClick={() => {
+                clearPendingSearch();
+                setErrorMessage(null);
+                if (activeTab !== 'url') {
+                  setSelectedProject(null);
+                  setUrl('');
+                }
+                setActiveTab('url');
+              }}
               className={`w-full flex items-center gap-2.5 px-3 py-2 rounded text-xs transition-colors ${
                 activeTab === 'url'
                   ? 'bg-[#2B2D30] text-white font-medium border border-[#3574F0]/40'
@@ -275,7 +357,15 @@ export const VcsCloneModal: React.FC<VcsCloneModalProps> = ({
 
             <button
               type="button"
-              onClick={() => setActiveTab('gitlab')}
+              onClick={() => {
+                clearPendingSearch();
+                setErrorMessage(null);
+                if (activeTab !== 'gitlab') {
+                  setSelectedProject(null);
+                  setUrl('');
+                }
+                setActiveTab('gitlab');
+              }}
               className={`w-full flex items-center gap-2.5 px-3 py-2 rounded text-xs transition-colors ${
                 activeTab === 'gitlab'
                   ? 'bg-[#2B2D30] text-white font-medium border border-[#FC6D26]/40'
@@ -307,7 +397,7 @@ export const VcsCloneModal: React.FC<VcsCloneModalProps> = ({
                     type="text"
                     value={url}
                     onChange={(e) => handleUrlChange(e.target.value)}
-                    placeholder="https://gitlab.mic.vn/group/project.git hoặc https://github.com/user/repo.git"
+                    placeholder="https://gitlab.example.com/group/project.git hoặc https://github.com/user/repo.git"
                     disabled={isCloning}
                     className="w-full bg-[#1E1F22] border border-[#393B40] focus:border-[#3574F0] focus:outline-none rounded px-3 py-2 text-[#DFE1E5] placeholder-[#5A5D63]"
                     autoFocus
@@ -337,6 +427,17 @@ export const VcsCloneModal: React.FC<VcsCloneModalProps> = ({
                     </button>
                   </div>
                 </div>
+
+                <label className="flex items-center gap-2 text-[11px] text-[#868A91] cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    checked={urlAllowSelfSigned}
+                    onChange={(e) => setUrlAllowSelfSigned(e.target.checked)}
+                    disabled={isCloning}
+                    className="accent-[#3574F0]"
+                  />
+                  <span>Allow self-signed SSL certificate (internal Git servers)</span>
+                </label>
 
                 {errorMessage && (
                   <div className="flex items-start gap-2 bg-[#362222] border border-[#E05555]/40 rounded p-3 text-[#E05555]">
@@ -370,7 +471,7 @@ export const VcsCloneModal: React.FC<VcsCloneModalProps> = ({
                           type="text"
                           value={quickHost}
                           onChange={(e) => setQuickHost(e.target.value)}
-                          placeholder="https://gitlab.mic.vn"
+                          placeholder="https://gitlab.example.com"
                           className="w-full bg-[#2B2D30] border border-[#393B40] focus:border-[#3574F0] rounded px-3 py-1.5 text-white font-mono outline-none"
                         />
                       </div>
@@ -385,6 +486,16 @@ export const VcsCloneModal: React.FC<VcsCloneModalProps> = ({
                           className="w-full bg-[#2B2D30] border border-[#393B40] focus:border-[#3574F0] rounded px-3 py-1.5 text-white font-mono outline-none"
                         />
                       </div>
+
+                      <label className="flex items-center gap-2 text-[11px] text-[#868A91] cursor-pointer select-none">
+                        <input
+                          type="checkbox"
+                          checked={quickAllowSelfSigned}
+                          onChange={(e) => setQuickAllowSelfSigned(e.target.checked)}
+                          className="accent-[#3574F0]"
+                        />
+                        <span>Allow self-signed SSL certificate (chỉ dùng cho server lab nội bộ)</span>
+                      </label>
 
                       {quickError && (
                         <div className="text-[11px] text-[#E05555] bg-[#362222] border border-[#E05555]/30 rounded p-2 flex items-start gap-1.5">
@@ -421,6 +532,12 @@ export const VcsCloneModal: React.FC<VcsCloneModalProps> = ({
                         onChange={(e) => {
                           const found = accounts.find((a) => a.id === e.target.value);
                           if (found) {
+                            clearPendingSearch();
+                            requestSeqRef.current += 1;
+                            setSelectedProject(null);
+                            setUrl('');
+                            setErrorMessage(null);
+                            setSearchQuery('');
                             setSelectedAccount(found);
                             setActiveGitLabAccountId(found.id);
                           }
@@ -429,7 +546,7 @@ export const VcsCloneModal: React.FC<VcsCloneModalProps> = ({
                       >
                         {accounts.map((acc) => (
                           <option key={acc.id} value={acc.id}>
-                            @{acc.user?.username || 'user'} ({new URL(acc.host).hostname})
+                            @{acc.user?.username || 'user'} ({getGitLabHostname(acc.host)})
                           </option>
                         ))}
                       </select>
@@ -441,9 +558,14 @@ export const VcsCloneModal: React.FC<VcsCloneModalProps> = ({
                           type="text"
                           value={searchQuery}
                           onChange={(e) => {
-                            setSearchQuery(e.target.value);
-                            if (selectedAccount) {
-                              loadProjects(selectedAccount, e.target.value);
+                            const q = e.target.value;
+                            setSearchQuery(q);
+                            clearPendingSearch();
+                            const targetAccount = selectedAccount;
+                            if (targetAccount) {
+                              searchDebounceRef.current = setTimeout(() => {
+                                loadProjects(targetAccount, q);
+                              }, 250);
                             }
                           }}
                           placeholder="Tìm kiếm repository..."
@@ -476,7 +598,10 @@ export const VcsCloneModal: React.FC<VcsCloneModalProps> = ({
                       {/* Refresh button */}
                       <button
                         type="button"
-                        onClick={() => selectedAccount && loadProjects(selectedAccount, searchQuery)}
+                        onClick={() => {
+                          clearPendingSearch();
+                          if (selectedAccount) loadProjects(selectedAccount, searchQuery);
+                        }}
                         disabled={isLoadingProjects}
                         className="p-1.5 bg-[#1E1F22] hover:bg-[#393B40] border border-[#393B40] text-[#DFE1E5] rounded transition-colors"
                         title="Tải lại danh sách"
@@ -497,7 +622,10 @@ export const VcsCloneModal: React.FC<VcsCloneModalProps> = ({
                           <div>{projectError}</div>
                           <button
                             type="button"
-                            onClick={() => selectedAccount && loadProjects(selectedAccount, searchQuery)}
+                            onClick={() => {
+                              clearPendingSearch();
+                              if (selectedAccount) loadProjects(selectedAccount, searchQuery);
+                            }}
                             className="px-3 py-1 bg-[#2B2D30] border border-[#393B40] text-[#DFE1E5] rounded text-xs"
                           >
                             Thử lại

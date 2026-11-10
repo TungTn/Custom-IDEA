@@ -37,6 +37,10 @@ export type GitBranchInfoDto = { name: string, short_name: string, is_current: b
 
 export type GitStashItemDto = { index: number, hash: string, branch: string, date: string, message: string, };
 
+export type GitLabUserDto = { id: number, username: string, name: string, email: string | null, avatar_url: string | null, web_url: string | null, };
+
+export type GitLabProjectDto = { id: number, name: string, name_with_namespace: string, path_with_namespace: string, http_url_to_repo: string, ssh_url_to_repo: string, default_branch: string | null, visibility: string | null, description: string | null, last_activity_at: string | null, web_url: string | null, star_count: number | null, };
+
 export type DbColumnDto = { name: string, type: string, isPrimaryKey: boolean, isNullable: boolean, defaultValue: string | null, comment: string | null, };
 
 export type DbIndexDto = { name: string, columns: Array<string>, isUnique: boolean, };

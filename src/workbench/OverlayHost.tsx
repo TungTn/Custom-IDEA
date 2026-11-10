@@ -34,6 +34,7 @@ const AddDataSourceModal = React.lazy(() => import('../features/database/AddData
 const ThemeStudioModal = React.lazy(() => import('../features/settings/ThemeStudioModal').then(m => ({ default: m.ThemeStudioModal })));
 const BreakpointsModal = React.lazy(() => import('../features/debugger/BreakpointsModal').then(m => ({ default: m.BreakpointsModal })));
 const StashModal = React.lazy(() => import('../features/git/StashModal').then(m => ({ default: m.StashModal })));
+const GitBranchPopup = React.lazy(() => import('../features/git/GitBranchPopup').then(m => ({ default: m.GitBranchPopup })));
 const EvaluateExpressionModal = React.lazy(() => import('../features/debugger/EvaluateExpressionModal').then(m => ({ default: m.EvaluateExpressionModal })));
 const ClipboardHistoryModal = React.lazy(() => import('../editor/ClipboardHistoryModal').then(m => ({ default: m.ClipboardHistoryModal })));
 const StructuralSearchModal = React.lazy(() => import('../features/search/StructuralSearchModal').then(m => ({ default: m.StructuralSearchModal })));
@@ -339,6 +340,23 @@ export const OverlayHost: React.FC<OverlayHostProps> = (props) => {
             onStash={(message, keepIndex) => {
               props.handleStash?.(message, keepIndex);
             }}
+          />
+        )}
+
+        {/* Git Branch Popup */}
+        {modalStore.isBranchesOpen && (
+          <GitBranchPopup
+            isOpen={modalStore.isBranchesOpen}
+            onClose={() => modalStore.setIsBranchesOpen(false)}
+            currentBranch={props.currentBranch || 'main'}
+            projectPath={projectStore.projectRootPath}
+            onSwitchBranch={(b) => {
+              modalStore.setIsBranchesOpen(false);
+              props.refreshGitStatus?.();
+              addToast('Git Branch', `Switched to branch ${b}`, 'info');
+            }}
+            onRefreshGitStatus={props.refreshGitStatus}
+            onShowToast={addToast}
           />
         )}
 

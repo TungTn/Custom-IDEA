@@ -170,6 +170,17 @@ export const BottomToolWindow: React.FC<BottomToolWindowProps> = ({
   sonarTargetScanPath,
   sonarCancelSignal,
 }) => {
+  const dragCleanupRef = React.useRef<(() => void) | null>(null);
+
+  React.useEffect(() => {
+    return () => {
+      if (dragCleanupRef.current) {
+        dragCleanupRef.current();
+        dragCleanupRef.current = null;
+      }
+    };
+  }, []);
+
   if (!isBottomOpen) return null;
 
   return (
@@ -190,7 +201,9 @@ export const BottomToolWindow: React.FC<BottomToolWindowProps> = ({
           const onMouseUp = () => {
             document.removeEventListener('mousemove', onMouseMove);
             document.removeEventListener('mouseup', onMouseUp);
+            dragCleanupRef.current = null;
           };
+          dragCleanupRef.current = onMouseUp;
           document.addEventListener('mousemove', onMouseMove);
           document.addEventListener('mouseup', onMouseUp);
         }}

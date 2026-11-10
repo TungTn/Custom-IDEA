@@ -376,18 +376,24 @@ export function useProjectWorkspace({
 
   // Listen to live fs-event from Tauri
   useEffect(() => {
+    let isMounted = true;
     let unlistenVfs: (() => void) | undefined;
     let debounceTimer: any = null;
 
     const setupFsListener = async () => {
       try {
         if (typeof window !== 'undefined' && ('__TAURI_INTERNALS__' in window || '__TAURI__' in window)) {
-          unlistenVfs = await listen<{ kind: string; paths: string[]; timestamp: number }>('vfs:change', event => {
+          const listener = await listen<{ kind: string; paths: string[]; timestamp: number }>('vfs:change', event => {
             if (debounceTimer) clearTimeout(debounceTimer);
             debounceTimer = setTimeout(() => {
-              syncProjectFilesFromDisk(event.payload.paths);
+              if (isMounted) syncProjectFilesFromDisk(event.payload.paths);
             }, 100);
           });
+          if (!isMounted) {
+            listener();
+            return;
+          }
+          unlistenVfs = listener;
         }
       } catch (e) {
         console.warn('Failed to listen to vfs:change:', e);
@@ -397,6 +403,7 @@ export function useProjectWorkspace({
     setupFsListener();
 
     return () => {
+      isMounted = false;
       if (debounceTimer) clearTimeout(debounceTimer);
       if (unlistenVfs) unlistenVfs();
     };

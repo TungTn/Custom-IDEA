@@ -1,4 +1,3 @@
-@import 'dockview/dist/styles/dockview.css';
 @import '@xterm/xterm/css/xterm.css';
 
 @tailwind base;
@@ -165,35 +164,6 @@ body {
   background: #4E5157;
   border: 2px solid transparent;
   background-clip: content-box;
-}
-
-/* Dockview theme customization for IntelliJ style */
-.dockview-theme-dark {
-  --dv-paneview-active-outline-color: #3574F0;
-  --dv-tabs-and-actions-container-background-color: #1E1F22;
-  --dv-activegroup-visiblepanel-tab-background-color: #1E1F22;
-  --dv-inactivegroup-visiblepanel-tab-background-color: #1E1F22;
-  --dv-activegroup-hiddenpanel-tab-background-color: #1E1F22;
-  --dv-inactivegroup-hiddenpanel-tab-background-color: #1E1F22;
-  --dv-activegroup-visiblepanel-tab-color: #DFE1E5;
-  --dv-inactivegroup-visiblepanel-tab-color: #868A91;
-  --dv-tab-divider-color: #2B2D30;
-  --dv-separator-border: #2B2D30;
-  --dv-drag-over-background-color: rgba(53, 116, 240, 0.2);
-  --dv-drag-over-border-color: #3574F0;
-}
-
-.dockview-theme-dark .dockview-tab {
-  font-size: 12px;
-  border-right: 1px solid #393B40;
-  padding: 0 12px;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.dockview-theme-dark .dockview-tab.dockview-tab-active {
-  border-bottom: 2px solid #3574F0;
 }
 
 /* Suppress Monaco VS Code Peek Views and widgets (IntelliJ uses dedicated Find Usages tool window & popups) */

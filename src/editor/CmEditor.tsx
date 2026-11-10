@@ -1203,6 +1203,9 @@ export const CmEditor = forwardRef<CmEditorHandle, CmEditorProps>(
       if (!editorContainerRef.current) return;
 
       let isMounted = true;
+      let unlistenDiagnostics: (() => void) | null = null;
+      let scrollCleanup: (() => void) | null = null;
+      let initialScrollTimeout: any = null;
 
       const initEditor = async () => {
         const langExtensions = await getLanguageExtension();
@@ -1212,8 +1215,6 @@ export const CmEditor = forwardRef<CmEditorHandle, CmEditorProps>(
         if (viewRef.current) {
           viewRef.current.destroy();
         }
-
-        let unlistenDiagnostics = () => {};
 
         const updateListener = EditorView.updateListener.of((update) => {
           if (update.docChanged && !isDispatchingRef.current) {
@@ -1446,30 +1447,44 @@ export const CmEditor = forwardRef<CmEditorHandle, CmEditorProps>(
           ? filePath.substring(0, filePath.lastIndexOf('\\'))
           : (filePath.includes('/') ? filePath.substring(0, filePath.lastIndexOf('/')) : '.'));
         lspService.openDocument(filePath, content, lspProjectRoot);
+        if (!isMounted) return;
+
         unlistenDiagnostics = createLspDiagnostics(viewRef, filePath, (diags) => {
-          setFileDiagnostics(diags);
+          if (isMounted) setFileDiagnostics(diags);
         });
         setTotalDocLines(view.state.doc.lines);
 
-        // Sticky Scroll listener
+        // Sticky Scroll listener throttled with requestAnimationFrame
+        let rAFId: number | null = null;
         const handleScroll = () => {
-          if (!viewRef.current) return;
-          try {
-            const topBlock = viewRef.current.lineBlockAtHeight(0);
-            const lineNum = viewRef.current.state.doc.lineAt(topBlock.from).number;
-            const scopes = getEnclosingScopes(viewRef.current.state.doc.toString(), lineNum);
-            setStickyScopes(scopes);
-          } catch (e) {}
+          if (rAFId) cancelAnimationFrame(rAFId);
+          rAFId = requestAnimationFrame(() => {
+            if (!viewRef.current || !isMounted) return;
+            try {
+              const scrollTop = viewRef.current.scrollDOM.scrollTop;
+              const topBlock = viewRef.current.lineBlockAtHeight(scrollTop);
+              const lineNum = viewRef.current.state.doc.lineAt(topBlock.from).number;
+              const scopes = getEnclosingScopes(viewRef.current.state.doc, lineNum);
+              setStickyScopes(scopes);
+            } catch (e) {}
+          });
         };
         view.scrollDOM.addEventListener('scroll', handleScroll, { passive: true });
+        scrollCleanup = () => {
+          if (rAFId) cancelAnimationFrame(rAFId);
+          view.scrollDOM.removeEventListener('scroll', handleScroll);
+        };
         // Initial scan
-        setTimeout(handleScroll, 100);
+        initialScrollTimeout = setTimeout(handleScroll, 100);
       };
 
       initEditor();
 
       return () => {
         isMounted = false;
+        if (initialScrollTimeout) clearTimeout(initialScrollTimeout);
+        if (scrollCleanup) scrollCleanup();
+        if (unlistenDiagnostics) unlistenDiagnostics();
         lspService.closeDocument(filePath);
         if (viewRef.current) {
           viewRef.current.destroy();

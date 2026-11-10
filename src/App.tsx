@@ -218,6 +218,16 @@ export const App: React.FC = () => {
   const [sonarTargetScanPath, setSonarTargetScanPath] = useState<{ path: string; isFolder: boolean; timestamp: number } | null>(null);
   const [sonarCancelSignal, setSonarCancelSignal] = useState(0);
 
+  const sidebarDragCleanupRef = useRef<(() => void) | null>(null);
+  useEffect(() => {
+    return () => {
+      if (sidebarDragCleanupRef.current) {
+        sidebarDragCleanupRef.current();
+        sidebarDragCleanupRef.current = null;
+      }
+    };
+  }, []);
+
   const refreshGitStatus = useCallback(async () => {
       const projectDir = currentProjectDirectory;
       try {
@@ -2396,7 +2406,9 @@ export const App: React.FC = () => {
                     const onMouseUp = () => {
                       document.removeEventListener('mousemove', onMouseMove);
                       document.removeEventListener('mouseup', onMouseUp);
+                      sidebarDragCleanupRef.current = null;
                     };
+                    sidebarDragCleanupRef.current = onMouseUp;
                     document.addEventListener('mousemove', onMouseMove);
                     document.addEventListener('mouseup', onMouseUp);
                 }}

@@ -273,6 +273,16 @@ export const CommitPanel: React.FC<CommitPanelProps> = ({
   const [activeSubmenu, setActiveSubmenu] = useState<string | null>(null);
 
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const dragCleanupRef = useRef<(() => void) | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (dragCleanupRef.current) {
+        dragCleanupRef.current();
+        dragCleanupRef.current = null;
+      }
+    };
+  }, []);
 
   const { openDiffModal } = useModalStore();
   const { addToast } = useNotificationStore();
@@ -1122,7 +1132,9 @@ export const CommitPanel: React.FC<CommitPanelProps> = ({
           const onMouseUp = () => {
             document.removeEventListener('mousemove', onMouseMove);
             document.removeEventListener('mouseup', onMouseUp);
+            dragCleanupRef.current = null;
           };
+          dragCleanupRef.current = onMouseUp;
           document.addEventListener('mousemove', onMouseMove);
           document.addEventListener('mouseup', onMouseUp);
         }}

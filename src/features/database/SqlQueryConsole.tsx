@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useCallback } from 'react';
 import { CmEditor } from '../../editor';
 import { 
   Play, 
@@ -46,6 +46,20 @@ export const SqlQueryConsole: React.FC<SqlQueryConsoleProps> = ({
 
   const activeDataSource = dataSources.find(ds => ds.id === selectedDsId) || dataSources[0];
 
+  const recordQueryHistory = useCallback((entry: Omit<SqlHistoryEntry, 'id' | 'timestamp' | 'dataSourceName'>) => {
+    const newEntry: SqlHistoryEntry = {
+      ...entry,
+      id: `hist_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+      timestamp: new Date().toLocaleTimeString(),
+      dataSourceName: activeDataSource?.name || 'Default',
+    };
+    setQueryHistory(prev => {
+      const updated = [newEntry, ...prev.filter(h => h.query !== entry.query)].slice(0, 100);
+      saveSqlHistory(updated);
+      return updated;
+    });
+  }, [activeDataSource?.name]);
+
   const executeSql = async () => {
     if (!activeDataSource) return;
     setIsExecuting(true);
@@ -76,18 +90,12 @@ export const SqlQueryConsole: React.FC<SqlQueryConsoleProps> = ({
               executionTimeMs: execTime,
               error: res.error,
             });
-            const newEntry: SqlHistoryEntry = {
-              id: `hist_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+            recordQueryHistory({
               query: trimmed,
-              timestamp: new Date().toLocaleTimeString(),
               executionTimeMs: execTime,
-              dataSourceName: activeDataSource.name,
               status: 'error',
               error: res.error,
-            };
-            const updated = [newEntry, ...queryHistory.filter(h => h.query !== trimmed)].slice(0, 100);
-            setQueryHistory(updated);
-            saveSqlHistory(updated);
+            });
             onShowToast?.('Query Error', res.error, 'error');
           } else {
             setQueryResult({
@@ -96,18 +104,12 @@ export const SqlQueryConsole: React.FC<SqlQueryConsoleProps> = ({
               executionTimeMs: execTime,
               affectedRows: Number(res.affectedRows),
             });
-            const newEntry: SqlHistoryEntry = {
-              id: `hist_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+            recordQueryHistory({
               query: trimmed,
-              timestamp: new Date().toLocaleTimeString(),
               executionTimeMs: execTime,
-              dataSourceName: activeDataSource.name,
               status: 'success',
               rowCount: res.rows.length,
-            };
-            const updated = [newEntry, ...queryHistory.filter(h => h.query !== trimmed)].slice(0, 100);
-            setQueryHistory(updated);
-            saveSqlHistory(updated);
+            });
             onShowToast?.(
               'Query Executed',
               res.columns.includes('status')
@@ -128,18 +130,12 @@ export const SqlQueryConsole: React.FC<SqlQueryConsoleProps> = ({
           executionTimeMs: execTime,
           error: errMsg,
         });
-        const newEntry: SqlHistoryEntry = {
-          id: `hist_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+        recordQueryHistory({
           query: trimmed,
-          timestamp: new Date().toLocaleTimeString(),
           executionTimeMs: execTime,
-          dataSourceName: activeDataSource.name,
           status: 'error',
           error: errMsg,
-        };
-        const updated = [newEntry, ...queryHistory.filter(h => h.query !== trimmed)].slice(0, 100);
-        setQueryHistory(updated);
-        saveSqlHistory(updated);
+        });
         onShowToast?.('Query Error', errMsg, 'error');
         return;
       }
@@ -159,18 +155,12 @@ export const SqlQueryConsole: React.FC<SqlQueryConsoleProps> = ({
           executionTimeMs: executionTime,
           affectedRows: 1,
         });
-        const newEntry: SqlHistoryEntry = {
-          id: `hist_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+        recordQueryHistory({
           query: trimmed,
-          timestamp: new Date().toLocaleTimeString(),
           executionTimeMs: executionTime,
-          dataSourceName: activeDataSource.name,
           status: 'success',
           rowCount: 1,
-        };
-        const updated = [newEntry, ...queryHistory.filter(h => h.query !== trimmed)].slice(0, 100);
-        setQueryHistory(updated);
-        saveSqlHistory(updated);
+        });
         onShowToast?.('Query Executed', `Executed statement in ${executionTime}ms`, 'success');
         return;
       }
@@ -191,18 +181,12 @@ export const SqlQueryConsole: React.FC<SqlQueryConsoleProps> = ({
           executionTimeMs: executionTime,
           error: `Table "${tableName}" not found in current schema for ${activeDataSource.name}`
         });
-        const newEntry: SqlHistoryEntry = {
-          id: `hist_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+        recordQueryHistory({
           query: trimmed,
-          timestamp: new Date().toLocaleTimeString(),
           executionTimeMs: executionTime,
-          dataSourceName: activeDataSource.name,
           status: 'error',
           error: `Table "${tableName}" not found`,
-        };
-        const updated = [newEntry, ...queryHistory.filter(h => h.query !== trimmed)].slice(0, 100);
-        setQueryHistory(updated);
-        saveSqlHistory(updated);
+        });
         onShowToast?.('Query Error', `Table "${tableName}" does not exist`, 'error');
         return;
       }
@@ -247,18 +231,12 @@ export const SqlQueryConsole: React.FC<SqlQueryConsoleProps> = ({
       });
 
       // Update history
-      const newEntry: SqlHistoryEntry = {
-        id: `hist_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+      recordQueryHistory({
         query: trimmed,
-        timestamp: new Date().toLocaleTimeString(),
         executionTimeMs: executionTime,
-        dataSourceName: activeDataSource.name,
         status: 'success',
         rowCount: resultRows.length,
-      };
-      const updated = [newEntry, ...queryHistory.filter(h => h.query !== trimmed)].slice(0, 100);
-      setQueryHistory(updated);
-      saveSqlHistory(updated);
+      });
 
       onShowToast?.('Query Completed', `${resultRows.length} rows retrieved in ${executionTime}ms`, 'success');
     }, 180);

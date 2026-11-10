@@ -5,5 +5,4 @@ export * from './projectStore';
 export * from './settingsStore';
 export * from './debuggerStore';
 export * from './notificationStore';
-export * from './problemsStore';
 export * from './pluginStore';

@@ -130,15 +130,20 @@ const TerminalPaneView: React.FC<PaneViewProps> = ({
     fitAddonRef.current = fitAddon;
     searchAddonRef.current = searchAddon;
 
-    setTimeout(() => {
+    let fitTimeout: any = null;
+    let spawnTimeout: any = null;
+
+    fitTimeout = setTimeout(() => {
       try {
         fitAddon.fit();
       } catch (e) {}
     }, 60);
 
     const isTauri = typeof window !== 'undefined' && ('__TAURI_INTERNALS__' in window || '__TAURI__' in window);
+    let isMounted = true;
     let unlistenData: (() => void) | undefined;
     let unlistenExit: (() => void) | undefined;
+    let onDataDisposable: { dispose: () => void } | undefined;
 
     const startSession = async () => {
       let isSpawned = false;
@@ -149,20 +154,30 @@ const TerminalPaneView: React.FC<PaneViewProps> = ({
         const rows = term.rows || 24;
 
         // 1. Listen for events BEFORE spawn so initial prompt isn't dropped
-        unlistenData = await listen<{ session_id: string; data: string }>('terminal-data', (event) => {
+        const dataListener = await listen<{ session_id: string; data: string }>('terminal-data', (event) => {
           if (event.payload.session_id === pane.sessionId) {
             term.write(event.payload.data);
           }
         });
+        if (!isMounted) {
+          dataListener();
+          return;
+        }
+        unlistenData = dataListener;
 
-        unlistenExit = await listen<{ session_id: string }>('terminal-exit', (event) => {
+        const exitListener = await listen<{ session_id: string }>('terminal-exit', (event) => {
           if (event.payload.session_id === pane.sessionId) {
             term.writeln('\r\n\x1b[33m[Process completed. Press Enter to restart or close tab]\x1b[0m');
           }
         });
+        if (!isMounted) {
+          exitListener();
+          return;
+        }
+        unlistenExit = exitListener;
 
         // 2. Wire up input handler
-        term.onData((data) => {
+        onDataDisposable = term.onData((data) => {
           invoke('terminal_write', { sessionId: pane.sessionId, data }).catch(() => {});
         });
 
@@ -176,9 +191,16 @@ const TerminalPaneView: React.FC<PaneViewProps> = ({
           rows,
         });
 
+        if (!isMounted) {
+          if (isTauri) {
+            invoke('terminal_kill', { sessionId: pane.sessionId }).catch(() => {});
+          }
+          return;
+        }
+
         isSpawned = true;
 
-        setTimeout(() => {
+        spawnTimeout = setTimeout(() => {
           try {
             fitAddon.fit();
             invoke('terminal_resize', {
@@ -191,8 +213,13 @@ const TerminalPaneView: React.FC<PaneViewProps> = ({
         }, 100);
 
       } catch (err) {
+        if (!isMounted) return;
         console.warn(`Real terminal spawn failed (${err}), using interactive fallback:`, err);
         if (!isSpawned) {
+          if (onDataDisposable) {
+            onDataDisposable.dispose();
+            onDataDisposable = undefined;
+          }
           if (pane.shell === 'cmd') {
             term.writeln('Microsoft Windows [Version 10.0.22631.4317]');
             term.writeln('(c) Microsoft Corporation. All rights reserved.\r\n');
@@ -207,7 +234,7 @@ const TerminalPaneView: React.FC<PaneViewProps> = ({
           }
 
           let currentLine = '';
-          term.onData((data) => {
+          onDataDisposable = term.onData((data) => {
             if (data === '\r') {
               term.write('\r\n');
               if (currentLine.trim()) {
@@ -253,7 +280,11 @@ const TerminalPaneView: React.FC<PaneViewProps> = ({
     window.addEventListener('resize', handleResize);
 
     return () => {
+      isMounted = false;
+      if (fitTimeout) clearTimeout(fitTimeout);
+      if (spawnTimeout) clearTimeout(spawnTimeout);
       window.removeEventListener('resize', handleResize);
+      if (onDataDisposable) onDataDisposable.dispose();
       if (unlistenData) unlistenData();
       if (unlistenExit) unlistenExit();
       if (isTauri) {
@@ -265,14 +296,18 @@ const TerminalPaneView: React.FC<PaneViewProps> = ({
 
   // Handle focus and fit
   useEffect(() => {
+    let focusTimer: any = null;
     if (isActive && xtermRef.current) {
-      setTimeout(() => {
+      focusTimer = setTimeout(() => {
         try {
           fitAddonRef.current?.fit();
         } catch (e) {}
         xtermRef.current?.focus();
       }, 50);
     }
+    return () => {
+      if (focusTimer) clearTimeout(focusTimer);
+    };
   }, [isActive]);
 
   // Perform search on trigger change

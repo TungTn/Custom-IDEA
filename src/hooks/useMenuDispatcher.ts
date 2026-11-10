@@ -1047,7 +1047,7 @@ export function useMenuDispatcher({
         handleRun();
         break;
       case 'run.tests':
-        setBottomTab('tests');
+        setBottomTab('run');
         setIsBottomOpen(true);
         handleBuild('build');
         addToast('Run Tests', 'Running project test suite', 'info');

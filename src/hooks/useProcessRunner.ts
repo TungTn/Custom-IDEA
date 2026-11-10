@@ -148,13 +148,14 @@ export function useProcessRunner({
 
   // ─── 3. Listen to live Tauri process stdout/stderr and exit events ───
   useEffect(() => {
+    let isMounted = true;
     let unlistenOutput: (() => void) | undefined;
     let unlistenExit: (() => void) | undefined;
 
     const setupListeners = async () => {
       try {
         if (typeof window !== 'undefined' && ('__TAURI_INTERNALS__' in window || '__TAURI__' in window)) {
-          unlistenOutput = await listen<{ run_id: string; text: string; stream: string; lines?: string[] }>(
+          const outListener = await listen<{ run_id: string; text: string; stream: string; lines?: string[] }>(
             'process-output',
             (event) => {
               const { text, stream, lines } = event.payload;
@@ -180,8 +181,13 @@ export function useProcessRunner({
               }
             }
           );
+          if (!isMounted) {
+            outListener();
+            return;
+          }
+          unlistenOutput = outListener;
 
-          unlistenExit = await listen<{ run_id: string; exit_code: number; success: boolean }>(
+          const exitListener = await listen<{ run_id: string; exit_code: number; success: boolean }>(
             'process-terminated',
             (event) => {
               const { exit_code, success } = event.payload;
@@ -208,6 +214,11 @@ export function useProcessRunner({
               );
             }
           );
+          if (!isMounted) {
+            exitListener();
+            return;
+          }
+          unlistenExit = exitListener;
         }
       } catch (e) {
         console.warn('Tauri event listen not available:', e);
@@ -217,6 +228,7 @@ export function useProcessRunner({
     setupListeners();
 
     return () => {
+      isMounted = false;
       if (logFlushTimeoutRef.current) clearTimeout(logFlushTimeoutRef.current);
       if (unlistenOutput) unlistenOutput();
       if (unlistenExit) unlistenExit();

@@ -1,5 +1,4 @@
 export * from './CmEditor';
-export * from './CmDiffViewer';
 export * from './cm/darculaTheme';
 export * from './cm/intellijKeymap';
 export * from './cm/lspExtension';

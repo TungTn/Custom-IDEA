@@ -247,6 +247,11 @@ class LspService {
     if (lang === 'plaintext') return;
 
     const uri = pathToUri(filePath);
+    const pendingTimer = this.changeTimers.get(uri);
+    if (pendingTimer) {
+      clearTimeout(pendingTimer);
+      this.changeTimers.delete(uri);
+    }
     this.openedDocs.delete(uri);
 
     try {

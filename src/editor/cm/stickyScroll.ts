@@ -5,15 +5,29 @@ export interface StickyScope {
   signature: string;
 }
 
+export interface DocLineAccessor {
+  line: (n: number) => { text: string };
+  lines: number;
+}
+
 /**
  * Extracts the enclosing class/function/method scopes for the line at the top of the viewport.
  * Traverses upwards tracking curly braces to determine which blocks wrap the given line.
  */
-export function getEnclosingScopes(docText: string, topLine: number): StickyScope[] {
+export function getEnclosingScopes(doc: DocLineAccessor | string, topLine: number): StickyScope[] {
   if (topLine <= 2) return [];
 
-  const lines = docText.split('\n');
-  if (topLine > lines.length) return [];
+  const isDocAccessor = typeof doc !== 'string' && typeof (doc as any).line === 'function';
+  const totalLines = isDocAccessor ? (doc as DocLineAccessor).lines : (doc as string).split('\n').length;
+  if (topLine > totalLines) return [];
+
+  const stringLines = isDocAccessor ? null : (doc as string).split('\n');
+  const getLineText = (lineNum1: number): string => {
+    if (isDocAccessor) {
+      return (doc as DocLineAccessor).line(lineNum1).text;
+    }
+    return stringLines![lineNum1 - 1] || '';
+  };
 
   // Patterns for scopes across TS/JS, Java, Rust, Go, Python, C#
   const classRegex = /^\s*(?:export\s+)?(?:default\s+)?(?:abstract\s+)?(?:public|private|protected)?\s*(?:class|struct|interface|trait|enum|impl|record)\s+([A-Za-z0-9_]+)/;
@@ -23,10 +37,11 @@ export function getEnclosingScopes(docText: string, topLine: number): StickyScop
 
   const scopes: StickyScope[] = [];
   let braceBalance = 0;
+  const scanLimit = Math.max(1, topLine - 500);
 
-  // Scan backwards from the line just above topLine towards the top
-  for (let i = topLine - 1; i >= 0; i--) {
-    const rawLine = lines[i];
+  // Scan backwards from the line just above topLine towards the top (bounded to 500 lines)
+  for (let i = topLine - 1; i >= scanLimit; i--) {
+    const rawLine = getLineText(i);
     const trimmed = rawLine.trim();
 
     // Skip empty lines and comments
@@ -73,7 +88,7 @@ export function getEnclosingScopes(docText: string, topLine: number): StickyScop
 
       if (kind && name) {
         scopes.unshift({
-          line: i + 1,
+          line: i,
           kind,
           text: name,
           signature: name.length > 50 ? name.slice(0, 48) + '...' : name,

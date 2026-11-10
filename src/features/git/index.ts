@@ -1,4 +1,3 @@
-export * from './GitBranchesModal';
 export * from './GitResetModal';
 export * from './GitToolWindow';
 export * from './InteractiveRebaseModal';

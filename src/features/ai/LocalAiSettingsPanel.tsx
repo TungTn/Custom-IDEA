@@ -4,6 +4,7 @@ import { Sparkles, CheckCircle2, AlertCircle, RefreshCw, Cpu, Server, Sliders, Z
 
 export const LocalAiSettingsPanel: React.FC = () => {
   const [config, setConfig] = useState<LocalAiConfig>(() => localAiService.getConfig());
+  const [isReady, setIsReady] = useState(false);
   const [isTesting, setIsTesting] = useState(false);
   const [testResult, setTestResult] = useState<{
     success: boolean;
@@ -13,8 +14,23 @@ export const LocalAiSettingsPanel: React.FC = () => {
   } | null>(null);
 
   useEffect(() => {
-    localAiService.updateConfig(config);
-  }, [config]);
+    let mounted = true;
+    localAiService.initKey().then(() => {
+      if (mounted) {
+        setConfig(localAiService.getConfig());
+        setIsReady(true);
+      }
+    });
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (isReady) {
+      localAiService.updateConfig(config);
+    }
+  }, [config, isReady]);
 
   const handleTestConnection = async () => {
     setIsTesting(true);

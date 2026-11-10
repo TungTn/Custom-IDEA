@@ -14,6 +14,7 @@ pub mod window;
 pub mod commands;
 pub mod updater;
 pub mod profiler;
+pub mod secrets;
 
 pub fn cleanup_ide_subsystems() {
   let _ = process::stop_all_processes();

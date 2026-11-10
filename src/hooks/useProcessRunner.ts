@@ -668,7 +668,16 @@ export function useProcessRunner({
             args.push('-o');
           }
         }
-        const envVars = isMaven ? getMavenRunnerEnv() : undefined;
+        const envVars = isMaven ? getMavenRunnerEnv() : {};
+        if (command.includes('sonar') || args.some(a => a.includes('sonar'))) {
+          try {
+            const sonarToken = sessionStorage.getItem('SONAR_TOKEN');
+            if (sonarToken) {
+              envVars['SONAR_TOKEN'] = sonarToken;
+              sessionStorage.removeItem('SONAR_TOKEN');
+            }
+          } catch {}
+        }
 
         invoke<{ stdout: string; stderr: string; exit_code: number }>('execute_build_command', {
           command: cmd,

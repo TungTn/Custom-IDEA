@@ -13,6 +13,7 @@ import {
   checkSonarServer, 
   searchSonarProjects 
 } from '../../sonar/sonarService';
+import { getSecret } from '../../../services/secretService';
 
 export const ToolsPanel: React.FC<SettingPanelProps> = ({
   selectedId,
@@ -50,9 +51,10 @@ export const ToolsPanel: React.FC<SettingPanelProps> = ({
     const isTauri = typeof window !== 'undefined' && ('__TAURI_INTERNALS__' in window || '__TAURI__' in window);
     if (isTauri) {
       try {
+        const effectiveToken = taskToken.trim() || (await getSecret('github', 'token')) || undefined;
         const issues = await invoke<any[]>('fetch_github_issues', {
           repo: taskRepo,
-          token: taskToken.trim() || undefined,
+          token: effectiveToken,
         });
         setTaskIssues(issues || []);
         onShowToast?.('Tasks Synchronized', `Fetched ${issues?.length || 0} open issues from ${taskRepo}`, 'success');

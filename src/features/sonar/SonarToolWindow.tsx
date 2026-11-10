@@ -36,6 +36,7 @@ import { OpenTab } from '../../types';
 import { 
   getSavedSonarConfig, 
   saveSonarConfig, 
+  getSonarTokenAsync,
   checkSonarServer, 
   fetchSonarQualityGate, 
   fetchSonarIssues, 
@@ -582,6 +583,15 @@ export const SonarToolWindow: React.FC<SonarToolWindowProps> = ({
   const [serverChecking, setServerChecking] = useState(false);
   const [serverOnline, setServerOnline] = useState<boolean | null>(null);
   const [serverVersion, setServerVersion] = useState<string>('');
+
+  // Hydrate Sonar token securely from OS Keyring on mount
+  useEffect(() => {
+    getSonarTokenAsync().then((token) => {
+      if (token) {
+        setSonarConfig((prev) => ({ ...prev, token }));
+      }
+    });
+  }, []);
 
   // Auto-analyze active file on the fly
   useEffect(() => {
@@ -1140,7 +1150,12 @@ export const SonarToolWindow: React.FC<SonarToolWindowProps> = ({
           {/* Optional Maven goal */}
           {onExecuteMavenGoal && (
             <button
-              onClick={() => onExecuteMavenGoal(buildMavenSonarCommand(sonarConfig))}
+              onClick={() => {
+                if (sonarConfig.token) {
+                  try { sessionStorage.setItem('SONAR_TOKEN', sonarConfig.token); } catch {}
+                }
+                onExecuteMavenGoal(buildMavenSonarCommand(sonarConfig));
+              }}
               className="px-2 py-0.5 rounded bg-[#4B9FD5]/15 hover:bg-[#4B9FD5]/25 text-[#4B9FD5] text-[10px] font-medium flex items-center gap-1 transition-colors cursor-pointer ml-1"
               title={`Run '${buildMavenSonarCommand(sonarConfig)}'`}
             >

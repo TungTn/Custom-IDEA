@@ -1,3 +1,5 @@
+import { setSecret, getSecret, deleteSecret } from '../../services/secretService';
+
 export interface LocalAiConfig {
   endpoint: string;
   model: string;
@@ -26,24 +28,83 @@ export class LocalAiService {
     return { ...this.config };
   }
 
+  private isKeyHydrated = false;
+
+  public async initKey(): Promise<string> {
+    if (this.isKeyHydrated) return this.config.apiKey || '';
+    try {
+      const key = await getSecret('local_ai', 'api_key');
+      if (key) {
+        this.config.apiKey = key;
+      }
+      this.isKeyHydrated = true;
+    } catch {}
+    return this.config.apiKey || '';
+  }
+
   public updateConfig(newConfig: Partial<LocalAiConfig>) {
+    const oldApiKey = this.config.apiKey;
     this.config = { ...this.config, ...newConfig };
-    this.saveConfig();
+
+    // Only update keyring if apiKey was explicitly provided in newConfig
+    if (newConfig.apiKey !== undefined) {
+      if (newConfig.apiKey.trim()) {
+        this.config.apiKey = newConfig.apiKey.trim();
+        setSecret('local_ai', 'api_key', this.config.apiKey).catch((e) =>
+          console.warn('Failed to save AI api_key to keyring:', e)
+        );
+      } else if (this.isKeyHydrated) {
+        this.config.apiKey = '';
+        deleteSecret('local_ai', 'api_key').catch(() => {});
+      }
+    } else {
+      this.config.apiKey = oldApiKey;
+    }
+
+    try {
+      const sanitized = { ...this.config, apiKey: '' };
+      localStorage.setItem('local_ai_config', JSON.stringify(sanitized));
+    } catch {}
   }
 
   private loadConfig(): LocalAiConfig {
     try {
       const saved = localStorage.getItem('local_ai_config');
       if (saved) {
-        return { ...DEFAULT_CONFIG, ...JSON.parse(saved) };
+        const parsed = JSON.parse(saved);
+        if (parsed.apiKey) {
+          setSecret('local_ai', 'api_key', parsed.apiKey).catch(() => {});
+          const clean = { ...parsed, apiKey: '' };
+          localStorage.setItem('local_ai_config', JSON.stringify(clean));
+          return { ...DEFAULT_CONFIG, ...parsed };
+        }
+        getSecret('local_ai', 'api_key').then((key) => {
+          if (key) {
+            this.config.apiKey = key;
+            this.isKeyHydrated = true;
+          }
+        }).catch(() => {});
+        return { ...DEFAULT_CONFIG, ...parsed, apiKey: '' };
       }
     } catch {}
+    getSecret('local_ai', 'api_key').then((key) => {
+      if (key) {
+        this.config.apiKey = key;
+        this.isKeyHydrated = true;
+      }
+    }).catch(() => {});
     return DEFAULT_CONFIG;
   }
 
   private saveConfig() {
+    if (this.config.apiKey) {
+      setSecret('local_ai', 'api_key', this.config.apiKey).catch((e) =>
+        console.warn('Failed to save AI api_key to keyring:', e)
+      );
+    }
     try {
-      localStorage.setItem('local_ai_config', JSON.stringify(this.config));
+      const sanitized = { ...this.config, apiKey: '' };
+      localStorage.setItem('local_ai_config', JSON.stringify(sanitized));
     } catch {}
   }
 

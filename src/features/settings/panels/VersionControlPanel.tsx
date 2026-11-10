@@ -3,6 +3,7 @@ import { RefreshCw, CheckCircle2, AlertTriangle, Check, Plus, Trash2, Link, Laye
 import { invoke } from '@tauri-apps/api/core';
 import { SettingPanelProps } from './types';
 import { GitLabAccount } from '../../../types/gitlab';
+import { setSecret, deleteSecret } from '../../../services/secretService';
 import {
   getGitLabAccounts,
   migrateLegacyGitLabTokens,
@@ -51,6 +52,15 @@ export const VersionControlPanel: React.FC<SettingPanelProps> = ({
         if (active) setGitlabAccounts(updated);
       })
       .catch(() => {});
+
+    // Migrate legacy plaintext GitHub token if found in localStorage
+    const legacyGh = localStorage.getItem('intellij_github_user');
+    if (legacyGh && (legacyGh.startsWith('ghp_') || legacyGh.startsWith('github_pat_') || legacyGh.startsWith('gho_') || legacyGh.length >= 30)) {
+      setSecret('github', 'token', legacyGh).catch(() => {});
+      localStorage.setItem('intellij_github_user', 'GitHub User');
+      setFormSettings(prev => ({ ...prev }));
+    }
+
     return () => {
       active = false;
     };
@@ -271,21 +281,42 @@ export const VersionControlPanel: React.FC<SettingPanelProps> = ({
                     </div>
                     <div>
                       <div className="font-semibold text-white">{localStorage.getItem('intellij_github_user')}</div>
-                      <div className="text-[11px] text-[#868A91]">OAuth Token (Authenticated)</div>
+                      <div className="text-[11px] text-[#868A91]">Keyring Authenticated</div>
                     </div>
                   </div>
-                  <span className="text-[#59A869] text-xs flex items-center gap-1"><Check size={13} /> Active</span>
+                  <div className="flex items-center gap-3">
+                    <span className="text-[#59A869] text-xs flex items-center gap-1"><Check size={13} /> Active</span>
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        await deleteSecret('github', 'token').catch(() => {});
+                        localStorage.removeItem('intellij_github_user');
+                        setFormSettings(prev => ({ ...prev }));
+                        onShowToast?.('GitHub Disconnected', 'Đã ngắt kết nối GitHub và thu hồi khóa xác thực', 'info');
+                      }}
+                      className="text-xs text-[#868A91] hover:text-[#E06C75] px-2 py-0.5 rounded border border-[#393B40] hover:border-[#E06C75]/40 transition-colors"
+                    >
+                      Disconnect
+                    </button>
+                  </div>
                 </div>
               ) : (
                 <div className="flex items-center justify-between py-1">
                   <div className="text-xs text-[#868A91]">No GitHub accounts added yet.</div>
                   <button
                     type="button"
-                    onClick={() => {
-                      const u = prompt('Enter your GitHub username or token:');
+                    onClick={async () => {
+                      const u = prompt('Enter your GitHub Personal Access Token or username:');
                       if (u && u.trim()) {
-                        localStorage.setItem('intellij_github_user', u.trim());
+                        const trimmed = u.trim();
+                        if (trimmed.startsWith('ghp_') || trimmed.startsWith('github_pat_') || trimmed.startsWith('gho_') || trimmed.length >= 30) {
+                          await setSecret('github', 'token', trimmed).catch(() => {});
+                          localStorage.setItem('intellij_github_user', 'GitHub User');
+                        } else {
+                          localStorage.setItem('intellij_github_user', trimmed);
+                        }
                         setFormSettings(prev => ({ ...prev }));
+                        onShowToast?.('GitHub Configured', 'Đã lưu thông tin GitHub', 'success');
                       }
                     }}
                     className="px-2.5 py-1 text-xs bg-[#3574F0] hover:bg-[#3062D4] text-white rounded transition-colors"

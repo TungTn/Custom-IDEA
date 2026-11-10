@@ -11,6 +11,105 @@ interface EvaluateExpressionModalProps {
   onShowToast?: (title: string, message: string, type?: 'info' | 'success' | 'warning' | 'error') => void;
 }
 
+const DANGEROUS_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
+
+function evaluateAtom(atomStr: string, context: Record<string, any>): any {
+  const trimmed = atomStr.trim();
+  if (!trimmed) return undefined;
+
+  if (trimmed === 'true') return true;
+  if (trimmed === 'false') return false;
+  if (trimmed === 'null') return null;
+  if (trimmed === 'undefined') return undefined;
+  if (!isNaN(Number(trimmed)) && !trimmed.startsWith('0x')) return Number(trimmed);
+  if ((trimmed.startsWith('"') && trimmed.endsWith('"')) || (trimmed.startsWith("'") && trimmed.endsWith("'"))) {
+    return trimmed.slice(1, -1);
+  }
+
+  if (DANGEROUS_KEYS.has(trimmed)) {
+    throw new Error(`Access to restricted property '${trimmed}' is prohibited`);
+  }
+
+  if (Object.prototype.hasOwnProperty.call(context, trimmed)) {
+    return context[trimmed];
+  }
+
+  const parts = trimmed.match(/[^.\[\]"']+|\[\d+\]/g);
+  if (!parts || parts.length === 0) {
+    throw new Error(`Unsupported expression syntax: '${trimmed}'`);
+  }
+
+  let current: any = context;
+  for (let i = 0; i < parts.length; i++) {
+    const rawPart = parts[i];
+    const key = rawPart.startsWith('[') && rawPart.endsWith(']') ? rawPart.slice(1, -1) : rawPart;
+    if (DANGEROUS_KEYS.has(key)) {
+      throw new Error(`Access to restricted property '${key}' is prohibited`);
+    }
+    if (i === 0) {
+      if (!Object.prototype.hasOwnProperty.call(current, key)) {
+        throw new Error(`Variable '${key}' is not defined in current scope`);
+      }
+      current = current[key];
+    } else {
+      if (current == null) {
+        throw new Error(`Cannot read property '${key}' of ${current}`);
+      }
+      current = current[key];
+    }
+  }
+  return current;
+}
+
+function safeEvaluateExpression(expr: string, context: Record<string, any>): any {
+  const trimmed = expr.trim();
+  if (!trimmed) return undefined;
+
+  // Comparison operators
+  const COMPARISON_OPS = ['===', '!==', '==', '!=', '<=', '>=', '<', '>'];
+  for (const op of COMPARISON_OPS) {
+    const idx = trimmed.indexOf(op);
+    if (idx > 0) {
+      const left = trimmed.slice(0, idx).trim();
+      const right = trimmed.slice(idx + op.length).trim();
+      const lVal = evaluateAtom(left, context);
+      const rVal = evaluateAtom(right, context);
+      switch (op) {
+        case '===': return lVal === rVal;
+        case '!==': return lVal !== rVal;
+        case '==': return lVal == rVal;
+        case '!=': return lVal != rVal;
+        case '<=': return lVal <= rVal;
+        case '>=': return lVal >= rVal;
+        case '<': return lVal < rVal;
+        case '>': return lVal > rVal;
+      }
+    }
+  }
+
+  // Arithmetic binary operators (+, -, *, /)
+  const ARITH_OPS = ['+', '-', '*', '/'];
+  for (const op of ARITH_OPS) {
+    const idx = trimmed.lastIndexOf(op);
+    if (idx > 0 && idx < trimmed.length - 1) {
+      const left = trimmed.slice(0, idx).trim();
+      const right = trimmed.slice(idx + 1).trim();
+      if (left && right) {
+        const lVal = evaluateAtom(left, context);
+        const rVal = evaluateAtom(right, context);
+        switch (op) {
+          case '+': return lVal + rVal;
+          case '-': return Number(lVal) - Number(rVal);
+          case '*': return Number(lVal) * Number(rVal);
+          case '/': return Number(lVal) / Number(rVal);
+        }
+      }
+    }
+  }
+
+  return evaluateAtom(trimmed, context);
+}
+
 export const EvaluateExpressionModal: React.FC<EvaluateExpressionModalProps> = ({
   isOpen,
   onClose,
@@ -69,9 +168,10 @@ export const EvaluateExpressionModal: React.FC<EvaluateExpressionModalProps> = (
     }
 
     try {
-      // Build evaluation context from variables
-      const contextObj: Record<string, any> = {};
+      // Build evaluation context from variables using a null-prototype map
+      const contextObj: Record<string, any> = Object.create(null);
       variables.forEach(v => {
+        if (!v || !v.name || DANGEROUS_KEYS.has(v.name)) return;
         try {
           if (v.type === 'number') contextObj[v.name] = Number(v.value);
           else if (v.type === 'boolean') contextObj[v.name] = v.value === 'true';
@@ -90,19 +190,12 @@ export const EvaluateExpressionModal: React.FC<EvaluateExpressionModalProps> = (
         }
       });
 
-      // Safely evaluate using Function constructor with scope keys
-      const scopeKeys = Object.keys(contextObj);
-      const scopeValues = Object.values(contextObj);
-      
       let rawResult;
       try {
-        const evalFn = new Function(...scopeKeys, `return (${expr});`);
-        rawResult = evalFn(...scopeValues);
+        rawResult = safeEvaluateExpression(expr, contextObj);
       } catch (err: any) {
-        // Fallback or specific evaluation
-        rawResult = `Error: ${err.message || String(err)}`;
         setEvaluationResult({
-          value: String(rawResult),
+          value: `Error: ${err.message || String(err)}`,
           type: 'error',
           isError: true,
         });

@@ -1,4 +1,5 @@
 import { invoke } from '@tauri-apps/api/core';
+import { setSecret, getSecret, deleteSecret } from '../../services/secretService';
 
 export interface SonarServerConfig {
   serverUrl: string;
@@ -56,28 +57,74 @@ const STORAGE_KEY = 'intellij_sonarqube_config';
 const CONNECTIONS_STORAGE_KEY = 'intellij_sonarqube_connections';
 const BINDING_STORAGE_KEY = 'intellij_sonarqube_binding';
 
+export function validateSonarUrl(serverUrl: string, hasToken: boolean): void {
+  const trimmed = serverUrl.trim();
+  if (!trimmed) return;
+  try {
+    const parsed = new URL(trimmed);
+    if (parsed.protocol === 'http:') {
+      const hostname = parsed.hostname.toLowerCase();
+      const isLocal =
+        hostname === 'localhost' ||
+        hostname === '127.0.0.1' ||
+        hostname === '::1' ||
+        hostname === '[::1]';
+      if (hasToken && !isLocal) {
+        throw new Error(
+          'Sending Sonar authentication credentials over insecure cleartext HTTP is prohibited. Please use HTTPS or localhost loopback.'
+        );
+      }
+    } else if (parsed.protocol !== 'https:') {
+      throw new Error(`Unsupported protocol '${parsed.protocol}'. Only HTTP (localhost) and HTTPS are supported.`);
+    }
+  } catch (err: any) {
+    if (err.message && err.message.includes('prohibited')) throw err;
+    throw new Error(`Invalid Sonar server URL: ${err.message || String(err)}`);
+  }
+}
+
 export const getSavedSonarConnections = (): SonarConnection[] => {
   try {
     const raw = localStorage.getItem(CONNECTIONS_STORAGE_KEY);
-    if (raw) return JSON.parse(raw);
+    if (raw) {
+      const parsed: SonarConnection[] = JSON.parse(raw);
+      let needsResave = false;
+      parsed.forEach((c) => {
+        if (c.token) {
+          setSecret('sonar', c.id, c.token).catch(() => {});
+          c.token = '';
+          needsResave = true;
+        }
+      });
+      if (needsResave) {
+        localStorage.setItem(CONNECTIONS_STORAGE_KEY, JSON.stringify(parsed));
+      }
+      return parsed;
+    }
   } catch (e) {
     console.error('Failed to read Sonar connections:', e);
   }
-  // Default connection derived from legacy config or standard fallback
   const legacy = getSavedSonarConfig();
   return [
     {
       id: 'conn-sonar-1',
       name: 'Sonar',
       serverUrl: legacy.serverUrl || 'https://sonar.example.com',
-      token: legacy.token || '',
+      token: '',
     },
   ];
 };
 
 export const saveSonarConnections = (conns: SonarConnection[]) => {
+  conns.forEach((c) => {
+    validateSonarUrl(c.serverUrl, Boolean(c.token));
+    if (c.token) {
+      setSecret('sonar', c.id, c.token).catch((e) => console.warn('Failed to save Sonar token to keyring:', e));
+    }
+  });
   try {
-    localStorage.setItem(CONNECTIONS_STORAGE_KEY, JSON.stringify(conns));
+    const sanitized = conns.map((c) => ({ ...c, token: '' }));
+    localStorage.setItem(CONNECTIONS_STORAGE_KEY, JSON.stringify(sanitized));
   } catch (e) {
     console.error('Failed to save Sonar connections:', e);
   }
@@ -103,14 +150,13 @@ export const getSavedSonarBinding = (): SonarProjectBinding => {
 export const saveSonarBinding = (binding: SonarProjectBinding) => {
   try {
     localStorage.setItem(BINDING_STORAGE_KEY, JSON.stringify(binding));
-    // Also sync to legacy config so existing scanner calls continue to work
     const conns = getSavedSonarConnections();
     const activeConn = conns.find((c) => c.id === binding.connectionId) || conns[0];
     if (activeConn) {
+      // Update serverUrl and projectKey without touching keyring token
       saveSonarConfig({
         serverUrl: activeConn.serverUrl,
         projectKey: binding.projectKey,
-        token: activeConn.token,
       });
     }
   } catch (e) {
@@ -121,7 +167,14 @@ export const saveSonarBinding = (binding: SonarProjectBinding) => {
 export const getSavedSonarConfig = (): SonarServerConfig => {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
-    if (raw) return JSON.parse(raw);
+    if (raw) {
+      const parsed: SonarServerConfig = JSON.parse(raw);
+      if (parsed.token) {
+        setSecret('sonar', 'default', parsed.token).catch(() => {});
+        localStorage.setItem(STORAGE_KEY, JSON.stringify({ ...parsed, token: '' }));
+      }
+      return parsed;
+    }
   } catch (e) {
     console.error('Failed to read SonarQube config:', e);
   }
@@ -132,12 +185,29 @@ export const getSavedSonarConfig = (): SonarServerConfig => {
   };
 };
 
-export const saveSonarConfig = (cfg: SonarServerConfig) => {
+export const saveSonarConfig = (cfg: Partial<SonarServerConfig> & { serverUrl?: string; projectKey?: string }) => {
+  if (cfg.serverUrl) {
+    validateSonarUrl(cfg.serverUrl, Boolean(cfg.token));
+  }
+  if (cfg.token !== undefined) {
+    if (cfg.token) {
+      setSecret('sonar', 'default', cfg.token).catch((e) => console.warn('Failed to save Sonar token to keyring:', e));
+    } else {
+      deleteSecret('sonar', 'default').catch(() => {});
+    }
+  }
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(cfg));
+    const existing = getSavedSonarConfig();
+    const merged = { ...existing, ...cfg, token: '' };
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(merged));
   } catch (e) {
     console.error('Failed to save SonarQube config:', e);
   }
+};
+
+export const getSonarTokenAsync = async (connectionId: string = 'default'): Promise<string> => {
+  const token = await getSecret('sonar', connectionId);
+  return token || '';
 };
 
 /**
@@ -190,6 +260,7 @@ export async function fetchSonarQualityGate(
   projectKey: string,
   token?: string
 ): Promise<SonarQualityGateStatus> {
+  validateSonarUrl(serverUrl, Boolean(token));
   const url = `${serverUrl.replace(/\/+$/, '')}/api/qualitygates/project_status?projectKey=${encodeURIComponent(projectKey)}`;
   const headers: Record<string, string> = {};
   if (token) {
@@ -215,6 +286,7 @@ export async function fetchSonarIssues(
   projectKey: string,
   token?: string
 ): Promise<SonarRemoteIssue[]> {
+  validateSonarUrl(serverUrl, Boolean(token));
   const url = `${serverUrl.replace(/\/+$/, '')}/api/issues/search?componentKeys=${encodeURIComponent(projectKey)}&resolved=false&ps=100`;
   const headers: Record<string, string> = {};
   if (token) {
@@ -238,6 +310,7 @@ export async function searchSonarProjects(
   token?: string,
   query?: string
 ): Promise<Array<{ key: string; name: string }>> {
+  validateSonarUrl(serverUrl, Boolean(token));
   const q = query ? `&q=${encodeURIComponent(query)}` : '';
   const url = `${serverUrl.replace(/\/+$/, '')}/api/components/search?qualifiers=TRK${q}&ps=50`;
   const headers: Record<string, string> = {};
@@ -257,12 +330,9 @@ export async function searchSonarProjects(
 }
 
 /**
- * Builds the standard Maven CLI command to run SonarScanner
+ * Builds the display-safe Maven CLI command to run SonarScanner (without exposing secrets).
+ * The authentication token is passed via the SONAR_TOKEN environment variable.
  */
 export function buildMavenSonarCommand(config: SonarServerConfig): string {
-  const base = `mvn.cmd sonar:sonar -Dsonar.host.url=${config.serverUrl} -Dsonar.projectKey=${config.projectKey}`;
-  if (config.token) {
-    return `${base} -Dsonar.login=${config.token}`;
-  }
-  return base;
+  return `mvn.cmd sonar:sonar -Dsonar.host.url=${config.serverUrl} -Dsonar.projectKey=${config.projectKey}`;
 }

@@ -186,6 +186,11 @@ pub fn get_ipc_handler() -> impl Fn(tauri::ipc::Invoke<tauri::Wry>) -> bool + Se
     crate::profiler::get_process_metrics,
     crate::profiler::list_running_java_processes,
     crate::profiler::trigger_jvm_gc,
-    crate::profiler::trigger_jvm_heap_dump
+    crate::profiler::trigger_jvm_heap_dump,
+
+    // ─── 15. OS Keyring Secret Storage ───
+    crate::secrets::app_secret_set,
+    crate::secrets::app_secret_get,
+    crate::secrets::app_secret_delete
   ]
 }

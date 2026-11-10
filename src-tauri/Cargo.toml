@@ -39,3 +39,4 @@ ts-rs = { workspace = true }
 chrono = { workspace = true }
 reqwest = { workspace = true }
 zip = { workspace = true }
+keyring = { workspace = true }

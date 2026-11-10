@@ -12,6 +12,7 @@ use tauri::Emitter;
 use std::os::windows::process::CommandExt;
 
 static REQUEST_COUNTER: AtomicU64 = AtomicU64::new(1);
+const MAX_LSP_CONTENT_LENGTH: usize = 64 * 1024 * 1024;
 
 struct LspProcess {
   server_name: String,
@@ -23,11 +24,58 @@ struct LspProcess {
 static ACTIVE_SERVERS: LazyLock<Mutex<HashMap<String, LspProcess>>> = LazyLock::new(|| Mutex::new(HashMap::new()));
 
 pub fn stop_all_lsp_servers() {
-  if let Ok(mut map) = ACTIVE_SERVERS.lock() {
-    for (_lang, mut proc) in map.drain() {
-      let _ = proc.child.kill();
+  let drained: Vec<LspProcess> = if let Ok(mut map) = ACTIVE_SERVERS.lock() {
+    map.drain().map(|(_lang, p)| p).collect()
+  } else {
+    Vec::new()
+  };
+  for mut proc in drained {
+    let _ = proc.child.kill();
+    let _ = proc.child.wait();
+  }
+}
+
+fn validate_custom_lsp_path(path: &str) -> Result<String, String> {
+  let trimmed = path.trim();
+  if trimmed.is_empty() {
+    return Err("LSP server path cannot be empty".to_string());
+  }
+  if trimmed.starts_with(r"\\") || trimmed.starts_with("//") {
+    return Err("UNC/network executable paths are not allowed for LSP servers".to_string());
+  }
+  let p = std::path::Path::new(trimmed);
+  if !p.is_file() {
+    return Err(format!("LSP executable does not exist or is not a file: {}", trimmed));
+  }
+  if let Some(ext) = p.extension().and_then(|e| e.to_str()) {
+    let ext_lower = ext.to_ascii_lowercase();
+    if matches!(ext_lower.as_str(), "bat" | "cmd" | "ps1" | "vbs" | "vbe" | "js" | "jse" | "wsf") {
+      return Err(format!("Script extension '.{}' is not allowed for custom LSP path", ext));
     }
   }
+  Ok(trimmed.to_string())
+}
+
+fn path_to_file_uri(project_path: &str) -> String {
+  let abs = std::fs::canonicalize(project_path).unwrap_or_else(|_| std::path::PathBuf::from(project_path));
+  let mut raw = abs.to_string_lossy().replace('\\', "/");
+  if let Some(stripped) = raw.strip_prefix("//?/") {
+    raw = stripped.to_string();
+  }
+  let mut out = if raw.starts_with('/') {
+    String::from("file://")
+  } else {
+    String::from("file:///")
+  };
+  for b in raw.as_bytes() {
+    match b {
+      b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' | b'/' | b':' => {
+        out.push(*b as char);
+      }
+      _ => out.push_str(&format!("%{:02X}", b)),
+    }
+  }
+  out
 }
 
 fn write_jsonrpc_message(writer: &mut dyn Write, msg: &Value) -> Result<(), String> {
@@ -39,30 +87,58 @@ fn write_jsonrpc_message(writer: &mut dyn Write, msg: &Value) -> Result<(), Stri
 }
 
 static CUSTOM_LSP_PATHS: LazyLock<std::sync::RwLock<HashMap<String, String>>> = LazyLock::new(|| std::sync::RwLock::new(HashMap::new()));
+static LSP_START_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
 
 fn find_lsp_executable(lang: &str) -> Option<(String, Vec<String>)> {
   let lang_lower = lang.to_lowercase();
 
   #[cfg(windows)]
-  let check_cmd = |exe: &str| -> bool {
+  let resolve_cmd = |exe: &str| -> Option<String> {
     let mut cmd = Command::new("where.exe");
     cmd.arg(exe);
     cmd.creation_flags(0x08000000);
-    cmd.output().map(|o| o.status.success()).unwrap_or(false)
+    let out = cmd.output().ok()?;
+    if !out.status.success() {
+      return None;
+    }
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let candidates: Vec<&str> = stdout
+      .lines()
+      .map(|l| l.trim())
+      .filter(|l| !l.is_empty() && std::path::Path::new(l).is_file())
+      .collect();
+    candidates
+      .iter()
+      .find(|l| {
+        matches!(
+          std::path::Path::new(l).extension().and_then(|e| e.to_str()).map(|s| s.to_ascii_lowercase()).as_deref(),
+          Some("exe" | "cmd" | "bat" | "com")
+        )
+      })
+      .or_else(|| candidates.first())
+      .map(|s| (*s).to_string())
   };
 
   #[cfg(not(windows))]
-  let check_cmd = |exe: &str| -> bool {
+  let resolve_cmd = |exe: &str| -> Option<String> {
     let mut cmd = Command::new("which");
     cmd.arg(exe);
-    cmd.output().map(|o| o.status.success()).unwrap_or(false)
+    let out = cmd.output().ok()?;
+    if !out.status.success() {
+      return None;
+    }
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    stdout
+      .lines()
+      .map(|l| l.trim())
+      .find(|l| !l.is_empty())
+      .map(|s| s.to_string())
   };
 
   // Check custom configured path first
   if let Ok(guard) = CUSTOM_LSP_PATHS.read() {
     if let Some(custom_path) = guard.get(&lang_lower) {
-      let p = std::path::Path::new(custom_path);
-      if p.exists() || check_cmd(custom_path) {
+      if validate_custom_lsp_path(custom_path).is_ok() {
         let args = match lang_lower.as_str() {
           "typescript" | "javascript" | "ts" | "js" | "tsx" | "jsx" | "python" | "py" => vec!["--stdio".to_string()],
           _ => vec![],
@@ -73,69 +149,32 @@ fn find_lsp_executable(lang: &str) -> Option<(String, Vec<String>)> {
   }
 
   match lang_lower.as_str() {
-    "rust" | "rs" => {
-      if check_cmd("rust-analyzer") {
-        Some(("rust-analyzer".to_string(), vec![]))
-      } else {
-        None
-      }
-    }
-    "typescript" | "javascript" | "ts" | "js" | "tsx" | "jsx" => {
-      if check_cmd("typescript-language-server") {
-        Some(("typescript-language-server".to_string(), vec!["--stdio".to_string()]))
-      } else if check_cmd("vtsls") {
-        Some(("vtsls".to_string(), vec!["--stdio".to_string()]))
-      } else {
-        None
-      }
-    }
-    "python" | "py" => {
-      if check_cmd("pyright-langserver") {
-        Some(("pyright-langserver".to_string(), vec!["--stdio".to_string()]))
-      } else if check_cmd("pylsp") {
-        Some(("pylsp".to_string(), vec![]))
-      } else {
-        None
-      }
-    }
-    "go" => {
-      if check_cmd("gopls") {
-        Some(("gopls".to_string(), vec![]))
-      } else {
-        None
-      }
-    }
-    "c" | "cpp" | "c++" => {
-      if check_cmd("clangd") {
-        Some(("clangd".to_string(), vec![]))
-      } else {
-        None
-      }
-    }
-    "java" => {
-      if check_cmd("jdtls") {
-        Some(("jdtls".to_string(), vec![]))
-      } else {
-        None
-      }
-    }
+    "rust" | "rs" => resolve_cmd("rust-analyzer").map(|p| (p, vec![])),
+    "typescript" | "javascript" | "ts" | "js" | "tsx" | "jsx" => resolve_cmd("typescript-language-server")
+      .or_else(|| resolve_cmd("vtsls"))
+      .map(|p| (p, vec!["--stdio".to_string()])),
+    "python" | "py" => resolve_cmd("pyright-langserver")
+      .map(|p| (p, vec!["--stdio".to_string()]))
+      .or_else(|| resolve_cmd("pylsp").map(|p| (p, vec![]))),
+    "go" => resolve_cmd("gopls").map(|p| (p, vec![])),
+    "c" | "cpp" | "c++" => resolve_cmd("clangd").map(|p| (p, vec![])),
+    "java" => resolve_cmd("jdtls").map(|p| (p, vec![])),
     _ => None,
   }
 }
 
 #[tauri::command]
 pub fn lsp_set_server_path(lang: String, custom_path: Option<String>) -> Result<(), String> {
-  if let Ok(mut guard) = CUSTOM_LSP_PATHS.write() {
-    let lang_lower = lang.to_lowercase();
-    if let Some(p) = custom_path {
-      if p.trim().is_empty() {
-        guard.remove(&lang_lower);
-      } else {
-        guard.insert(lang_lower, p.trim().to_string());
-      }
-    } else {
-      guard.remove(&lang_lower);
-    }
+  let lang_lower = lang.to_lowercase();
+  let validated = match custom_path {
+    Some(ref p) if !p.trim().is_empty() => Some(validate_custom_lsp_path(p)?),
+    _ => None,
+  };
+  let mut guard = CUSTOM_LSP_PATHS.write().map_err(|e| e.to_string())?;
+  if let Some(valid_path) = validated {
+    guard.insert(lang_lower, valid_path);
+  } else {
+    guard.remove(&lang_lower);
   }
   Ok(())
 }
@@ -146,13 +185,24 @@ pub fn lsp_start_server(
   lang: String,
   project_path: String,
 ) -> Result<String, String> {
+  // Serialize concurrent server starts (independent of request/stop locks)
+  let _start_guard = LSP_START_LOCK.lock().map_err(|e| e.to_string())?;
   let lang_key = lang.to_lowercase();
 
-  // If already active, return success
+  if !std::path::Path::new(&project_path).is_dir() {
+    return Err(format!("Project path is not a directory: {}", project_path));
+  }
+
+  // If already active and still running, return success; remove dead exited entries
   {
-    let map = ACTIVE_SERVERS.lock().map_err(|e| e.to_string())?;
-    if let Some(proc) = map.get(&lang_key) {
-      return Ok(format!("Active: {}", proc.server_name));
+    let mut map = ACTIVE_SERVERS.lock().map_err(|e| e.to_string())?;
+    if let Some(proc) = map.get_mut(&lang_key) {
+      if let Ok(None) = proc.child.try_wait() {
+        return Ok(format!("Active: {}", proc.server_name));
+      }
+      if let Some(mut dead) = map.remove(&lang_key) {
+        let _ = dead.child.wait();
+      }
     }
   }
 
@@ -171,8 +221,22 @@ pub fn lsp_start_server(
   cmd.creation_flags(0x08000000);
 
   let mut child = cmd.spawn().map_err(|e| format!("Failed to spawn {}: {}", exe, e))?;
-  let stdin = child.stdin.take().ok_or_else(|| "Failed to open LSP stdin".to_string())?;
-  let stdout = child.stdout.take().ok_or_else(|| "Failed to open LSP stdout".to_string())?;
+  let stdin = match child.stdin.take() {
+    Some(s) => s,
+    None => {
+      let _ = child.kill();
+      let _ = child.wait();
+      return Err("Failed to open LSP stdin".to_string());
+    }
+  };
+  let stdout = match child.stdout.take() {
+    Some(s) => s,
+    None => {
+      let _ = child.kill();
+      let _ = child.wait();
+      return Err("Failed to open LSP stdout".to_string());
+    }
+  };
 
   let writer: Arc<Mutex<Box<dyn Write + Send>>> = Arc::new(Mutex::new(Box::new(stdin)));
   let pending_requests: Arc<Mutex<HashMap<u64, Sender<Result<Value, String>>>>> = Arc::new(Mutex::new(HashMap::new()));
@@ -184,6 +248,14 @@ pub fn lsp_start_server(
   // Background thread parsing JSON-RPC messages from LSP stdout
   std::thread::spawn(move || {
     let mut reader = BufReader::new(stdout);
+    let drain_pending = |msg: &str| {
+      if let Ok(mut map) = pending_clone.lock() {
+        for (_, tx) in map.drain() {
+          let _ = tx.send(Err(msg.to_string()));
+        }
+      }
+    };
+
     loop {
       let mut line = String::new();
       let mut content_length: Option<usize> = None;
@@ -192,7 +264,10 @@ pub fn lsp_start_server(
       loop {
         line.clear();
         match reader.read_line(&mut line) {
-          Ok(0) => return, // EOF
+          Ok(0) | Err(_) => {
+            drain_pending("LSP server disconnected");
+            return;
+          }
           Ok(_) => {
             let trimmed = line.trim();
             if trimmed.is_empty() {
@@ -206,39 +281,44 @@ pub fn lsp_start_server(
               }
             }
           }
-          Err(_) => return,
         }
       }
 
       if let Some(len) = content_length {
+        if len > MAX_LSP_CONTENT_LENGTH {
+          drain_pending("LSP message exceeded maximum size limit");
+          return;
+        }
         let mut body_buf = vec![0u8; len];
-        if reader.read_exact(&mut body_buf).is_ok() {
-          if let Ok(val) = serde_json::from_slice::<Value>(&body_buf) {
-            // Check if this is a response to a pending request
-            if let Some(id_val) = val.get("id") {
-              if let Some(id) = id_val.as_u64() {
-                let mut map = match pending_clone.lock() {
-                  Ok(m) => m,
-                  Err(_) => continue,
-                };
-                if let Some(tx) = map.remove(&id) {
-                  if let Some(err) = val.get("error") {
-                    let _ = tx.send(Err(err.to_string()));
-                  } else {
-                    let res = val.get("result").cloned().unwrap_or(Value::Null);
-                    let _ = tx.send(Ok(res));
-                  }
-                  continue;
+        if reader.read_exact(&mut body_buf).is_err() {
+          drain_pending("LSP stream ended unexpectedly");
+          return;
+        }
+        if let Ok(val) = serde_json::from_slice::<Value>(&body_buf) {
+          // Check if this is a response to a pending request
+          if let Some(id_val) = val.get("id") {
+            if let Some(id) = id_val.as_u64() {
+              let mut map = match pending_clone.lock() {
+                Ok(m) => m,
+                Err(_) => continue,
+              };
+              if let Some(tx) = map.remove(&id) {
+                if let Some(err) = val.get("error") {
+                  let _ = tx.send(Err(err.to_string()));
+                } else {
+                  let res = val.get("result").cloned().unwrap_or(Value::Null);
+                  let _ = tx.send(Ok(res));
                 }
+                continue;
               }
             }
+          }
 
-            // Check if this is a server notification (e.g., publishDiagnostics)
-            if let Some(method) = val.get("method").and_then(|m| m.as_str()) {
-              if method == "textDocument/publishDiagnostics" {
-                if let Some(params) = val.get("params") {
-                  let _ = app_clone.emit("lsp-diagnostics", params);
-                }
+          // Check if this is a server notification (e.g., publishDiagnostics)
+          if let Some(method) = val.get("method").and_then(|m| m.as_str()) {
+            if method == "textDocument/publishDiagnostics" {
+              if let Some(params) = val.get("params") {
+                let _ = app_clone.emit("lsp-diagnostics", params);
               }
             }
           }
@@ -247,20 +327,9 @@ pub fn lsp_start_server(
     }
   });
 
-  // Store active process
-  {
-    let mut map = ACTIVE_SERVERS.lock().map_err(|e| e.to_string())?;
-    map.insert(lang_key.clone(), LspProcess {
-      server_name: server_name.clone(),
-      child,
-      writer: writer.clone(),
-      pending_requests: pending_requests.clone(),
-    });
-  }
-
-  // Send initialize request
+  // Send initialize BEFORE registering in ACTIVE_SERVERS so timeout/failure cleans up cleanly
   let init_id = REQUEST_COUNTER.fetch_add(1, Ordering::SeqCst);
-  let root_uri = format!("file:///{}", project_path.replace('\\', "/"));
+  let root_uri = path_to_file_uri(&project_path);
 
   let init_params = serde_json::json!({
     "processId": std::process::id(),
@@ -299,16 +368,32 @@ pub fn lsp_start_server(
     "params": init_params,
   });
 
-  {
+  let write_init_res = {
     let mut w = writer.lock().map_err(|e| e.to_string())?;
-    write_jsonrpc_message(&mut **w, &init_req)?;
+    write_jsonrpc_message(&mut **w, &init_req)
+  };
+  if let Err(err) = write_init_res {
+    let _ = child.kill();
+    let _ = child.wait();
+    return Err(err);
   }
 
   // Wait briefly for initialize response
   let init_res = match rx.recv_timeout(Duration::from_secs(5)) {
     Ok(Ok(res)) => res,
-    Ok(Err(err)) => return Err(format!("LSP init error: {}", err)),
-    Err(_) => return Err("LSP initialize timed out".to_string()),
+    Ok(Err(err)) => {
+      let _ = child.kill();
+      let _ = child.wait();
+      return Err(format!("LSP init error: {}", err));
+    }
+    Err(_) => {
+      if let Ok(mut pending) = pending_requests.lock() {
+        pending.remove(&init_id);
+      }
+      let _ = child.kill();
+      let _ = child.wait();
+      return Err("LSP initialize timed out".to_string());
+    }
   };
 
   // Send initialized notification
@@ -318,9 +403,32 @@ pub fn lsp_start_server(
     "params": {}
   });
 
-  {
+  let write_notif_res = {
     let mut w = writer.lock().map_err(|e| e.to_string())?;
-    write_jsonrpc_message(&mut **w, &initialized_notif)?;
+    write_jsonrpc_message(&mut **w, &initialized_notif)
+  };
+  if let Err(err) = write_notif_res {
+    let _ = child.kill();
+    let _ = child.wait();
+    return Err(err);
+  }
+
+  // Store active process after successful handshake
+  {
+    let mut map = match ACTIVE_SERVERS.lock() {
+      Ok(m) => m,
+      Err(e) => {
+        let _ = child.kill();
+        let _ = child.wait();
+        return Err(e.to_string());
+      }
+    };
+    map.insert(lang_key, LspProcess {
+      server_name: server_name.clone(),
+      child,
+      writer,
+      pending_requests,
+    });
   }
 
   let name_output = init_res
@@ -360,9 +468,15 @@ pub fn lsp_send_request(
     "params": params,
   });
 
-  {
+  let write_res = {
     let mut w = writer.lock().map_err(|e| e.to_string())?;
-    write_jsonrpc_message(&mut **w, &req)?;
+    write_jsonrpc_message(&mut **w, &req)
+  };
+  if let Err(e) = write_res {
+    if let Ok(mut pending) = pending_requests.lock() {
+      pending.remove(&req_id);
+    }
+    return Err(e);
   }
 
   match rx.recv_timeout(Duration::from_secs(4)) {
@@ -404,8 +518,11 @@ pub fn lsp_send_notification(
 #[tauri::command]
 pub fn lsp_stop_server(lang: String) -> Result<(), String> {
   let lang_key = lang.to_lowercase();
-  let mut map = ACTIVE_SERVERS.lock().map_err(|e| e.to_string())?;
-  if let Some(mut proc) = map.remove(&lang_key) {
+  let removed = {
+    let mut map = ACTIVE_SERVERS.lock().map_err(|e| e.to_string())?;
+    map.remove(&lang_key)
+  };
+  if let Some(mut proc) = removed {
     let _ = proc.child.kill();
     let _ = proc.child.wait();
   }

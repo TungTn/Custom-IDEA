@@ -89,7 +89,6 @@ pub fn get_ipc_handler() -> impl Fn(tauri::ipc::Invoke<tauri::Wry>) -> bool + Se
     process::detect_wsl_distros,
     process::test_remote_ssh_connection,
     process::test_sftp_connection,
-    process::deploy_files_to_server,
     process::fetch_github_issues,
 
     // ─── 7. PTY Terminal Commands (ide-terminal) ───

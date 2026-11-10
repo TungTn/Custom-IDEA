@@ -313,11 +313,13 @@ export function useIdeDebugger({
       addToast('Debugger Started', `DAP session attached (${debugType})`, 'success');
     } catch (err: any) {
       console.warn('Failed to start DAP session:', err);
+      setDebugState('idle');
+      const errMsg = err?.message || String(err);
       setDebugConsoleOutput(prev => [
         ...prev,
-        `[DAP Notice] ${err?.message || String(err)}. Waiting for debug adapter...`,
+        `[DAP Error] ${errMsg}`,
       ]);
-      addToast('Debugger Notice', `Debug session active`, 'info');
+      addToast('Debugger Unavailable', errMsg, 'warning');
     }
   }, [
     setBottomTab,

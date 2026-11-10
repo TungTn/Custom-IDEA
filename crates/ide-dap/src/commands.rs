@@ -12,6 +12,7 @@ use tauri::Emitter;
 use std::os::windows::process::CommandExt;
 
 static DAP_REQUEST_COUNTER: AtomicU64 = AtomicU64::new(1);
+const MAX_DAP_CONTENT_LENGTH: usize = 16 * 1024 * 1024;
 
 struct DapSession {
   child: Child,
@@ -23,11 +24,27 @@ struct DapSession {
 static ACTIVE_DAP_SESSIONS: LazyLock<Mutex<HashMap<String, DapSession>>> = LazyLock::new(|| Mutex::new(HashMap::new()));
 
 pub fn stop_all_dap_sessions() {
-  if let Ok(mut map) = ACTIVE_DAP_SESSIONS.lock() {
-    for (_id, mut sess) in map.drain() {
-      let _ = sess.child.kill();
-    }
+  let drained: Vec<DapSession> = if let Ok(mut map) = ACTIVE_DAP_SESSIONS.lock() {
+    map.drain().map(|(_id, s)| s).collect()
+  } else {
+    Vec::new()
+  };
+  for mut sess in drained {
+    let _ = sess.child.kill();
+    let _ = sess.child.wait();
   }
+}
+
+fn get_dap_session_handles(
+  session_id: &str,
+) -> Result<(Arc<Mutex<Box<dyn Write + Send>>>, Arc<Mutex<HashMap<u64, Sender<Result<Value, String>>>>>, Arc<AtomicU64>), String> {
+  let map = ACTIVE_DAP_SESSIONS.lock().map_err(|e| e.to_string())?;
+  let session = map.get(session_id).ok_or_else(|| "Session not found".to_string())?;
+  Ok((
+    Arc::clone(&session.writer),
+    Arc::clone(&session.pending_requests),
+    Arc::clone(&session.current_thread_id),
+  ))
 }
 
 fn write_dap_message(writer: &mut dyn Write, msg: &Value) -> Result<(), String> {
@@ -59,9 +76,15 @@ fn send_dap_request_internal(
     "arguments": arguments,
   });
 
-  {
+  let write_res = {
     let mut w = writer.lock().map_err(|e| e.to_string())?;
-    write_dap_message(&mut **w, &req)?;
+    write_dap_message(&mut **w, &req)
+  };
+  if let Err(e) = write_res {
+    if let Ok(mut pending) = pending_requests.lock() {
+      pending.remove(&seq);
+    }
+    return Err(e);
   }
 
   match rx.recv_timeout(Duration::from_secs(5)) {
@@ -76,26 +99,28 @@ fn send_dap_request_internal(
   }
 }
 
-fn find_debugger_executable(debug_type: &str) -> (String, Vec<String>) {
+fn find_debugger_executable(debug_type: &str) -> Result<(String, Vec<String>), String> {
   let dt = debug_type.to_lowercase();
   match dt.as_str() {
-    "node" | "javascript" | "typescript" | "js" | "ts" => {
-      ("node".to_string(), vec![])
-    }
-    "python" | "py" => {
-      ("python".to_string(), vec!["-m".to_string(), "debugpy.adapter".to_string()])
-    }
+    "python" | "py" => Ok((
+      "python".to_string(),
+      vec!["-m".to_string(), "debugpy.adapter".to_string()],
+    )),
     "lldb" | "rust" | "cpp" | "c" => {
       #[cfg(windows)]
       {
-        ("lldb-dap.exe".to_string(), vec![])
+        Ok(("lldb-dap.exe".to_string(), vec![]))
       }
       #[cfg(not(windows))]
       {
-        ("lldb-dap".to_string(), vec![])
+        Ok(("lldb-dap".to_string(), vec![]))
       }
     }
-    _ => ("node".to_string(), vec![]),
+    "node" | "javascript" | "typescript" | "js" | "ts" => Err(
+      "JavaScript/TypeScript debugging requires a DAP adapter (js-debug); bare Node REPL is not supported."
+        .to_string(),
+    ),
+    other => Err(format!("Unsupported debug type '{}'", other)),
   }
 }
 
@@ -111,7 +136,10 @@ pub fn dap_start_session(
   let _ = dap_stop(session_id.clone());
 
   let work_dir = cwd.unwrap_or_else(|| ".".to_string());
-  let (exe, dap_args) = find_debugger_executable(&debug_type);
+  if !std::path::Path::new(&work_dir).is_dir() {
+    return Err(format!("Debugger working directory does not exist: {}", work_dir));
+  }
+  let (exe, dap_args) = find_debugger_executable(&debug_type)?;
 
   let mut cmd = Command::new(&exe);
   cmd.args(&dap_args);
@@ -123,16 +151,26 @@ pub fn dap_start_session(
   #[cfg(windows)]
   cmd.creation_flags(0x08000000);
 
-  let mut child = match cmd.spawn() {
-    Ok(c) => c,
-    Err(_) => {
-      // Fallback: Mock DAP responder if binary not locally available, ensuring UI keeps working
-      return Ok(format!("Mock DAP session '{}' initialized", session_id));
+  let mut child = cmd
+    .spawn()
+    .map_err(|e| format!("Failed to spawn DAP adapter '{}': {}", exe, e))?;
+
+  let stdin = match child.stdin.take() {
+    Some(s) => s,
+    None => {
+      let _ = child.kill();
+      let _ = child.wait();
+      return Err("Failed to open DAP stdin".to_string());
     }
   };
-
-  let stdin = child.stdin.take().ok_or_else(|| "Failed to open DAP stdin".to_string())?;
-  let stdout = child.stdout.take().ok_or_else(|| "Failed to open DAP stdout".to_string())?;
+  let stdout = match child.stdout.take() {
+    Some(s) => s,
+    None => {
+      let _ = child.kill();
+      let _ = child.wait();
+      return Err("Failed to open DAP stdout".to_string());
+    }
+  };
 
   let writer: Arc<Mutex<Box<dyn Write + Send>>> = Arc::new(Mutex::new(Box::new(stdin)));
   let pending_requests: Arc<Mutex<HashMap<u64, Sender<Result<Value, String>>>>> = Arc::new(Mutex::new(HashMap::new()));
@@ -153,7 +191,14 @@ pub fn dap_start_session(
       loop {
         line.clear();
         match reader.read_line(&mut line) {
-          Ok(0) => return,
+          Ok(0) | Err(_) => {
+            if let Ok(mut map) = pending_clone.lock() {
+              for (_, tx) in map.drain() {
+                let _ = tx.send(Err("DAP adapter disconnected".to_string()));
+              }
+            }
+            return;
+          }
           Ok(_) => {
             let trimmed = line.trim();
             if trimmed.is_empty() {
@@ -167,14 +212,28 @@ pub fn dap_start_session(
               }
             }
           }
-          Err(_) => return,
         }
       }
 
       if let Some(len) = content_length {
+        if len > MAX_DAP_CONTENT_LENGTH {
+          if let Ok(mut map) = pending_clone.lock() {
+            for (_, tx) in map.drain() {
+              let _ = tx.send(Err("DAP message exceeded maximum size limit".to_string()));
+            }
+          }
+          return;
+        }
         let mut body_buf = vec![0u8; len];
-        if reader.read_exact(&mut body_buf).is_ok() {
-          if let Ok(val) = serde_json::from_slice::<Value>(&body_buf) {
+        if reader.read_exact(&mut body_buf).is_err() {
+          if let Ok(mut map) = pending_clone.lock() {
+            for (_, tx) in map.drain() {
+              let _ = tx.send(Err("DAP adapter stream ended unexpectedly".to_string()));
+            }
+          }
+          return;
+        }
+        if let Ok(val) = serde_json::from_slice::<Value>(&body_buf) {
             let msg_type = val.get("type").and_then(|t| t.as_str()).unwrap_or("");
 
             if msg_type == "response" {
@@ -222,14 +281,13 @@ pub fn dap_start_session(
                 }));
               }
             }
-          }
         }
       }
     }
   });
 
   // Send initialize request
-  let _ = send_dap_request_internal(
+  if let Err(err) = send_dap_request_internal(
     &writer,
     &pending_requests,
     "initialize",
@@ -241,10 +299,14 @@ pub fn dap_start_session(
       "columnsStartAt1": true,
       "pathFormat": "path",
     }),
-  );
+  ) {
+    let _ = child.kill();
+    let _ = child.wait();
+    return Err(format!("DAP initialize failed: {}", err));
+  }
 
   // Send launch request
-  let _ = send_dap_request_internal(
+  if let Err(err) = send_dap_request_internal(
     &writer,
     &pending_requests,
     "launch",
@@ -254,17 +316,27 @@ pub fn dap_start_session(
       "cwd": work_dir,
       "stopOnEntry": false,
     }),
-  );
+  ) {
+    let _ = child.kill();
+    let _ = child.wait();
+    return Err(format!("DAP launch failed: {}", err));
+  }
 
-  // Store active session
-  {
-    let mut map = ACTIVE_DAP_SESSIONS.lock().map_err(|e| e.to_string())?;
-    map.insert(session_id.clone(), DapSession {
-      child,
-      writer,
-      pending_requests,
-      current_thread_id,
-    });
+  // Store active session (kill/wait child if map lock fails)
+  match ACTIVE_DAP_SESSIONS.lock() {
+    Ok(mut map) => {
+      map.insert(session_id.clone(), DapSession {
+        child,
+        writer,
+        pending_requests,
+        current_thread_id,
+      });
+    }
+    Err(e) => {
+      let _ = child.kill();
+      let _ = child.wait();
+      return Err(e.to_string());
+    }
   }
 
   Ok(format!("DAP session '{}' running with {}", session_id, exe))
@@ -276,33 +348,27 @@ pub fn dap_set_breakpoints(
   file_path: String,
   lines: Vec<usize>,
 ) -> Result<Vec<usize>, String> {
-  let map = ACTIVE_DAP_SESSIONS.lock().map_err(|e| e.to_string())?;
-  let session = match map.get(&session_id) {
-    Some(s) => s,
-    None => return Ok(lines), // Fallback
-  };
+  let (writer, pending_requests, _) = get_dap_session_handles(&session_id)?;
 
   let bp_items: Vec<Value> = lines.iter().map(|l| serde_json::json!({ "line": l })).collect();
 
   let res = send_dap_request_internal(
-    &session.writer,
-    &session.pending_requests,
+    &writer,
+    &pending_requests,
     "setBreakpoints",
     serde_json::json!({
       "source": { "path": file_path },
       "breakpoints": bp_items,
     }),
-  );
+  )?;
 
-  if let Ok(val) = res {
-    if let Some(arr) = val.get("breakpoints").and_then(|b| b.as_array()) {
-      let verified: Vec<usize> = arr
-        .iter()
-        .filter_map(|b| b.get("line").and_then(|l| l.as_u64()).map(|l| l as usize))
-        .collect();
-      if !verified.is_empty() {
-        return Ok(verified);
-      }
+  if let Some(arr) = res.get("breakpoints").and_then(|b| b.as_array()) {
+    let verified: Vec<usize> = arr
+      .iter()
+      .filter_map(|b| b.get("line").and_then(|l| l.as_u64()).map(|l| l as usize))
+      .collect();
+    if !verified.is_empty() {
+      return Ok(verified);
     }
   }
 
@@ -311,13 +377,12 @@ pub fn dap_set_breakpoints(
 
 #[tauri::command]
 pub fn dap_continue(session_id: String) -> Result<(), String> {
-  let map = ACTIVE_DAP_SESSIONS.lock().map_err(|e| e.to_string())?;
-  let session = map.get(&session_id).ok_or_else(|| "Session not found".to_string())?;
-  let thread_id = session.current_thread_id.load(Ordering::SeqCst);
+  let (writer, pending_requests, current_thread_id) = get_dap_session_handles(&session_id)?;
+  let thread_id = current_thread_id.load(Ordering::SeqCst);
 
-  let _ = send_dap_request_internal(
-    &session.writer,
-    &session.pending_requests,
+  send_dap_request_internal(
+    &writer,
+    &pending_requests,
     "continue",
     serde_json::json!({ "threadId": thread_id }),
   )?;
@@ -326,13 +391,12 @@ pub fn dap_continue(session_id: String) -> Result<(), String> {
 
 #[tauri::command]
 pub fn dap_step_over(session_id: String) -> Result<(), String> {
-  let map = ACTIVE_DAP_SESSIONS.lock().map_err(|e| e.to_string())?;
-  let session = map.get(&session_id).ok_or_else(|| "Session not found".to_string())?;
-  let thread_id = session.current_thread_id.load(Ordering::SeqCst);
+  let (writer, pending_requests, current_thread_id) = get_dap_session_handles(&session_id)?;
+  let thread_id = current_thread_id.load(Ordering::SeqCst);
 
-  let _ = send_dap_request_internal(
-    &session.writer,
-    &session.pending_requests,
+  send_dap_request_internal(
+    &writer,
+    &pending_requests,
     "next",
     serde_json::json!({ "threadId": thread_id }),
   )?;
@@ -341,13 +405,12 @@ pub fn dap_step_over(session_id: String) -> Result<(), String> {
 
 #[tauri::command]
 pub fn dap_step_into(session_id: String) -> Result<(), String> {
-  let map = ACTIVE_DAP_SESSIONS.lock().map_err(|e| e.to_string())?;
-  let session = map.get(&session_id).ok_or_else(|| "Session not found".to_string())?;
-  let thread_id = session.current_thread_id.load(Ordering::SeqCst);
+  let (writer, pending_requests, current_thread_id) = get_dap_session_handles(&session_id)?;
+  let thread_id = current_thread_id.load(Ordering::SeqCst);
 
-  let _ = send_dap_request_internal(
-    &session.writer,
-    &session.pending_requests,
+  send_dap_request_internal(
+    &writer,
+    &pending_requests,
     "stepIn",
     serde_json::json!({ "threadId": thread_id }),
   )?;
@@ -356,13 +419,12 @@ pub fn dap_step_into(session_id: String) -> Result<(), String> {
 
 #[tauri::command]
 pub fn dap_step_out(session_id: String) -> Result<(), String> {
-  let map = ACTIVE_DAP_SESSIONS.lock().map_err(|e| e.to_string())?;
-  let session = map.get(&session_id).ok_or_else(|| "Session not found".to_string())?;
-  let thread_id = session.current_thread_id.load(Ordering::SeqCst);
+  let (writer, pending_requests, current_thread_id) = get_dap_session_handles(&session_id)?;
+  let thread_id = current_thread_id.load(Ordering::SeqCst);
 
-  let _ = send_dap_request_internal(
-    &session.writer,
-    &session.pending_requests,
+  send_dap_request_internal(
+    &writer,
+    &pending_requests,
     "stepOut",
     serde_json::json!({ "threadId": thread_id }),
   )?;
@@ -371,13 +433,12 @@ pub fn dap_step_out(session_id: String) -> Result<(), String> {
 
 #[tauri::command]
 pub fn dap_pause(session_id: String) -> Result<(), String> {
-  let map = ACTIVE_DAP_SESSIONS.lock().map_err(|e| e.to_string())?;
-  let session = map.get(&session_id).ok_or_else(|| "Session not found".to_string())?;
-  let thread_id = session.current_thread_id.load(Ordering::SeqCst);
+  let (writer, pending_requests, current_thread_id) = get_dap_session_handles(&session_id)?;
+  let thread_id = current_thread_id.load(Ordering::SeqCst);
 
-  let _ = send_dap_request_internal(
-    &session.writer,
-    &session.pending_requests,
+  send_dap_request_internal(
+    &writer,
+    &pending_requests,
     "pause",
     serde_json::json!({ "threadId": thread_id }),
   )?;
@@ -386,14 +447,22 @@ pub fn dap_pause(session_id: String) -> Result<(), String> {
 
 #[tauri::command]
 pub fn dap_stop(session_id: String) -> Result<(), String> {
-  let mut map = ACTIVE_DAP_SESSIONS.lock().map_err(|e| e.to_string())?;
-  if let Some(mut session) = map.remove(&session_id) {
-    let _ = send_dap_request_internal(
-      &session.writer,
-      &session.pending_requests,
-      "disconnect",
-      serde_json::json!({ "terminateDebuggee": true }),
-    );
+  let removed = {
+    let mut map = ACTIVE_DAP_SESSIONS.lock().map_err(|e| e.to_string())?;
+    map.remove(&session_id)
+  };
+  if let Some(mut session) = removed {
+    // Best-effort non-blocking disconnect notification before killing process
+    if let Ok(mut w) = session.writer.lock() {
+      let seq = DAP_REQUEST_COUNTER.fetch_add(1, Ordering::SeqCst);
+      let req = serde_json::json!({
+        "seq": seq,
+        "type": "request",
+        "command": "disconnect",
+        "arguments": { "terminateDebuggee": true },
+      });
+      let _ = write_dap_message(&mut **w, &req);
+    }
     let _ = session.child.kill();
     let _ = session.child.wait();
   }
@@ -402,13 +471,12 @@ pub fn dap_stop(session_id: String) -> Result<(), String> {
 
 #[tauri::command]
 pub fn dap_get_stack_trace(session_id: String) -> Result<Vec<Value>, String> {
-  let map = ACTIVE_DAP_SESSIONS.lock().map_err(|e| e.to_string())?;
-  let session = map.get(&session_id).ok_or_else(|| "Session not found".to_string())?;
-  let thread_id = session.current_thread_id.load(Ordering::SeqCst);
+  let (writer, pending_requests, current_thread_id) = get_dap_session_handles(&session_id)?;
+  let thread_id = current_thread_id.load(Ordering::SeqCst);
 
   let res = send_dap_request_internal(
-    &session.writer,
-    &session.pending_requests,
+    &writer,
+    &pending_requests,
     "stackTrace",
     serde_json::json!({
       "threadId": thread_id,
@@ -426,12 +494,11 @@ pub fn dap_get_stack_trace(session_id: String) -> Result<Vec<Value>, String> {
 
 #[tauri::command]
 pub fn dap_get_scopes(session_id: String, frame_id: usize) -> Result<Vec<Value>, String> {
-  let map = ACTIVE_DAP_SESSIONS.lock().map_err(|e| e.to_string())?;
-  let session = map.get(&session_id).ok_or_else(|| "Session not found".to_string())?;
+  let (writer, pending_requests, _) = get_dap_session_handles(&session_id)?;
 
   let res = send_dap_request_internal(
-    &session.writer,
-    &session.pending_requests,
+    &writer,
+    &pending_requests,
     "scopes",
     serde_json::json!({ "frameId": frame_id }),
   )?;
@@ -445,12 +512,11 @@ pub fn dap_get_scopes(session_id: String, frame_id: usize) -> Result<Vec<Value>,
 
 #[tauri::command]
 pub fn dap_get_variables(session_id: String, variables_reference: usize) -> Result<Vec<Value>, String> {
-  let map = ACTIVE_DAP_SESSIONS.lock().map_err(|e| e.to_string())?;
-  let session = map.get(&session_id).ok_or_else(|| "Session not found".to_string())?;
+  let (writer, pending_requests, _) = get_dap_session_handles(&session_id)?;
 
   let res = send_dap_request_internal(
-    &session.writer,
-    &session.pending_requests,
+    &writer,
+    &pending_requests,
     "variables",
     serde_json::json!({ "variablesReference": variables_reference }),
   )?;
@@ -464,8 +530,7 @@ pub fn dap_get_variables(session_id: String, variables_reference: usize) -> Resu
 
 #[tauri::command]
 pub fn dap_evaluate(session_id: String, expression: String, frame_id: Option<usize>) -> Result<Value, String> {
-  let map = ACTIVE_DAP_SESSIONS.lock().map_err(|e| e.to_string())?;
-  let session = map.get(&session_id).ok_or_else(|| "Session not found".to_string())?;
+  let (writer, pending_requests, _) = get_dap_session_handles(&session_id)?;
 
   let mut args = serde_json::json!({
     "expression": expression,
@@ -476,8 +541,8 @@ pub fn dap_evaluate(session_id: String, expression: String, frame_id: Option<usi
   }
 
   let res = send_dap_request_internal(
-    &session.writer,
-    &session.pending_requests,
+    &writer,
+    &pending_requests,
     "evaluate",
     args,
   )?;

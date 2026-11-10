@@ -66,13 +66,16 @@ pub struct JdkItemDto {
 
 #[tauri::command]
 pub fn stop_process(run_id: String) -> Result<(), String> {
-  let mut map = RUNNING_PROCESSES.lock().map_err(|e| e.to_string())?;
-  if let Some(mut child) = map.remove(&run_id) {
+  let removed = {
+    let mut map = RUNNING_PROCESSES.lock().map_err(|e| e.to_string())?;
+    map.remove(&run_id)
+  };
+  if let Some(mut child) = removed {
     let pid = child.id();
     #[cfg(windows)]
     {
       let _ = std::process::Command::new("taskkill")
-        .args(&["/F", "/T", "/PID", &pid.to_string()])
+        .args(["/F", "/T", "/PID", &pid.to_string()])
         .creation_flags(0x08000000)
         .output();
     }
@@ -84,13 +87,16 @@ pub fn stop_process(run_id: String) -> Result<(), String> {
 
 #[tauri::command]
 pub fn stop_all_processes() -> Result<(), String> {
-  let mut map = RUNNING_PROCESSES.lock().map_err(|e| e.to_string())?;
-  for (_id, mut child) in map.drain() {
+  let drained: Vec<Child> = {
+    let mut map = RUNNING_PROCESSES.lock().map_err(|e| e.to_string())?;
+    map.drain().map(|(_id, c)| c).collect()
+  };
+  for mut child in drained {
     let pid = child.id();
     #[cfg(windows)]
     {
       let _ = std::process::Command::new("taskkill")
-        .args(&["/F", "/T", "/PID", &pid.to_string()])
+        .args(["/F", "/T", "/PID", &pid.to_string()])
         .creation_flags(0x08000000)
         .output();
     }
@@ -109,20 +115,60 @@ fn expand_home_path(s: &str) -> String {
   s.to_string()
 }
 
+#[cfg(windows)]
+fn resolve_windows_command_on_path(cmd_name: &str) -> Option<String> {
+  let path = std::path::Path::new(cmd_name);
+  if path.components().count() > 1 || path.is_absolute() {
+    if path.is_file() {
+      return Some(cmd_name.to_string());
+    }
+    if path.extension().is_none() {
+      let pathext = std::env::var("PATHEXT").unwrap_or_else(|_| ".COM;.EXE;.BAT;.CMD".to_string());
+      for ext in pathext.split(';').filter(|e| !e.is_empty()) {
+        let candidate = std::path::PathBuf::from(format!("{}{}", cmd_name, ext));
+        if candidate.is_file() {
+          return Some(candidate.to_string_lossy().to_string());
+        }
+      }
+    }
+    return None;
+  }
+
+  let has_ext = path.extension().is_some();
+  let pathext = std::env::var("PATHEXT").unwrap_or_else(|_| ".COM;.EXE;.BAT;.CMD".to_string());
+  let exts: Vec<&str> = if has_ext {
+    vec![""]
+  } else {
+    pathext.split(';').filter(|e| !e.is_empty()).collect()
+  };
+
+  if let Some(paths) = std::env::var_os("PATH") {
+    for dir in std::env::split_paths(&paths) {
+      for ext in &exts {
+        let candidate = dir.join(format!("{}{}", cmd_name, ext));
+        if candidate.is_file() {
+          return Some(candidate.to_string_lossy().to_string());
+        }
+      }
+    }
+  }
+  None
+}
+
 fn resolve_executable_path(command: &str, work_dir: &str) -> String {
   let expanded = expand_home_path(command);
-  let clean = if (expanded.starts_with('"') && expanded.ends_with('"')) 
-    || (expanded.starts_with('\'') && expanded.ends_with('\'')) {
+  let clean = if (expanded.starts_with('"') && expanded.ends_with('"'))
+    || (expanded.starts_with('\'') && expanded.ends_with('\''))
+  {
     &expanded[1..expanded.len() - 1]
   } else {
     &expanded
   };
 
   // If clean command contains directory separators, test if that specific binary exists
-  if clean.contains('\\') || clean.contains('/') {
+  let resolved = if clean.contains('\\') || clean.contains('/') {
     let p = std::path::Path::new(clean);
     if !p.exists() {
-      // Path does not exist on this machine! Fallback to project wrapper or system executable
       let lower = clean.to_lowercase();
       if lower.contains("mvn") {
         #[cfg(windows)]
@@ -133,7 +179,7 @@ fn resolve_executable_path(command: &str, work_dir: &str) -> String {
         if wrapper_path.exists() {
           return wrapper_path.to_string_lossy().to_string();
         }
-        return "mvn".to_string();
+        "mvn".to_string()
       } else if lower.contains("gradle") {
         #[cfg(windows)]
         let wrapper = "gradlew.bat";
@@ -143,13 +189,16 @@ fn resolve_executable_path(command: &str, work_dir: &str) -> String {
         if wrapper_path.exists() {
           return wrapper_path.to_string_lossy().to_string();
         }
-        return "gradle".to_string();
+        "gradle".to_string()
+      } else {
+        clean.to_string()
       }
+    } else {
+      clean.to_string()
     }
   } else {
-    // Command is just "mvn" or "mvn.cmd"
     let lower = clean.to_lowercase();
-    if lower == "mvn" || lower == "mvn.cmd" {
+    if matches!(lower.as_str(), "mvn" | "mvn.cmd" | "mvnw" | "mvnw.cmd") {
       #[cfg(windows)]
       let wrapper = "mvnw.cmd";
       #[cfg(not(windows))]
@@ -158,10 +207,27 @@ fn resolve_executable_path(command: &str, work_dir: &str) -> String {
       if wrapper_path.exists() {
         return wrapper_path.to_string_lossy().to_string();
       }
+    } else if matches!(lower.as_str(), "gradle" | "gradle.bat" | "gradlew" | "gradlew.bat") {
+      #[cfg(windows)]
+      let wrapper = "gradlew.bat";
+      #[cfg(not(windows))]
+      let wrapper = "gradlew";
+      let wrapper_path = std::path::Path::new(work_dir).join(wrapper);
+      if wrapper_path.exists() {
+        return wrapper_path.to_string_lossy().to_string();
+      }
+    }
+    clean.to_string()
+  };
+
+  #[cfg(windows)]
+  {
+    if let Some(full) = resolve_windows_command_on_path(&resolved) {
+      return full;
     }
   }
 
-  expanded
+  resolved
 }
 
 fn ensure_valid_jvm_environment(
@@ -234,55 +300,54 @@ fn ensure_valid_jvm_environment(
   }
 }
 
+fn reject_control_chars(value: &str, label: &str) -> Result<(), String> {
+  if value.bytes().any(|b| b == 0 || b == b'\r' || b == b'\n') {
+    return Err(format!("Invalid control character in {}", label));
+  }
+  Ok(())
+}
+
+fn build_process_command(
+  command: &str,
+  args: &[String],
+  cwd: Option<&str>,
+  env_vars: Option<&HashMap<String, String>>,
+) -> Result<Command, String> {
+  reject_control_chars(command, "command")?;
+  for (idx, a) in args.iter().enumerate() {
+    reject_control_chars(a, &format!("argument #{}", idx))?;
+  }
+
+  let work_dir = expand_home_path(cwd.unwrap_or("."));
+  reject_control_chars(&work_dir, "cwd")?;
+  let resolved_command = resolve_executable_path(command, &work_dir);
+
+  let mut cmd = Command::new(&resolved_command);
+  cmd.args(args);
+  #[cfg(windows)]
+  cmd.creation_flags(0x08000000);
+  cmd.current_dir(&work_dir);
+
+  if let Some(envs) = env_vars {
+    for (k, v) in envs {
+      reject_control_chars(k, "env key")?;
+      let expanded = expand_home_path(v);
+      reject_control_chars(&expanded, &format!("env '{}'", k))?;
+      cmd.env(k, expanded);
+    }
+  }
+  ensure_valid_jvm_environment(&mut cmd, &resolved_command, args, env_vars);
+  Ok(cmd)
+}
+
 #[tauri::command]
 pub fn execute_build_command(
-  command: String, 
-  args: Vec<String>, 
+  command: String,
+  args: Vec<String>,
   cwd: Option<String>,
   env_vars: Option<HashMap<String, String>>,
 ) -> Result<BuildCommandResult, String> {
-  let work_dir = expand_home_path(&cwd.unwrap_or_else(|| ".".to_string()));
-  let resolved_command = resolve_executable_path(&command, &work_dir);
-
-  let mut cmd = {
-    #[cfg(windows)]
-    {
-      let mut c = std::process::Command::new("cmd.exe");
-      c.arg("/d").arg("/c");
-      let mut full_cmd = if resolved_command.contains(' ') && !resolved_command.starts_with('"') {
-        format!("\"{}\"", resolved_command)
-      } else {
-        resolved_command.clone()
-      };
-      for a in &args {
-        full_cmd.push(' ');
-        if a.contains(' ') && !a.starts_with('"') {
-          full_cmd.push('"');
-          full_cmd.push_str(a);
-          full_cmd.push('"');
-        } else {
-          full_cmd.push_str(a);
-        }
-      }
-      c.arg(&full_cmd);
-      c.creation_flags(0x08000000);
-      c
-    }
-    #[cfg(not(windows))]
-    {
-      let mut c = std::process::Command::new(&resolved_command);
-      c.args(&args);
-      c
-    }
-  };
-  cmd.current_dir(&work_dir);
-  if let Some(ref envs) = env_vars {
-    for (k, v) in envs {
-      cmd.env(k, expand_home_path(v));
-    }
-  }
-  ensure_valid_jvm_environment(&mut cmd, &resolved_command, &args, env_vars.as_ref());
-
+  let mut cmd = build_process_command(&command, &args, cwd.as_deref(), env_vars.as_ref())?;
   let output = cmd.output().map_err(|e| format!("Failed to run build command '{}': {}", command, e))?;
   Ok(BuildCommandResult {
     stdout: String::from_utf8_lossy(&output.stdout).to_string(),
@@ -302,49 +367,7 @@ pub fn start_process(
 ) -> Result<(), String> {
   let _ = stop_all_processes();
 
-  let work_dir = expand_home_path(&cwd.unwrap_or_else(|| ".".to_string()));
-  let resolved_command = resolve_executable_path(&command, &work_dir);
-
-  #[cfg(windows)]
-  let mut cmd = {
-    let mut c = Command::new("cmd.exe");
-    c.arg("/d").arg("/c");
-    let mut full_cmd = if resolved_command.contains(' ') && !resolved_command.starts_with('"') {
-      format!("\"{}\"", resolved_command)
-    } else {
-      resolved_command.clone()
-    };
-    for a in &args {
-      full_cmd.push(' ');
-      if a.contains(' ') && !a.starts_with('"') {
-        full_cmd.push('"');
-        full_cmd.push_str(a);
-        full_cmd.push('"');
-      } else {
-        full_cmd.push_str(a);
-      }
-    }
-    c.arg(&full_cmd);
-    c.creation_flags(0x08000000);
-    c
-  };
-
-  #[cfg(not(windows))]
-  let mut cmd = {
-    let mut c = Command::new(&resolved_command);
-    c.args(&args);
-    c
-  };
-
-  if let Some(ref envs) = env_vars {
-    for (k, v) in envs {
-      cmd.env(k, expand_home_path(v));
-    }
-  }
-
-  ensure_valid_jvm_environment(&mut cmd, &resolved_command, &args, env_vars.as_ref());
-
-  cmd.current_dir(&work_dir);
+  let mut cmd = build_process_command(&command, &args, cwd.as_deref(), env_vars.as_ref())?;
   cmd.stdout(Stdio::piped());
   cmd.stderr(Stdio::piped());
 
@@ -742,8 +765,16 @@ pub async fn download_real_jdk(
     return Err(format!("JDK download returned HTTP error: {}", res.status()));
   }
 
+  struct TempFileGuard(std::path::PathBuf);
+  impl Drop for TempFileGuard {
+    fn drop(&mut self) {
+      let _ = std::fs::remove_file(&self.0);
+    }
+  }
+
   let total_size = res.content_length().unwrap_or(180 * 1024 * 1024);
   let temp_zip = resolved_target.join("download_temp.zip");
+  let _zip_cleanup = TempFileGuard(temp_zip.clone());
   let mut file = std::fs::File::create(&temp_zip)
     .map_err(|e| format!("Failed to create temp archive file: {}", e))?;
 
@@ -1108,61 +1139,9 @@ pub fn test_remote_ssh_connection(host: String, port: Option<u16>) -> Result<Con
   }
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone, TS)]
-#[ts(export)]
-pub struct DeploymentResultDto {
-  pub success: bool,
-  pub files_deployed: usize,
-  pub target_host: String,
-  pub root_path: String,
-  pub message: String,
-  pub timestamp: u64,
-}
-
 #[tauri::command]
 pub fn test_sftp_connection(host: String, port: Option<u16>) -> Result<ConnectionTestResultDto, String> {
   test_remote_ssh_connection(host, port.or(Some(22)))
-}
-
-#[tauri::command]
-pub fn deploy_files_to_server(
-  host: String,
-  port: u16,
-  root_path: String,
-  local_paths: Vec<String>,
-) -> Result<DeploymentResultDto, String> {
-  let ts = std::time::SystemTime::now()
-    .duration_since(std::time::UNIX_EPOCH)
-    .map(|d| d.as_secs())
-    .unwrap_or(0);
-
-  if local_paths.is_empty() {
-    return Ok(DeploymentResultDto {
-      success: true,
-      files_deployed: 0,
-      target_host: host,
-      root_path,
-      message: "No files specified for deployment.".to_string(),
-      timestamp: ts,
-    });
-  }
-
-  // Validate local files exist
-  let mut existing_files = 0;
-  for p in &local_paths {
-    if std::path::Path::new(p).exists() {
-      existing_files += 1;
-    }
-  }
-
-  Ok(DeploymentResultDto {
-    success: true,
-    files_deployed: existing_files,
-    target_host: host.clone(),
-    root_path: root_path.clone(),
-    message: format!("Synchronized {} file(s) to {}:{} at destination path '{}'.", existing_files, host, port, root_path),
-    timestamp: ts,
-  })
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, TS)]
@@ -1179,90 +1158,109 @@ pub struct GithubIssueDto {
   pub updated_at: String,
 }
 
+static GITHUB_CLIENT: LazyLock<Result<reqwest::Client, String>> = LazyLock::new(|| {
+  reqwest::Client::builder()
+    .timeout(Duration::from_secs(15))
+    .user_agent("Custom-IDEA")
+    .build()
+    .map_err(|e| format!("Failed to initialize GitHub HTTP client: {}", e))
+});
+
 #[tauri::command]
-pub fn fetch_github_issues(repo: String, token: Option<String>) -> Result<Vec<GithubIssueDto>, String> {
+pub async fn fetch_github_issues(repo: String, token: Option<String>) -> Result<Vec<GithubIssueDto>, String> {
   let clean_repo = repo.trim().trim_start_matches("https://github.com/").trim_matches('/');
-  if clean_repo.is_empty() {
-    return Err("Repository name cannot be empty (format: owner/repo).".to_string());
+  let mut segments = clean_repo.split('/');
+  let owner = segments.next().unwrap_or("");
+  let name = segments.next().unwrap_or("");
+  let is_valid_seg = |s: &str| !s.is_empty() && s != "." && s != ".." && s.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'));
+  if !is_valid_seg(owner) || !is_valid_seg(name) || segments.next().is_some() {
+    return Err("Invalid repository format (expected: owner/repo).".to_string());
   }
 
-  let url = format!("https://api.github.com/repos/{}/issues?state=open&per_page=30", clean_repo);
+  let url = format!("https://api.github.com/repos/{}/{}/issues?state=open&per_page=30", owner, name);
+  let client = GITHUB_CLIENT.as_ref().map_err(|e| e.clone())?;
 
-  #[cfg(windows)]
-  let mut cmd = Command::new("curl.exe");
-  #[cfg(not(windows))]
-  let mut cmd = Command::new("curl");
-
-  cmd.args(&["-s", "-H", "User-Agent: Custom-IDEA", "-H", "Accept: application/vnd.github.v3+json"]);
+  let mut req = client
+    .get(&url)
+    .header("Accept", "application/vnd.github.v3+json");
 
   if let Some(tok) = token {
     let t_trim = tok.trim();
     if !t_trim.is_empty() {
-      cmd.args(&["-H", &format!("Authorization: Bearer {}", t_trim)]);
+      req = req.bearer_auth(t_trim);
     }
   }
 
-  cmd.arg(&url);
+  let mut res = req
+    .send()
+    .await
+    .map_err(|e| format!("GitHub request failed: {}", e))?;
 
-  #[cfg(windows)]
-  cmd.creation_flags(0x08000000);
+  let status = res.status();
+  let mut buf: Vec<u8> = Vec::new();
+  const MAX_GITHUB_BODY: usize = 4 * 1024 * 1024;
+  while let Some(chunk) = res.chunk().await.map_err(|e| format!("Failed reading GitHub response: {}", e))? {
+    if buf.len() + chunk.len() > MAX_GITHUB_BODY {
+      return Err("GitHub response exceeded 4 MiB limit".to_string());
+    }
+    buf.extend_from_slice(&chunk);
+  }
 
-  match cmd.output() {
-    Ok(out) => {
-      if out.status.success() {
-        let text = String::from_utf8_lossy(&out.stdout);
-        let val: serde_json::Value = serde_json::from_str(&text).map_err(|e| format!("Failed to parse GitHub JSON: {}", e))?;
-        if let Some(msg) = val.get("message").and_then(|m| m.as_str()) {
-          return Err(format!("GitHub API error: {}", msg));
-        }
+  if !status.is_success() {
+    let msg = serde_json::from_slice::<serde_json::Value>(&buf)
+      .ok()
+      .and_then(|v| v.get("message").and_then(|m| m.as_str()).map(|s| s.to_string()))
+      .unwrap_or_else(|| String::from_utf8_lossy(&buf).chars().take(200).collect());
+    return Err(format!("GitHub API error (HTTP {}): {}", status.as_u16(), msg));
+  }
 
-        let mut issues = Vec::new();
-        if let Some(arr) = val.as_array() {
-          for item in arr {
-            // Ignore PRs which also show up in /issues endpoint
-            if item.get("pull_request").is_some() {
-              continue;
-            }
+  let val: serde_json::Value = serde_json::from_slice(&buf)
+    .map_err(|e| format!("Failed to parse GitHub JSON (HTTP {}): {}", status.as_u16(), e))?;
+  if let Some(msg) = val.get("message").and_then(|m| m.as_str()) {
+    return Err(format!("GitHub API error: {}", msg));
+  }
 
-            let id = item.get("id").and_then(|v| v.as_u64()).unwrap_or(0);
-            let number = item.get("number").and_then(|v| v.as_u64()).unwrap_or(0);
-            let title = item.get("title").and_then(|v| v.as_str()).unwrap_or("Untitled").to_string();
-            let state = item.get("state").and_then(|v| v.as_str()).unwrap_or("open").to_string();
-            let user = item.get("user")
-              .and_then(|u| u.get("login"))
-              .and_then(|l| l.as_str())
-              .unwrap_or("anonymous")
-              .to_string();
-            let html_url = item.get("html_url").and_then(|v| v.as_str()).unwrap_or("").to_string();
-            let comments = item.get("comments").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
-            let created_at = item.get("created_at").and_then(|v| v.as_str()).unwrap_or("").to_string();
-            let updated_at = item.get("updated_at").and_then(|v| v.as_str()).unwrap_or("").to_string();
-
-            issues.push(GithubIssueDto {
-              id,
-              number,
-              title,
-              state,
-              user,
-              html_url,
-              comments,
-              created_at,
-              updated_at,
-            });
-          }
-        }
-        Ok(issues)
-      } else {
-        Err(format!("Curl error: {}", String::from_utf8_lossy(&out.stderr)))
+  let mut issues = Vec::new();
+  if let Some(arr) = val.as_array() {
+    for item in arr {
+      if item.get("pull_request").is_some() {
+        continue;
       }
+
+      issues.push(GithubIssueDto {
+        id: item.get("id").and_then(|v| v.as_u64()).unwrap_or(0),
+        number: item.get("number").and_then(|v| v.as_u64()).unwrap_or(0),
+        title: item.get("title").and_then(|v| v.as_str()).unwrap_or("Untitled").to_string(),
+        state: item.get("state").and_then(|v| v.as_str()).unwrap_or("open").to_string(),
+        user: item.get("user").and_then(|u| u.get("login")).and_then(|l| l.as_str()).unwrap_or("anonymous").to_string(),
+        html_url: item.get("html_url").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+        comments: item.get("comments").and_then(|v| v.as_u64()).unwrap_or(0) as u32,
+        created_at: item.get("created_at").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+        updated_at: item.get("updated_at").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+      });
     }
-    Err(e) => Err(format!("Failed to execute curl: {}", e)),
   }
+  Ok(issues)
 }
 
 #[cfg(test)]
 mod tests {
   use super::*;
+
+  #[test]
+  fn test_expand_home_path() {
+    let p = expand_home_path("my/path");
+    assert_eq!(p, "my/path");
+  }
+
+  #[test]
+  #[cfg(windows)]
+  fn test_resolve_windows_command() {
+    let cmd = resolve_windows_command_on_path("cmd");
+    assert!(cmd.is_some());
+    let full = cmd.unwrap().to_lowercase();
+    assert!(full.ends_with(".exe"));
+  }
 
   #[test]
   fn test_cmd_mvn() {

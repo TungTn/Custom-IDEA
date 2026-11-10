@@ -10,6 +10,6 @@ Cung cấp giải pháp toàn diện cho đội Backend Java:
 
 | Phase | Title | Status | Priority | File |
 | :--- | :--- | :--- | :--- | :--- |
-| 1 | Maven Global Configuration & Runner VM Options | pending | P1 | [`phase-01-maven-global-configuration.md`](file:///D:/IDE/plans/maven-global-dynamic-settings-portable/phase-01-maven-global-configuration.md) |
-| 2 | Dynamic XML Settings Importer (Fix Islands Dark) | pending | P1 | [`phase-02-dynamic-xml-settings-import.md`](file:///D:/IDE/plans/maven-global-dynamic-settings-portable/phase-02-dynamic-xml-settings-import.md) |
-| 3 | Portable Verification & Distribution Package | pending | P2 | [`phase-03-portable-verification-and-delivery.md`](file:///D:/IDE/plans/maven-global-dynamic-settings-portable/phase-03-portable-verification-and-delivery.md) |
+| 1 | Maven Global Configuration & Runner VM Options | completed | P1 | [`phase-01-maven-global-configuration.md`](file:///D:/IDE/plans/maven-global-dynamic-settings-portable/phase-01-maven-global-configuration.md) |
+| 2 | Dynamic XML Settings Importer (Fix Islands Dark) | completed | P1 | [`phase-02-dynamic-xml-settings-import.md`](file:///D:/IDE/plans/maven-global-dynamic-settings-portable/phase-02-dynamic-xml-settings-import.md) |
+| 3 | Portable Verification & Distribution Package | completed | P2 | [`phase-03-portable-verification-and-delivery.md`](file:///D:/IDE/plans/maven-global-dynamic-settings-portable/phase-03-portable-verification-and-delivery.md) |

@@ -1,7 +1,7 @@
 ---
 phase: 2
 title: "Dynamic XML Settings Importer (Fix Islands Dark)"
-status: pending
+status: completed
 priority: P1
 effort: "2h"
 dependencies: []
@@ -26,5 +26,5 @@ Xóa bỏ hoàn toàn hardcode trong bộ import cấu hình XML. Nhận diện 
 - Modify: `src/App.tsx`
 
 ## Success Criteria
-- [ ] Chạy kiểm thử parse với file `C:\Users\adminlocal\Downloads\settings.zip` trả về đúng theme New UI Dark, không bị ngả sang màu nâu cam `darcula-classic`.
-- [ ] Profile phím tắt `nampa` và JDK `graalvm-jdk-21` được nạp đầy đủ.
+- [x] Chạy kiểm thử parse với file `C:\Users\adminlocal\Downloads\settings.zip` trả về đúng theme New UI Dark, không bị ngả sang màu nâu cam `darcula-classic`.
+- [x] Profile phím tắt `nampa` và JDK `graalvm-jdk-21` được nạp đầy đủ.

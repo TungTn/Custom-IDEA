@@ -1,7 +1,7 @@
 ---
 phase: 3
 title: "Portable Verification & Distribution Package"
-status: pending
+status: completed
 priority: P2
 effort: "1h"
 dependencies: ["1", "2"]
@@ -19,5 +19,5 @@ Xác thực chất lượng toàn diện (Typecheck, Build Portable binary, Test
 4. Cập nhật `walkthrough.md` hướng dẫn sử dụng cấu hình Maven Global và Import Settings.
 
 ## Success Criteria
-- [ ] TypeScript typecheck: 0 errors.
-- [ ] Binary `Custom-IDEA-Portable.exe` sinh ra đầy đủ tính năng mới, sẵn sàng gửi cho BE Java.
+- [x] TypeScript typecheck: 0 errors.
+- [x] Binary `Custom-IDEA-Portable.exe` sinh ra đầy đủ tính năng mới, sẵn sàng gửi cho BE Java.

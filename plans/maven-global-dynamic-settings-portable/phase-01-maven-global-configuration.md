@@ -1,7 +1,7 @@
 ---
 phase: 1
 title: "Maven Global Configuration & Runner VM Options"
-status: pending
+status: completed
 priority: P1
 effort: "2h"
 dependencies: []
@@ -28,5 +28,5 @@ Xây dựng mô hình dữ liệu cấu hình Maven toàn cục và giao diện 
 - Modify: `src/hooks/useProcessRunner.ts`
 
 ## Success Criteria
-- [ ] Giao diện `Build Tools -> Maven` hiển thị đầy đủ các trường cấu hình.
-- [ ] Các lệnh chạy Maven trong `MavenPanel` và `useProcessRunner` tự động thừa hưởng cờ `-gs`, `-s`, `-Dmaven.repo.local` và biến môi trường `JAVA_HOME`, `MAVEN_OPTS`.
+- [x] Giao diện `Build Tools -> Maven` hiển thị đầy đủ các trường cấu hình.
+- [x] Các lệnh chạy Maven trong `MavenPanel` và `useProcessRunner` tự động thừa hưởng cờ `-gs`, `-s`, `-Dmaven.repo.local` và biến môi trường `JAVA_HOME`, `MAVEN_OPTS`.

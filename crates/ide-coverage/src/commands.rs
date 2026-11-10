@@ -114,8 +114,17 @@ pub fn coverage_detect_reports(project_path: String) -> Result<Vec<String>, Stri
         .max_depth(5)
         .into_iter()
         .filter_entry(|e| {
-            let s = e.path().to_string_lossy();
-            !s.contains(".git") && !s.contains("node_modules") && !s.contains(".idea")
+            let rel = match e.path().strip_prefix(root) {
+                Ok(p) => p,
+                Err(_) => e.path(),
+            };
+            for comp in rel.components() {
+                let s = comp.as_os_str().to_string_lossy().to_lowercase();
+                if s == ".git" || s == "node_modules" || s == ".idea" || s == ".vscode" {
+                    return false;
+                }
+            }
+            true
         })
         .filter_map(Result::ok)
     {

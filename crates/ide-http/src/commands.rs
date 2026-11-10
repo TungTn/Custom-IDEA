@@ -2,19 +2,70 @@ use crate::models::{HttpBlockDto, HttpRequestDto, HttpResponseDto};
 use crate::parser::parse_http_file;
 use std::collections::HashMap;
 use std::str::FromStr;
+use std::sync::LazyLock;
 use std::time::Instant;
+
+const MAX_HTTP_RESPONSE_BYTES: usize = 16 * 1024 * 1024; // 16 MiB
+
+static HTTP_CLIENT: LazyLock<reqwest::Client> = LazyLock::new(|| {
+    let redirect_policy = reqwest::redirect::Policy::custom(|attempt| {
+        if attempt.previous().len() >= 10 {
+            return attempt.error("Too many redirects (max 10)");
+        }
+        let target_url = attempt.url();
+        if target_url.scheme() != "http" && target_url.scheme() != "https" {
+            return attempt.error("Redirect to non-http/https scheme is blocked");
+        }
+        if let Some(host) = target_url.host_str() {
+            if host == "169.254.169.254" || host.starts_with("169.254.") {
+                return attempt.error("Redirect to link-local/cloud metadata address is blocked");
+            }
+            let is_loopback = |h: &str| {
+                h == "localhost"
+                    || h == "127.0.0.1"
+                    || h.starts_with("127.")
+                    || h == "::1"
+                    || h == "[::1]"
+                    || h == "0.0.0.0"
+                    || h == "[::]"
+            };
+            let initial_url = &attempt.previous()[0];
+            let initial_host = initial_url.host_str().unwrap_or("");
+            let initial_is_local = is_loopback(initial_host);
+            let target_is_local = is_loopback(host);
+            if !initial_is_local && target_is_local {
+                return attempt.error("Redirect from remote host to localhost is blocked (SSRF protection)");
+            }
+        }
+        attempt.follow()
+    });
+
+    reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(30))
+        .redirect(redirect_policy)
+        .build()
+        .expect("Failed to initialize static HTTP client")
+});
 
 #[tauri::command]
 pub async fn http_execute_request(req: HttpRequestDto) -> Result<HttpResponseDto, String> {
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(30))
-        .build()
-        .map_err(|e| format!("Failed to build HTTP client: {e}"))?;
+    let parsed_url = reqwest::Url::parse(&req.url)
+        .map_err(|e| format!("Invalid URL '{}': {e}", req.url))?;
+
+    if parsed_url.scheme() != "http" && parsed_url.scheme() != "https" {
+        return Err(format!("Unsupported URL scheme '{}'. Only http and https are allowed.", parsed_url.scheme()));
+    }
+
+    if let Some(host) = parsed_url.host_str() {
+        if host == "169.254.169.254" || host.starts_with("169.254.") {
+            return Err("Requests to cloud metadata link-local address are blocked".to_string());
+        }
+    }
 
     let method = reqwest::Method::from_str(&req.method.to_uppercase())
         .map_err(|e| format!("Invalid HTTP method '{}': {e}", req.method))?;
 
-    let mut request_builder = client.request(method, &req.url);
+    let mut request_builder = HTTP_CLIENT.request(method, parsed_url);
 
     for (k, v) in &req.headers {
         let header_name = reqwest::header::HeaderName::from_str(k)
@@ -51,16 +102,31 @@ pub async fn http_execute_request(req: HttpRequestDto) -> Result<HttpResponseDto
         if key_str.to_lowercase() == "content-type" {
             content_type = Some(val_str.clone());
         }
-        headers.insert(key_str, val_str);
+        headers
+            .entry(key_str)
+            .and_modify(|existing: &mut String| {
+                existing.push_str(", ");
+                existing.push_str(&val_str);
+            })
+            .or_insert(val_str);
     }
 
-    let bytes = response
-        .bytes()
-        .await
-        .map_err(|e| format!("Failed to read response body: {e}"))?;
+    let mut mut_resp = response;
+    let mut body_bytes = Vec::new();
 
-    let size_bytes = bytes.len();
-    let body = String::from_utf8_lossy(&bytes).to_string();
+    while let Some(chunk) = mut_resp
+        .chunk()
+        .await
+        .map_err(|e| format!("Failed to read response body: {e}"))?
+    {
+        if body_bytes.len() + chunk.len() > MAX_HTTP_RESPONSE_BYTES {
+            return Err("Response body exceeded maximum allowed limit of 16 MiB".to_string());
+        }
+        body_bytes.extend_from_slice(&chunk);
+    }
+
+    let size_bytes = body_bytes.len();
+    let body = String::from_utf8_lossy(&body_bytes).to_string();
 
     Ok(HttpResponseDto {
         status,

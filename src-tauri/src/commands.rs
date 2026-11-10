@@ -171,6 +171,7 @@ pub fn get_ipc_handler() -> impl Fn(tauri::ipc::Invoke<tauri::Wry>) -> bool + Se
     db::db_introspect_schema,
     db::db_execute_query,
     db::db_get_table_data,
+    db::db_close_pool,
 
     // ─── 12. HTTP REST Client Commands (ide-http) ───
     http::http_execute_request,

@@ -17,3 +17,4 @@ walkdir.workspace = true
 rfd.workspace = true
 ts-rs.workspace = true
 zip.workspace = true
+regex.workspace = true

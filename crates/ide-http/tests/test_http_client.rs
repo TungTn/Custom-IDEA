@@ -77,3 +77,35 @@ async fn test_http_execute_request_error() {
     let result = http_execute_request(req).await;
     assert!(result.is_err());
 }
+
+#[tokio::test]
+async fn test_http_execute_blocks_invalid_schemes() {
+    let req = HttpRequestDto {
+        id: Some("test_file".into()),
+        method: "GET".into(),
+        url: "file:///C:/Windows/System32/drivers/etc/hosts".into(),
+        headers: HashMap::new(),
+        body: None,
+    };
+
+    let result = http_execute_request(req).await;
+    assert!(result.is_err());
+    let err = result.unwrap_err();
+    assert!(err.contains("Unsupported URL scheme"));
+}
+
+#[tokio::test]
+async fn test_http_execute_blocks_metadata_ip() {
+    let req = HttpRequestDto {
+        id: Some("test_meta".into()),
+        method: "GET".into(),
+        url: "http://169.254.169.254/latest/meta-data/".into(),
+        headers: HashMap::new(),
+        body: None,
+    };
+
+    let result = http_execute_request(req).await;
+    assert!(result.is_err());
+    let err = result.unwrap_err();
+    assert!(err.contains("cloud metadata"));
+}

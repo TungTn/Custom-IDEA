@@ -2183,6 +2183,7 @@ dependencies = [
  "notify",
  "notify-debouncer-mini",
  "nucleo-matcher",
+ "regex",
  "rfd",
  "ropey",
  "serde",

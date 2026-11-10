@@ -81,6 +81,79 @@ pub fn get_language_from_ext(ext: &str) -> String {
   }
 }
 
+pub fn sanitize_relative_path(rel: &str) -> Result<std::path::PathBuf, String> {
+  let trimmed = rel.trim();
+  if trimmed.is_empty() {
+    return Err("Path cannot be empty".to_string());
+  }
+  let path = std::path::Path::new(trimmed);
+  if path.is_absolute() {
+    return Err(format!("Absolute paths not allowed: {}", trimmed));
+  }
+  for comp in path.components() {
+    match comp {
+      std::path::Component::ParentDir => {
+        return Err(format!("Path traversal ('..') not allowed: {}", trimmed));
+      }
+      std::path::Component::RootDir | std::path::Component::Prefix(_) => {
+        return Err(format!("Root or prefix components not allowed: {}", trimmed));
+      }
+      _ => {}
+    }
+  }
+  if trimmed.contains('\0') || trimmed.contains(':') {
+    return Err(format!("Invalid characters in path: {}", trimmed));
+  }
+  Ok(path.to_path_buf())
+}
+
+pub fn is_ignored_relative_path(root: &Path, path: &Path) -> bool {
+  let root_str = root.to_string_lossy().replace('\\', "/");
+  let root_clean = root_str.strip_prefix("//?/").or_else(|| root_str.strip_prefix(r"\\?\")).unwrap_or(&root_str);
+  let path_str = path.to_string_lossy().replace('\\', "/");
+  let path_clean = path_str.strip_prefix("//?/").or_else(|| path_str.strip_prefix(r"\\?\")).unwrap_or(&path_str);
+
+  let rel_str = if !root_clean.is_empty() && path_clean.to_lowercase().starts_with(&root_clean.to_lowercase()) {
+    let rem = &path_clean[root_clean.len()..];
+    rem.trim_start_matches('/')
+  } else {
+    match path.strip_prefix(root) {
+      Ok(p) => return check_components(p),
+      Err(_) => path_clean,
+    }
+  };
+
+  check_components(Path::new(rel_str))
+}
+
+fn check_components(rel: &Path) -> bool {
+  for comp in rel.components() {
+    let s = comp.as_os_str().to_string_lossy().to_lowercase();
+    if s == ".git" || s == "node_modules" || s == "target" || s == "dist" 
+      || s == "build" || s == ".idea" || s == ".vscode" || s == "__pycache__" 
+      || s == ".ds_store" || s == "_mf_temp" || s == ".vite" || s == ".next"
+      || s == ".nuxt" || s == ".turbo" || s == ".output" || s == ".cache"
+      || s == "temp" || s == "tmp" || s == ".scannerwork" || s == ".sonartmp"
+      || s == ".gradle" || s == "bin" || s == "out" || s == "logs" || s == "log"
+      || s == ".m2" || s == ".settings" || s == ".metadata" || s == ".project" 
+      || s == ".classpath" || s == "classes" {
+      return true;
+    }
+  }
+  if let Some(ext) = rel.extension() {
+    let ext_s = ext.to_string_lossy().to_lowercase();
+    if ext_s == "class" || ext_s == "jar" || ext_s == "war" || ext_s == "log" 
+      || ext_s == "lock" || ext_s == "tmp" || ext_s == "swp" || ext_s == "hprof" {
+      return true;
+    }
+  }
+  false
+}
+
+pub fn is_ignored_path(path: &Path) -> bool {
+  is_ignored_relative_path(Path::new(""), path)
+}
+
 pub fn read_directory_tree(path: &Path, current_depth: usize, max_depth: usize) -> FileNodeDto {
   let name = path.file_name()
     .map(|n| n.to_string_lossy().to_string())
@@ -114,6 +187,12 @@ pub fn read_directory_tree(path: &Path, current_depth: usize, max_depth: usize) 
             || entry_name == ".m2" || entry_name == "classes" || entry_name == "__pycache__" || entry_name == ".DS_Store" {
             continue;
           }
+          if let Ok(file_type) = entry.file_type() {
+            if file_type.is_symlink() {
+              // Skip recursing through symlinks/junctions to prevent infinite loops
+              continue;
+            }
+          }
           children.push(read_directory_tree(&entry.path(), current_depth + 1, max_depth));
         }
       }
@@ -144,30 +223,6 @@ pub fn read_directory_tree(path: &Path, current_depth: usize, max_depth: usize) 
   }
 }
 
-pub fn is_ignored_path(path: &Path) -> bool {
-  for comp in path.components() {
-    let s = comp.as_os_str().to_string_lossy();
-    if s == ".git" || s == "node_modules" || s == "target" || s == "dist" 
-      || s == "build" || s == ".idea" || s == ".vscode" || s == "__pycache__" 
-      || s == ".DS_Store" || s == "_mf_temp" || s == ".vite" || s == ".next"
-      || s == ".nuxt" || s == ".turbo" || s == ".output" || s == ".cache"
-      || s == "temp" || s == "tmp" || s == ".scannerwork" || s == ".sonartmp"
-      || s == ".gradle" || s == "bin" || s == "out" || s == "logs" || s == "log"
-      || s == ".m2" || s == ".settings" || s == ".metadata" || s == ".project" 
-      || s == ".classpath" || s == "classes" {
-      return true;
-    }
-  }
-  if let Some(ext) = path.extension() {
-    let ext_s = ext.to_string_lossy().to_lowercase();
-    if ext_s == "class" || ext_s == "jar" || ext_s == "war" || ext_s == "log" 
-      || ext_s == "lock" || ext_s == "tmp" || ext_s == "swp" || ext_s == "hprof" {
-      return true;
-    }
-  }
-  false
-}
-
 #[tauri::command]
 pub fn select_directory(default_path: Option<String>) -> Result<Option<String>, String> {
   let mut dialog = rfd::FileDialog::new()
@@ -193,7 +248,9 @@ pub fn create_project_on_disk(
   std::fs::create_dir_all(base).map_err(|e| format!("Failed to create project directory: {}", e))?;
 
   for (rel_path, content) in files_to_create {
-    let full_path = base.join(rel_path);
+    let safe_rel = sanitize_relative_path(&rel_path)
+      .map_err(|e| format!("Invalid relative path '{}': {}", rel_path, e))?;
+    let full_path = base.join(safe_rel);
     if let Some(parent) = full_path.parent() {
       std::fs::create_dir_all(parent).map_err(|e| format!("Failed to create directory structure: {}", e))?;
     }
@@ -224,7 +281,7 @@ pub fn open_project_dialog(default_path: Option<String>) -> Result<Option<FileNo
   }
 
   if let Some(folder) = dialog.pick_folder() {
-    let tree = read_directory_tree(&folder, 0, usize::MAX);
+    let tree = read_directory_tree(&folder, 0, 64);
     Ok(Some(tree))
   } else {
     Ok(None)
@@ -237,19 +294,16 @@ pub fn open_project_by_path(project_path: String) -> Result<FileNodeDto, String>
   if !path.exists() {
     return Err(format!("Path does not exist: {}", project_path));
   }
-  let tree = read_directory_tree(path, 0, usize::MAX);
+  let tree = read_directory_tree(path, 0, 64);
   Ok(tree)
 }
 
 #[tauri::command]
 pub fn read_file_content(path: String) -> Result<String, String> {
-  let mut buffers = VFS_BUFFERS.lock().map_err(|e| e.to_string())?;
-  if let Some(rope) = buffers.get(&path) {
-    return Ok(rope.to_string());
-  }
   let content = std::fs::read_to_string(&path).map_err(|e| format!("Failed to read file: {}", e))?;
-  let rope = Rope::from_str(&content);
-  buffers.insert(path, rope);
+  if let Ok(mut buffers) = VFS_BUFFERS.lock() {
+    buffers.insert(path, Rope::from_str(&content));
+  }
   Ok(content)
 }
 
@@ -289,12 +343,19 @@ pub fn file_exists(path: String) -> bool {
 
 #[tauri::command]
 pub fn vfs_get_line_count(path: String) -> Result<usize, String> {
-  let buffers = VFS_BUFFERS.lock().map_err(|e| e.to_string())?;
-  if let Some(rope) = buffers.get(&path) {
-    Ok(rope.len_lines())
-  } else if let Ok(content) = std::fs::read_to_string(&path) {
+  {
+    let buffers = VFS_BUFFERS.lock().map_err(|e| e.to_string())?;
+    if let Some(rope) = buffers.get(&path) {
+      return Ok(rope.len_lines());
+    }
+  }
+  if let Ok(content) = std::fs::read_to_string(&path) {
     let rope = Rope::from_str(&content);
-    Ok(rope.len_lines())
+    let count = rope.len_lines();
+    if let Ok(mut buffers) = VFS_BUFFERS.lock() {
+      buffers.insert(path, rope);
+    }
+    Ok(count)
   } else {
     Err(format!("File not found in VFS: {}", path))
   }
@@ -322,7 +383,7 @@ pub fn search_project_files(project_path: String, query: String, limit: Option<u
 
   for entry in walkdir::WalkDir::new(root)
     .into_iter()
-    .filter_entry(|e| !is_ignored_path(e.path()))
+    .filter_entry(|e| !is_ignored_relative_path(root, e.path()))
     .filter_map(Result::ok)
   {
     if entry.depth() == 0 {
@@ -386,12 +447,17 @@ pub fn search_project_text(
   }
 
   let max_results = limit.unwrap_or(80);
-  let q_cmp = if case_sensitive { q.to_string() } else { q.to_lowercase() };
+  let regex_pattern = regex::escape(q);
+  let re = regex::RegexBuilder::new(&regex_pattern)
+    .case_insensitive(!case_sensitive)
+    .build()
+    .map_err(|e| format!("Failed to build search regex: {}", e))?;
+
   let mut results = Vec::new();
 
   for entry in walkdir::WalkDir::new(root)
     .into_iter()
-    .filter_entry(|e| !is_ignored_path(e.path()))
+    .filter_entry(|e| !is_ignored_relative_path(root, e.path()))
     .filter_map(Result::ok)
   {
     if !entry.file_type().is_file() {
@@ -412,16 +478,15 @@ pub fn search_project_text(
         .unwrap_or_else(|_| file_name.clone());
 
       for (idx, line) in content.lines().enumerate() {
-        let line_cmp = if case_sensitive { line.to_string() } else { line.to_lowercase() };
-        if let Some(pos) = line_cmp.find(&q_cmp) {
+        if let Some(m) = re.find(line) {
           results.push(SearchTextResultDto {
             file_name: file_name.clone(),
             file_path: p.to_string_lossy().to_string(),
             relative_path: rel_path.clone(),
             line_number: idx + 1,
             line_content: line.trim_end().to_string(),
-            match_start: pos,
-            match_end: pos + q.len(),
+            match_start: m.start(),
+            match_end: m.end(),
           });
 
           if results.len() >= max_results {
@@ -445,6 +510,7 @@ pub fn watch_project_directory(app: tauri::AppHandle, project_path: String) -> R
     return Err("Path does not exist".to_string());
   }
 
+  let root_clone = path.clone();
   let app_clone = app.clone();
   let mut debouncer = new_debouncer(
     Duration::from_millis(150),
@@ -454,7 +520,7 @@ pub fn watch_project_directory(app: tauri::AppHandle, project_path: String) -> R
         let paths: Vec<String> = events
           .into_iter()
           .map(|e| e.path)
-          .filter(|p| !is_ignored_path(p))
+          .filter(|p| !is_ignored_relative_path(&root_clone, p))
           .map(|p| p.to_string_lossy().to_string())
           .collect();
 
@@ -537,13 +603,28 @@ pub fn read_settings_from_zip_or_folder(source_path: String) -> Result<HashMap<S
     let file = std::fs::File::open(path).map_err(|e| format!("Failed to open archive: {}", e))?;
     let mut archive = zip::ZipArchive::new(file).map_err(|e| format!("Failed to read zip archive: {}", e))?;
 
+    const MAX_ENTRY_BYTES: u64 = 10 * 1024 * 1024; // 10 MiB
+    const MAX_TOTAL_BYTES: usize = 50 * 1024 * 1024; // 50 MiB
+    let mut total_bytes = 0usize;
+
     for i in 0..archive.len() {
       let mut entry = archive.by_index(i).map_err(|e| format!("Zip entry read error: {}", e))?;
       if entry.is_file() {
         let name = entry.name().replace('\\', "/");
+        if name.contains("..") || name.starts_with('/') {
+          continue;
+        }
         if name.ends_with(".xml") || name == "IntelliJ IDEA Global Settings" || name.ends_with(".json") {
           let mut content = String::new();
-          let _ = entry.read_to_string(&mut content);
+          let mut limited = Read::take(&mut entry, MAX_ENTRY_BYTES + 1);
+          limited.read_to_string(&mut content).map_err(|e| format!("Failed to read zip entry '{}': {}", name, e))?;
+          if content.len() as u64 > MAX_ENTRY_BYTES {
+            return Err(format!("Settings entry '{}' exceeds 10 MiB limit", name));
+          }
+          total_bytes += content.len();
+          if total_bytes > MAX_TOTAL_BYTES {
+            return Err("Settings archive exceeds 50 MiB uncompressed limit".to_string());
+          }
           result_map.insert(name, content);
         }
       }
@@ -595,7 +676,9 @@ pub fn export_settings_to_zip(zip_path: String, entries: HashMap<String, String>
   }
 
   for (name, content) in entries {
-    let norm_name = name.replace('\\', "/");
+    let safe_rel = sanitize_relative_path(&name)
+      .map_err(|e| format!("Invalid export path '{}': {}", name, e))?;
+    let norm_name = safe_rel.to_string_lossy().replace('\\', "/");
     zip.start_file(&norm_name, options)
       .map_err(|e| format!("Failed to add file {} to zip: {}", norm_name, e))?;
     zip.write_all(content.as_bytes())
@@ -606,11 +689,44 @@ pub fn export_settings_to_zip(zip_path: String, entries: HashMap<String, String>
   Ok(())
 }
 
+fn is_subpath(parent: &Path, child: &Path) -> bool {
+  if let (Ok(p_canon), Ok(c_canon)) = (parent.canonicalize(), child.canonicalize()) {
+    c_canon.starts_with(p_canon)
+  } else {
+    let mut curr = child;
+    while !curr.exists() {
+      if let Some(p) = curr.parent() {
+        curr = p;
+      } else {
+        break;
+      }
+    }
+    if let (Ok(p_canon), Ok(c_canon)) = (parent.canonicalize(), curr.canonicalize()) {
+      c_canon.starts_with(p_canon)
+    } else {
+      child.starts_with(parent)
+    }
+  }
+}
+
+fn is_same_or_child_path(prefix: &str, target: &str) -> bool {
+  let p_norm = prefix.replace('\\', "/").trim_end_matches('/').to_lowercase();
+  let t_norm = target.replace('\\', "/").to_lowercase();
+  if t_norm == p_norm {
+    return true;
+  }
+  t_norm.starts_with(&format!("{}/", p_norm))
+}
+
 fn copy_dir_all(src: &Path, dst: &Path) -> std::io::Result<()> {
   std::fs::create_dir_all(dst)?;
   for entry in std::fs::read_dir(src)? {
     let entry = entry?;
     let ty = entry.file_type()?;
+    if ty.is_symlink() {
+      // Skip symlinks and directory junctions to avoid OS error 5 or recursion
+      continue;
+    }
     let dest_child = dst.join(entry.file_name());
     if ty.is_dir() {
       copy_dir_all(&entry.path(), &dest_child)?;
@@ -627,6 +743,9 @@ pub fn vfs_copy_file(source_path: String, dest_path: String) -> Result<(), Strin
   let dst = Path::new(&dest_path);
   if !src.exists() {
     return Err(format!("Source path does not exist: {}", source_path));
+  }
+  if src.is_dir() && is_subpath(src, dst) {
+    return Err(format!("Cannot copy directory '{}' into itself or a subdirectory of itself", source_path));
   }
   if let Some(parent) = dst.parent() {
     let _ = std::fs::create_dir_all(parent);
@@ -646,17 +765,23 @@ pub fn vfs_move_path(source_path: String, dest_path: String) -> Result<(), Strin
   if !src.exists() {
     return Err(format!("Source path does not exist: {}", source_path));
   }
+  if src.is_dir() && is_subpath(src, dst) {
+    return Err(format!("Cannot move directory '{}' into itself or a subdirectory of itself", source_path));
+  }
   if let Some(parent) = dst.parent() {
     let _ = std::fs::create_dir_all(parent);
   }
   if std::fs::rename(src, dst).is_err() {
     if src.is_dir() {
       copy_dir_all(src, dst).map_err(|e| format!("Failed to move directory: {}", e))?;
-      let _ = std::fs::remove_dir_all(src);
+      std::fs::remove_dir_all(src).map_err(|e| format!("Failed to remove source directory: {}", e))?;
     } else {
       std::fs::copy(src, dst).map_err(|e| format!("Failed to move file: {}", e))?;
-      let _ = std::fs::remove_file(src);
+      std::fs::remove_file(src).map_err(|e| format!("Failed to remove source file: {}", e))?;
     }
+  }
+  if let Ok(mut buffers) = VFS_BUFFERS.lock() {
+    buffers.retain(|k, _| !is_same_or_child_path(&source_path, k));
   }
   Ok(())
 }
@@ -666,6 +791,9 @@ pub fn vfs_delete_path(path: String) -> Result<(), String> {
   let p = Path::new(&path);
   if !p.exists() {
     return Ok(());
+  }
+  if let Ok(mut buffers) = VFS_BUFFERS.lock() {
+    buffers.retain(|k, _| !is_same_or_child_path(&path, k));
   }
   if p.is_dir() {
     std::fs::remove_dir_all(p).map_err(|e| format!("Failed to delete directory: {}", e))?;
@@ -679,5 +807,52 @@ pub fn vfs_delete_path(path: String) -> Result<(), String> {
 pub fn vfs_create_dir(path: String) -> Result<(), String> {
   let p = Path::new(&path);
   std::fs::create_dir_all(p).map_err(|e| format!("Failed to create directory: {}", e))
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  #[test]
+  fn test_sanitize_relative_path() {
+    assert!(sanitize_relative_path("src/main.rs").is_ok());
+    assert!(sanitize_relative_path("nested/dir/file.txt").is_ok());
+
+    assert!(sanitize_relative_path("../escape.txt").is_err());
+    assert!(sanitize_relative_path("foo/../../bar").is_err());
+    assert!(sanitize_relative_path("/root/test.txt").is_err());
+    assert!(sanitize_relative_path("C:\\Windows\\test.txt").is_err());
+    assert!(sanitize_relative_path("   ").is_err());
+  }
+
+  #[test]
+  fn test_is_ignored_relative_path() {
+    let root = Path::new("D:/build/app");
+    let safe_file = Path::new("D:/build/app/src/main.rs");
+    assert!(!is_ignored_relative_path(root, safe_file));
+
+    let git_file = Path::new("D:/build/app/.git/config");
+    assert!(is_ignored_relative_path(root, git_file));
+
+    let node_modules_file = Path::new("D:/build/app/node_modules/pkg/index.js");
+    assert!(is_ignored_relative_path(root, node_modules_file));
+
+    // Case insensitivity test on Windows (Build, Target)
+    let target_file = Path::new("D:/build/app/Target/debug/app.exe");
+    assert!(is_ignored_relative_path(root, target_file));
+
+    // Verbatim prefix test on Windows
+    let verbatim_root = Path::new(r"\\?\D:\build\app");
+    let verbatim_file = Path::new(r"\\?\D:\build\app\src\lib.rs");
+    assert!(!is_ignored_relative_path(verbatim_root, verbatim_file));
+  }
+
+  #[test]
+  fn test_is_same_or_child_path() {
+    assert!(is_same_or_child_path("D:/project/src/main", "D:/project/src/main"));
+    assert!(is_same_or_child_path("D:/project/src/main", "D:/project/src/main/foo.rs"));
+    assert!(!is_same_or_child_path("D:/project/src/main", "D:/project/src/main.rs"));
+    assert!(!is_same_or_child_path("D:/project/src/main", "D:/project/src/main_test.go"));
+  }
 }
 

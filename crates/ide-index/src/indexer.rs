@@ -8,15 +8,53 @@ use nucleo_matcher::{Config, Matcher, Utf32Str};
 use crate::types::{IndexStatsDto, IndexedFile, IndexedSymbol, SearchResultItem};
 use crate::symbols::extract_symbols_from_content;
 
-fn is_ignored_path(path: &Path) -> bool {
-    let s = path.to_string_lossy();
-    s.contains(".git")
-        || s.contains("node_modules")
-        || s.contains("target")
-        || s.contains("dist")
-        || s.contains(".idea")
-        || s.contains(".vscode")
-        || s.contains("build")
+fn is_ignored_relative_path(root: &Path, path: &Path) -> bool {
+    let root_str = root.to_string_lossy().replace('\\', "/");
+    let root_clean = root_str.strip_prefix("//?/").or_else(|| root_str.strip_prefix(r"\\?\")).unwrap_or(&root_str);
+    let path_str = path.to_string_lossy().replace('\\', "/");
+    let path_clean = path_str.strip_prefix("//?/").or_else(|| path_str.strip_prefix(r"\\?\")).unwrap_or(&path_str);
+
+    let rel_str = if !root_clean.is_empty() && path_clean.to_lowercase().starts_with(&root_clean.to_lowercase()) {
+        let rem = &path_clean[root_clean.len()..];
+        rem.trim_start_matches('/')
+    } else {
+        match path.strip_prefix(root) {
+            Ok(p) => return check_components(p),
+            Err(_) => path_clean,
+        }
+    };
+
+    check_components(Path::new(rel_str))
+}
+
+fn check_components(rel: &Path) -> bool {
+    for comp in rel.components() {
+        let s = comp.as_os_str().to_string_lossy().to_lowercase();
+        if s == ".git"
+            || s == "node_modules"
+            || s == "target"
+            || s == "dist"
+            || s == ".idea"
+            || s == ".vscode"
+            || s == "build"
+            || s == "out"
+            || s == "bin"
+            || s == ".gradle"
+            || s == "__pycache__"
+        {
+            return true;
+        }
+    }
+    false
+}
+
+fn canonicalize_project_key(path: &str) -> String {
+    let p = Path::new(path);
+    if let Ok(canon) = p.canonicalize() {
+        canon.to_string_lossy().to_string()
+    } else {
+        path.trim_end_matches(['/', '\\']).to_string()
+    }
 }
 
 #[derive(Default)]
@@ -28,12 +66,14 @@ pub struct ProjectIndex {
 
 pub struct IndexManager {
     indices: RwLock<HashMap<String, Arc<ProjectIndex>>>,
+    build_mutex: std::sync::Mutex<()>,
 }
 
 impl IndexManager {
     pub fn new() -> Self {
         Self {
             indices: RwLock::new(HashMap::new()),
+            build_mutex: std::sync::Mutex::new(()),
         }
     }
 
@@ -44,12 +84,27 @@ impl IndexManager {
             return Err(format!("Project path does not exist: {}", project_path));
         }
 
+        let key = canonicalize_project_key(project_path);
+        let _guard = self.build_mutex.lock().map_err(|e| e.to_string())?;
+
+        // Double-checked re-validation: return cached index if another thread just built it
+        if let Ok(lock) = self.indices.read() {
+            if let Some(existing) = lock.get(&key) {
+                return Ok(IndexStatsDto {
+                    project_path: project_path.to_string(),
+                    total_files: existing.files.len(),
+                    total_symbols: existing.symbols.len(),
+                    duration_ms: 0,
+                });
+            }
+        }
+
         let mut indexed_files = Vec::new();
         let mut indexed_symbols = Vec::new();
 
         for entry in WalkDir::new(root)
             .into_iter()
-            .filter_entry(|e| !is_ignored_path(e.path()))
+            .filter_entry(|e| !is_ignored_relative_path(root, e.path()))
             .filter_map(Result::ok)
         {
             if entry.depth() == 0 {
@@ -79,7 +134,7 @@ impl IndexManager {
             if !is_folder {
                 if let Some(ref ext) = extension {
                     let ext_lower = ext.to_lowercase();
-                    if matches!(ext_lower.as_str(), "rs" | "ts" | "tsx" | "js" | "jsx" | "vue" | "py" | "go" | "java" | "kt" | "cs" | "c" | "cpp" | "h") {
+                    if matches!(ext_lower.as_str(), "rs" | "ts" | "tsx" | "js" | "jsx" | "vue" | "py" | "go" | "java" | "kt" | "cs") {
                         if let Ok(metadata) = entry.metadata() {
                             if metadata.len() < 1_000_000 {
                                 if let Ok(content) = std::fs::read_to_string(path) {
@@ -109,7 +164,13 @@ impl IndexManager {
 
         {
             let mut lock = self.indices.write().map_err(|e| e.to_string())?;
-            lock.insert(project_path.to_string(), Arc::new(project_index));
+            // Bound index cache to max 8 projects to avoid unbounded memory growth
+            if lock.len() >= 8 && !lock.contains_key(&key) {
+                if let Some(old_key) = lock.keys().next().cloned() {
+                    lock.remove(&old_key);
+                }
+            }
+            lock.insert(key, Arc::new(project_index));
         }
 
         Ok(IndexStatsDto {
@@ -121,16 +182,17 @@ impl IndexManager {
     }
 
     pub fn get_or_build(&self, project_path: &str) -> Arc<ProjectIndex> {
+        let key = canonicalize_project_key(project_path);
         {
             if let Ok(lock) = self.indices.read() {
-                if let Some(index) = lock.get(project_path) {
+                if let Some(index) = lock.get(&key) {
                     return Arc::clone(index);
                 }
             }
         }
         let _ = self.build_index(project_path);
         if let Ok(lock) = self.indices.read() {
-            if let Some(index) = lock.get(project_path) {
+            if let Some(index) = lock.get(&key) {
                 return Arc::clone(index);
             }
         }

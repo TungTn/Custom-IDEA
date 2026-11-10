@@ -51,10 +51,6 @@ pub fn normalize_connection_url(raw: &str) -> String {
     } else if trimmed.ends_with(".sqlite") || trimmed.ends_with(".db") || trimmed.contains('\\') || trimmed.contains('/') {
         // Bare file path, assume SQLite
         let norm_path = trimmed.replace('\\', "/");
-        // Ensure directory exists
-        if let Some(parent) = Path::new(trimmed).parent() {
-            let _ = std::fs::create_dir_all(parent);
-        }
         format!("sqlite://{}?mode=rwc", norm_path)
     } else {
         trimmed.to_string()
@@ -98,9 +94,58 @@ async fn get_connection_pool(url: &str) -> Result<AnyPool, String> {
         .await
         .map_err(|e| format!("Failed to connect to {}: {}", norm_url, e))?;
 
-    let mut writer = cache.write().await;
-    writer.insert(norm_url, pool.clone());
-    Ok(pool)
+    let (pool_to_return, duplicate_to_close) = {
+        let mut writer = cache.write().await;
+        if let Some(existing) = writer.get(&norm_url) {
+            (existing.clone(), Some(pool))
+        } else {
+            let mut evicted = None;
+            if writer.len() >= 16 {
+                if let Some(old_key) = writer.keys().next().cloned() {
+                    evicted = writer.remove(&old_key);
+                }
+            }
+            writer.insert(norm_url, pool.clone());
+            (pool, evicted)
+        }
+    };
+
+    if let Some(to_close) = duplicate_to_close {
+        tokio::spawn(async move {
+            let _ = to_close.close().await;
+        });
+    }
+    Ok(pool_to_return)
+}
+
+pub fn escape_sql_identifier(ident: &str, is_mysql: bool) -> String {
+    if is_mysql {
+        format!("`{}`", ident.replace('`', "``"))
+    } else {
+        format!("\"{}\"", ident.replace('"', "\"\""))
+    }
+}
+
+pub fn strip_leading_sql_comments_and_whitespace(mut sql: &str) -> &str {
+    loop {
+        sql = sql.trim_start();
+        if sql.starts_with("--") {
+            if let Some(pos) = sql.find('\n') {
+                sql = &sql[pos + 1..];
+            } else {
+                return "";
+            }
+        } else if sql.starts_with("/*") {
+            if let Some(pos) = sql.find("*/") {
+                sql = &sql[pos + 2..];
+            } else {
+                return "";
+            }
+        } else {
+            break;
+        }
+    }
+    sql
 }
 
 
@@ -242,11 +287,15 @@ pub async fn db_execute_query(
     };
 
     let trimmed = query.trim();
-    let is_select = trimmed.to_uppercase().starts_with("SELECT")
-        || trimmed.to_uppercase().starts_with("PRAGMA")
-        || trimmed.to_uppercase().starts_with("EXPLAIN")
-        || trimmed.to_uppercase().starts_with("SHOW")
-        || trimmed.to_uppercase().starts_with("DESCRIBE");
+    let cleaned = strip_leading_sql_comments_and_whitespace(trimmed);
+    let upper = cleaned.to_uppercase();
+    let is_select = upper.starts_with("SELECT")
+        || upper.starts_with("WITH")
+        || upper.starts_with("PRAGMA")
+        || upper.starts_with("EXPLAIN")
+        || upper.starts_with("SHOW")
+        || upper.starts_with("DESCRIBE")
+        || upper.starts_with("VALUES");
 
     if is_select {
         match sqlx::query(trimmed).fetch_all(&pool).await {
@@ -353,9 +402,10 @@ async fn introspect_sqlite(pool: &AnyPool) -> Result<Vec<DbSchemaDto>, String> {
     let mut tables = Vec::new();
     for row in rows {
         let table_name: String = row.try_get(0).map_err(|e| e.to_string())?;
+        let safe_table = escape_sql_identifier(&table_name, false);
 
         // 1. Columns via PRAGMA table_info
-        let pragma_cols_query = format!("PRAGMA table_info(\"{}\")", table_name);
+        let pragma_cols_query = format!("PRAGMA table_info({})", safe_table);
         let col_rows = sqlx::query(&pragma_cols_query)
             .fetch_all(pool)
             .await
@@ -381,7 +431,7 @@ async fn introspect_sqlite(pool: &AnyPool) -> Result<Vec<DbSchemaDto>, String> {
         }
 
         // 2. Indexes via PRAGMA index_list
-        let pragma_idx_query = format!("PRAGMA index_list(\"{}\")", table_name);
+        let pragma_idx_query = format!("PRAGMA index_list({})", safe_table);
         let idx_rows = sqlx::query(&pragma_idx_query)
             .fetch_all(pool)
             .await
@@ -391,8 +441,9 @@ async fn introspect_sqlite(pool: &AnyPool) -> Result<Vec<DbSchemaDto>, String> {
         for idx_row in idx_rows {
             let idx_name: String = idx_row.try_get("name").unwrap_or_default();
             let unique: i64 = idx_row.try_get("unique").unwrap_or(0);
+            let safe_idx = escape_sql_identifier(&idx_name, false);
 
-            let pragma_idx_info = format!("PRAGMA index_info(\"{}\")", idx_name);
+            let pragma_idx_info = format!("PRAGMA index_info({})", safe_idx);
             let idx_col_rows = sqlx::query(&pragma_idx_info)
                 .fetch_all(pool)
                 .await
@@ -413,7 +464,7 @@ async fn introspect_sqlite(pool: &AnyPool) -> Result<Vec<DbSchemaDto>, String> {
         }
 
         // 3. Row count
-        let count_query = format!("SELECT CAST(COUNT(*) AS INTEGER) as cnt FROM \"{}\"", table_name);
+        let count_query = format!("SELECT CAST(COUNT(*) AS INTEGER) as cnt FROM {}", safe_table);
         let count_res = sqlx::query(&count_query).fetch_one(pool).await;
         let row_count: i64 = match count_res {
             Ok(r) => {
@@ -596,14 +647,17 @@ pub async fn db_get_table_data(
     let limit_val = limit.unwrap_or(25);
     let offset_val = offset.unwrap_or(0);
 
+    let is_mysql = url.to_lowercase().starts_with("mysql");
+    let safe_table = escape_sql_identifier(&table, is_mysql);
     let qualified_name = if let Some(ref s) = schema {
         if s.is_empty() || s == "main" || s == "public" || s == "default" {
-            format!("\"{}\"", table)
+            safe_table
         } else {
-            format!("\"{}\".\"{}\"", s, table)
+            let safe_schema = escape_sql_identifier(s, is_mysql);
+            format!("{}.{}", safe_schema, safe_table)
         }
     } else {
-        format!("\"{}\"", table)
+        safe_table
     };
 
     let mut query = format!("SELECT * FROM {}", qualified_name);
@@ -625,4 +679,18 @@ pub async fn db_get_table_data(
     query.push_str(&format!(" LIMIT {} OFFSET {}", limit_val, offset_val));
 
     db_execute_query(url, query, Some(limit_val)).await
+}
+
+#[tauri::command]
+pub async fn db_close_pool(url: String) -> Result<(), String> {
+    let norm_url = normalize_connection_url(&url);
+    let cache = get_pool_cache();
+    let pool_opt = {
+        let mut writer = cache.write().await;
+        writer.remove(&norm_url)
+    };
+    if let Some(pool) = pool_opt {
+        let _ = pool.close().await;
+    }
+    Ok(())
 }

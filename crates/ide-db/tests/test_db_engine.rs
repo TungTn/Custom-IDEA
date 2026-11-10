@@ -53,5 +53,16 @@ async fn test_sqlite_engine_full_workflow() {
     assert_eq!(grid_data.rows.len(), 1);
     assert_eq!(grid_data.rows[0]["username"], "tungtn");
 
+    // 6. Test WITH CTE with leading comments
+    let cte_query = "-- leading comment\n/* block comment */\nWITH c AS (SELECT 42 AS num, 'cte_val' AS txt) SELECT * FROM c";
+    let cte_res = db_execute_query(db_url.to_string(), cte_query.to_string(), None).await.expect("CTE query failed");
+    assert_eq!(cte_res.columns, vec!["num", "txt"]);
+    assert_eq!(cte_res.rows.len(), 1);
+    assert_eq!(cte_res.rows[0]["txt"], "cte_val");
+
+    // 7. Test db_close_pool
+    let close_res = db_close_pool(db_url.to_string()).await;
+    assert!(close_res.is_ok());
+
     println!("All SQLite engine tests PASSED!");
 }

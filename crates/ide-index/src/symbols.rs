@@ -56,16 +56,44 @@ pub fn extract_symbols_from_content(
         .unwrap_or("")
         .to_lowercase();
 
+    let is_c_family = matches!(ext.as_str(), "rs" | "ts" | "tsx" | "js" | "jsx" | "java" | "go" | "cs");
+    let mut in_block_comment = false;
+
     for (idx, line) in content.lines().enumerate() {
         let line_num = idx + 1;
         let trimmed = line.trim();
-        if trimmed.is_empty() || trimmed.starts_with("//") || trimmed.starts_with('#') || trimmed.starts_with("/*") {
+
+        let line_to_parse = if is_c_family {
+            if in_block_comment {
+                if let Some(pos) = trimmed.find("*/") {
+                    in_block_comment = false;
+                    trimmed[pos + 2..].trim()
+                } else {
+                    continue;
+                }
+            } else if trimmed.starts_with("/*") {
+                if let Some(pos) = trimmed.find("*/") {
+                    trimmed[pos + 2..].trim()
+                } else {
+                    in_block_comment = true;
+                    continue;
+                }
+            } else {
+                trimmed
+            }
+        } else {
+            trimmed
+        };
+
+        if line_to_parse.is_empty() || line_to_parse.starts_with("//") || line_to_parse.starts_with('#') {
             continue;
         }
 
+        let eval_line = if line_to_parse != trimmed { line_to_parse } else { line };
+
         match ext.as_str() {
             "rs" => {
-                if let Some(caps) = RUST_FN_RE.captures(line) {
+                if let Some(caps) = RUST_FN_RE.captures(eval_line) {
                     if let Some(m) = caps.get(1) {
                         symbols.push(IndexedSymbol {
                             name: m.as_str().to_string(),
@@ -74,14 +102,14 @@ pub fn extract_symbols_from_content(
                             relative_path: relative_path.to_string(),
                             line_number: line_num,
                             column_number: m.start() + 1,
-                            snippet: Some(trimmed.to_string()),
+                            snippet: Some(eval_line.to_string()),
                         });
                     }
-                } else if let Some(caps) = RUST_STRUCT_RE.captures(line) {
+                } else if let Some(caps) = RUST_STRUCT_RE.captures(eval_line) {
                     if let Some(m) = caps.get(1) {
-                        let kind = if line.contains("enum ") {
+                        let kind = if eval_line.contains("enum ") {
                             SymbolKind::Enum
-                        } else if line.contains("trait ") {
+                        } else if eval_line.contains("trait ") {
                             SymbolKind::Interface
                         } else {
                             SymbolKind::Struct
@@ -93,7 +121,7 @@ pub fn extract_symbols_from_content(
                             relative_path: relative_path.to_string(),
                             line_number: line_num,
                             column_number: m.start() + 1,
-                            snippet: Some(trimmed.to_string()),
+                            snippet: Some(eval_line.to_string()),
                         });
                     }
                 }

@@ -1,7 +1,16 @@
 import React, { useState } from 'react';
-import { RefreshCw, CheckCircle2, AlertTriangle, Check, Plus, Trash2, Link, Layers, Archive, X } from 'lucide-react';
+import { RefreshCw, CheckCircle2, AlertTriangle, Check, Plus, Trash2, Link, Layers, Archive, X, Globe } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
 import { SettingPanelProps } from './types';
+import { GitLabAccount } from '../../../types/gitlab';
+import {
+  getGitLabAccounts,
+  saveGitLabAccount,
+  removeGitLabAccount,
+  getActiveGitLabAccountId,
+  setActiveGitLabAccountId,
+  testGitLabConnection,
+} from '../../../services/gitlabService';
 
 export const VersionControlPanel: React.FC<SettingPanelProps> = ({
   selectedId,
@@ -23,6 +32,63 @@ export const VersionControlPanel: React.FC<SettingPanelProps> = ({
   const [isAddPatternOpen, setIsAddPatternOpen] = useState(false);
   const [newIssuePattern, setNewIssuePattern] = useState('');
   const [newIssueUrl, setNewIssueUrl] = useState('');
+
+  // GitLab Accounts state
+  const [gitlabAccounts, setGitlabAccounts] = useState<GitLabAccount[]>(() => getGitLabAccounts());
+  const [activeGitlabId, setActiveGitlabId] = useState<string | null>(() => getActiveGitLabAccountId());
+  const [isAddGitLabOpen, setIsAddGitLabOpen] = useState(false);
+  const [glHost, setGlHost] = useState('');
+  const [glToken, setGlToken] = useState('');
+  const [glTesting, setGlTesting] = useState(false);
+  const [glError, setGlError] = useState<string | null>(null);
+
+  const handleAddGitLabAccount = async () => {
+    if (!glHost.trim()) {
+      setGlError('Vui lòng nhập GitLab Server URL.');
+      return;
+    }
+    if (!glToken.trim()) {
+      setGlError('Vui lòng nhập Personal Access Token.');
+      return;
+    }
+
+    setGlTesting(true);
+    setGlError(null);
+    try {
+      const user = await testGitLabConnection(glHost.trim(), glToken.trim());
+      const newAcc: GitLabAccount = {
+        id: `gl_${Date.now()}`,
+        host: glHost.trim(),
+        token: glToken.trim(),
+        user,
+        createdAt: Date.now(),
+        lastVerifiedAt: Date.now(),
+      };
+      const updated = saveGitLabAccount(newAcc);
+      setGitlabAccounts(updated);
+      setActiveGitlabId(newAcc.id);
+      setIsAddGitLabOpen(false);
+      setGlHost('');
+      setGlToken('');
+      onShowToast?.('GitLab Connected', `Đã kết nối tài khoản @${user.username} (${user.name})`, 'success');
+    } catch (err: any) {
+      setGlError(typeof err === 'string' ? err : err.message || 'Kết nối thất bại');
+    } finally {
+      setGlTesting(false);
+    }
+  };
+
+  const handleRemoveGitLabAccount = (id: string) => {
+    const updated = removeGitLabAccount(id);
+    setGitlabAccounts(updated);
+    setActiveGitlabId(getActiveGitLabAccountId());
+    onShowToast?.('Account Removed', 'Đã xóa tài khoản GitLab', 'info');
+  };
+
+  const handleSelectActiveGitLab = (id: string) => {
+    setActiveGitLabAccountId(id);
+    setActiveGitlabId(id);
+  };
 
   const handleTestGit = async () => {
     setGitTestStatus('testing');
@@ -207,6 +273,180 @@ export const VersionControlPanel: React.FC<SettingPanelProps> = ({
                   </button>
                 </div>
               )}
+            </div>
+
+            {/* GitLab Accounts Section */}
+            <div className="pt-3 border-t border-[#393B40] space-y-3">
+              <div className="flex items-center justify-between">
+                <div>
+                  <h3 className="text-sm font-semibold text-white flex items-center gap-2">
+                    <Globe size={14} className="text-[#FC6D26]" />
+                    <span>GitLab Accounts</span>
+                  </h3>
+                  <p className="text-[11px] text-[#868A91]">Kết nối tài khoản GitLab (gitlab.com hoặc server nội bộ gitlab.mic.vn).</p>
+                </div>
+                {!isAddGitLabOpen && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setGlHost('https://gitlab.mic.vn');
+                      setGlToken('');
+                      setGlError(null);
+                      setIsAddGitLabOpen(true);
+                    }}
+                    className="px-2.5 py-1 text-xs bg-[#2B2D30] hover:bg-[#393B40] border border-[#4E5157] text-[#DFE1E5] rounded flex items-center gap-1.5 transition-colors"
+                  >
+                    <Plus size={13} /> Add GitLab Account...
+                  </button>
+                )}
+              </div>
+
+              {/* Form add account */}
+              {isAddGitLabOpen && (
+                <div className="bg-[#26282B] border border-[#FC6D26]/40 rounded p-3.5 space-y-3">
+                  <div className="font-semibold text-white text-xs flex items-center justify-between">
+                    <span>Thêm tài khoản GitLab mới</span>
+                    <button
+                      type="button"
+                      onClick={() => setIsAddGitLabOpen(false)}
+                      className="text-[#868A91] hover:text-[#DFE1E5]"
+                    >
+                      <X size={14} />
+                    </button>
+                  </div>
+
+                  <div>
+                    <label className="text-[#868A91] block mb-1">GitLab Server URL:</label>
+                    <input
+                      type="text"
+                      value={glHost}
+                      onChange={(e) => setGlHost(e.target.value)}
+                      placeholder="https://gitlab.mic.vn hoặc https://gitlab.com"
+                      className="w-full bg-[#1E1F22] border border-[#393B40] focus:border-[#3574F0] rounded px-3 py-1.5 text-white font-mono outline-none"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="text-[#868A91] block mb-1">Personal Access Token (yêu cầu quyền api hoặc read_api):</label>
+                    <input
+                      type="password"
+                      value={glToken}
+                      onChange={(e) => setGlToken(e.target.value)}
+                      placeholder="glpat-xxxxxxxxxxxxxxxxxxxx"
+                      className="w-full bg-[#1E1F22] border border-[#393B40] focus:border-[#3574F0] rounded px-3 py-1.5 text-white font-mono outline-none"
+                    />
+                  </div>
+
+                  {glError && (
+                    <div className="text-[11px] text-[#E05555] bg-[#362222] border border-[#E05555]/30 rounded p-2 flex items-start gap-1.5">
+                      <AlertTriangle size={14} className="flex-shrink-0 mt-0.5" />
+                      <span>{glError}</span>
+                    </div>
+                  )}
+
+                  <div className="flex items-center justify-end gap-2 pt-1">
+                    <button
+                      type="button"
+                      onClick={() => setIsAddGitLabOpen(false)}
+                      disabled={glTesting}
+                      className="px-3 py-1 bg-[#2B2D30] hover:bg-[#35373B] text-[#DFE1E5] rounded border border-[#393B40]"
+                    >
+                      Hủy
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleAddGitLabAccount}
+                      disabled={glTesting || !glHost.trim() || !glToken.trim()}
+                      className="px-3.5 py-1 bg-[#3574F0] hover:bg-[#3064D0] text-white rounded font-medium flex items-center gap-1.5 disabled:opacity-50"
+                    >
+                      {glTesting ? (
+                        <>
+                          <RefreshCw size={12} className="animate-spin" />
+                          <span>Đang kiểm tra kết nối...</span>
+                        </>
+                      ) : (
+                        <span>Kiểm tra & Lưu tài khoản</span>
+                      )}
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* Accounts list */}
+              <div className="space-y-2">
+                {gitlabAccounts.length === 0 ? (
+                  <div className="border border-[#393B40] rounded bg-[#26282B] p-3 text-center text-[#868A91]">
+                    Chưa kết nối tài khoản GitLab nào. Nhấn "+ Add GitLab Account" để bắt đầu.
+                  </div>
+                ) : (
+                  gitlabAccounts.map((acc) => {
+                    const isActive = acc.id === activeGitlabId;
+                    return (
+                      <div
+                        key={acc.id}
+                        className={`border rounded p-3 flex items-center justify-between transition-colors ${
+                          isActive
+                            ? 'bg-[#2B2D30] border-[#3574F0]/60'
+                            : 'bg-[#26282B] border-[#393B40]'
+                        }`}
+                      >
+                        <div className="flex items-center gap-3">
+                          {acc.user?.avatar_url ? (
+                            <img
+                              src={acc.user.avatar_url}
+                              alt={acc.user.username}
+                              className="w-8 h-8 rounded-full border border-[#4E5157] object-cover"
+                            />
+                          ) : (
+                            <div className="w-8 h-8 rounded-full bg-[#FC6D26] text-white flex items-center justify-center font-bold text-xs">
+                              {acc.user?.name?.slice(0, 2).toUpperCase() || 'GL'}
+                            </div>
+                          )}
+                          <div>
+                            <div className="flex items-center gap-2">
+                              <span className="font-semibold text-white">
+                                {acc.user?.name || acc.user?.username || 'GitLab User'}
+                              </span>
+                              <span className="text-[11px] text-[#868A91]">
+                                (@{acc.user?.username || 'user'})
+                              </span>
+                              {isActive && (
+                                <span className="bg-[#3574F0]/20 text-[#3574F0] text-[10px] px-1.5 py-0.5 rounded font-medium border border-[#3574F0]/30">
+                                  Default
+                                </span>
+                              )}
+                            </div>
+                            <div className="text-[11px] text-[#868A91] font-mono flex items-center gap-1.5 mt-0.5">
+                              <span>{acc.host}</span>
+                              {acc.user?.email && <span>• {acc.user.email}</span>}
+                            </div>
+                          </div>
+                        </div>
+
+                        <div className="flex items-center gap-2">
+                          {!isActive && (
+                            <button
+                              type="button"
+                              onClick={() => handleSelectActiveGitLab(acc.id)}
+                              className="px-2.5 py-1 text-[11px] bg-[#2B2D30] hover:bg-[#35373B] text-[#DFE1E5] rounded border border-[#393B40]"
+                            >
+                              Đặt làm mặc định
+                            </button>
+                          )}
+                          <button
+                            type="button"
+                            onClick={() => handleRemoveGitLabAccount(acc.id)}
+                            className="p-1.5 text-[#868A91] hover:text-[#E05555] hover:bg-[#3E2424] rounded transition-colors"
+                            title="Xóa tài khoản này"
+                          >
+                            <Trash2 size={14} />
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })
+                )}
+              </div>
             </div>
 
             <div className="flex items-center justify-between">

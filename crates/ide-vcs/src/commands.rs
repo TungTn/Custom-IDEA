@@ -884,3 +884,134 @@ pub fn git_resolve_conflict(project_path: String, file_path: String, resolved_co
   run_git_cmd(&project_path, &["add", "--", trimmed])
 }
 
+#[derive(Debug, serde::Serialize, serde::Deserialize, TS)]
+#[ts(export)]
+pub struct GitLabUserDto {
+  pub id: i64,
+  pub username: String,
+  pub name: String,
+  pub email: Option<String>,
+  pub avatar_url: Option<String>,
+  pub web_url: Option<String>,
+}
+
+#[derive(Debug, serde::Serialize, serde::Deserialize, TS)]
+#[ts(export)]
+pub struct GitLabProjectDto {
+  pub id: i64,
+  pub name: String,
+  pub name_with_namespace: String,
+  pub path_with_namespace: String,
+  pub http_url_to_repo: String,
+  pub ssh_url_to_repo: String,
+  pub default_branch: Option<String>,
+  pub visibility: Option<String>,
+  pub description: Option<String>,
+  pub last_activity_at: Option<String>,
+  pub web_url: Option<String>,
+  pub star_count: Option<i64>,
+}
+
+fn normalize_gitlab_base_url(host: &str) -> String {
+  let trimmed = host.trim().trim_end_matches('/');
+  if !trimmed.starts_with("http://") && !trimmed.starts_with("https://") {
+    format!("https://{}", trimmed)
+  } else {
+    trimmed.to_string()
+  }
+}
+
+#[tauri::command]
+pub async fn gitlab_test_connection(host: String, token: String) -> Result<GitLabUserDto, String> {
+  let base_url = normalize_gitlab_base_url(&host);
+  let api_url = format!("{}/api/v4/user", base_url);
+
+  let client = reqwest::Client::builder()
+    .danger_accept_invalid_certs(true)
+    .timeout(std::time::Duration::from_secs(12))
+    .build()
+    .map_err(|e| format!("Failed to create HTTP client: {}", e))?;
+
+  let res = client
+    .get(&api_url)
+    .header("PRIVATE-TOKEN", token.trim())
+    .header("User-Agent", "Custom-IDEA-GitLab/1.0")
+    .send()
+    .await
+    .map_err(|e| format!("Connection error to GitLab ({}): {}", base_url, e))?;
+
+  if !res.status().is_success() {
+    let status = res.status();
+    let body = res.text().await.unwrap_or_default();
+    return Err(format!("GitLab returned HTTP {}: {}", status, body));
+  }
+
+  let user: GitLabUserDto = res
+    .json()
+    .await
+    .map_err(|e| format!("Failed to parse GitLab user response: {}", e))?;
+
+  Ok(user)
+}
+
+#[tauri::command]
+pub async fn gitlab_list_projects(
+  host: String,
+  token: String,
+  search: Option<String>,
+  page: Option<u32>,
+  per_page: Option<u32>,
+) -> Result<Vec<GitLabProjectDto>, String> {
+  let base_url = normalize_gitlab_base_url(&host);
+  let api_url = format!("{}/api/v4/projects", base_url);
+  let p = page.unwrap_or(1).to_string();
+  let pp = per_page.unwrap_or(50).to_string();
+
+  let mut query_params = vec![
+    ("membership", "true"),
+    ("simple", "true"),
+    ("per_page", &pp),
+    ("page", &p),
+    ("order_by", "updated_at"),
+    ("sort", "desc"),
+  ];
+
+  let search_val;
+  if let Some(ref q) = search {
+    let trimmed = q.trim();
+    if !trimmed.is_empty() {
+      search_val = trimmed;
+      query_params.push(("search", search_val));
+    }
+  }
+
+  let client = reqwest::Client::builder()
+    .danger_accept_invalid_certs(true)
+    .timeout(std::time::Duration::from_secs(15))
+    .build()
+    .map_err(|e| format!("Failed to create HTTP client: {}", e))?;
+
+  let res = client
+    .get(&api_url)
+    .query(&query_params)
+    .header("PRIVATE-TOKEN", token.trim())
+    .header("User-Agent", "Custom-IDEA-GitLab/1.0")
+    .send()
+    .await
+    .map_err(|e| format!("Connection error to GitLab ({}): {}", base_url, e))?;
+
+  if !res.status().is_success() {
+    let status = res.status();
+    let body = res.text().await.unwrap_or_default();
+    return Err(format!("GitLab returned HTTP {}: {}", status, body));
+  }
+
+  let projects: Vec<GitLabProjectDto> = res
+    .json()
+    .await
+    .map_err(|e| format!("Failed to parse GitLab projects response: {}", e))?;
+
+  Ok(projects)
+}
+
+

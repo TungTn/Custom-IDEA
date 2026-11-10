@@ -152,28 +152,22 @@ function deletePackage(config, packageId, version) {
   });
 }
 
-// 7. CƠ CHẾ DỌN DẸP TRIỆT ĐỂ: XÓA SẠCH BẢN CŨ TRƯỚC KHI TẢI BẢN MỚI
+// 7. CƠ CHẾ DỌN DẸP TRIỆT ĐỂ: XÓA SẠCH PACKAGE CŨ TRƯỚC KHI TẢI BẢN MỚI
 async function purgeOldReleases(config) {
-  console.log('\n[*] Bắt đầu kiểm tra và dọn dẹp triệt để các tệp/package cũ trên GitLab...');
+  console.log('\n[*] Bắt đầu kiểm tra và dọn dẹp triệt để các package cũ trên GitLab...');
   try {
     const packages = await getGitLabPackages(config);
 
-    // Bước A: Xóa toàn bộ các package phiên bản cũ khác "latest"
-    const nonLatestPackages = packages.filter((p) => p.name === config.packageName && p.version !== 'latest');
-    for (const oldPkg of nonLatestPackages) {
-      await deletePackage(config, oldPkg.id, oldPkg.version);
-    }
-
-    // Bước B: Dọn sạch toàn bộ các tệp tin hiện có trong package "latest"
-    const latestPkg = packages.find((p) => p.name === config.packageName && p.version === 'latest');
-    if (latestPkg) {
-      const files = await getPackageFiles(config, latestPkg.id);
-      for (const file of files) {
-        await deletePackageFile(config, latestPkg.id, file.id, file.file_name);
+    // Xóa TOÀN BỘ các package cũ trùng tên (bao gồm cả package "latest" hiện có)
+    // Để tránh việc GitLab Generic Package Registry lưu đè nhiều bản asset cũ vào cùng 1 package
+    const existingPackages = packages.filter((p) => p.name === config.packageName);
+    if (existingPackages.length > 0) {
+      for (const pkg of existingPackages) {
+        await deletePackage(config, pkg.id, pkg.version);
       }
-      console.log(`[OK] Đã dọn sạch toàn bộ tệp cũ trong package '${config.packageName}:latest'.`);
+      console.log(`[OK] Đã dọn sạch ${existingPackages.length} package cũ của '${config.packageName}'.`);
     } else {
-      console.log(`[*] Package '${config.packageName}:latest' chưa có hoặc đang trống.`);
+      console.log(`[*] Chưa có package nào của '${config.packageName}' trên máy chủ.`);
     }
   } catch (err) {
     console.warn(`[!] Cảnh báo dọn dẹp: ${err.message}`);

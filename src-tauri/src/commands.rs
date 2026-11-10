@@ -140,6 +140,8 @@ pub fn get_ipc_handler() -> impl Fn(tauri::ipc::Invoke<tauri::Wry>) -> bool + Se
     git::git_get_conflicts,
     git::git_get_conflict_stages,
     git::git_resolve_conflict,
+    git::gitlab_test_connection,
+    git::gitlab_list_projects,
 
     // ─── 9. LSP Language Server Commands (ide-lsp) ───
     lsp::lsp_start_server,

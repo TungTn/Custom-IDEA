@@ -2146,6 +2146,7 @@ dependencies = [
 name = "ide-vcs"
 version = "0.1.2"
 dependencies = [
+ "reqwest 0.12.28",
  "serde",
  "serde_json",
  "tauri",

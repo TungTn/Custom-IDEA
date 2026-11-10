@@ -58,4 +58,10 @@ Tích hợp khả năng kết nối tài khoản GitLab (hỗ trợ cả GitLab.
 3. Trong modal Clone ("Get from Version Control"), chuyển sang tab GitLab thấy danh sách dự án.
 4. Tìm kiếm project nhanh chóng và click chọn project để tự động điền URL/thư mục.
 5. Clone thành công repo về máy và tự động mở project.
-6. Build `pnpm build` và `cargo check` không phát sinh lỗi.
+## 4. Trạng thái thực hiện (Status)
+- [x] **Phase 1**: Rust Backend Engine (`crates/ide-vcs` & `src-tauri/src/commands.rs`) - Tauri commands `gitlab_test_connection` và `gitlab_list_projects`.
+- [x] **Phase 2**: Frontend Data Models & Services (`src/types/gitlab.ts`, `src/services/gitlabService.ts`).
+- [x] **Phase 3**: Giao diện Cài đặt Tài khoản GitLab (`src/features/settings/panels/VersionControlPanel.tsx`).
+- [x] **Phase 4**: Nâng cấp Modal "Get from Version Control" (`src/features/git/VcsCloneModal.tsx`) với 2 tab (Repository URL & GitLab).
+- [x] **Phase 5**: Kiểm thử `pnpm build` và đóng gói bản `dist-portable/Custom-IDEA-Portable.exe`.
+

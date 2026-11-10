@@ -167,7 +167,11 @@ export const App: React.FC = () => {
 
   useEffect(() => {
     if (isUpdateOpen) {
-      autoUpdate.checkNow(true);
+      if (autoUpdate.status !== 'readyRestart' && autoUpdate.status !== 'downloading') {
+        autoUpdate.checkNow(true);
+      } else {
+        autoUpdate.setIsModalOpen(true);
+      }
     }
   }, [isUpdateOpen]);
 

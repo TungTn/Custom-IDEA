@@ -1,7 +1,7 @@
 ---
 phase: 4
 title: "Tích Hợp System Settings, Menu TopBar & Kiểm Thử E2E Cục Bộ"
-status: pending
+status: completed
 priority: P2
 effort: "2h"
 dependencies: [1, 2, 3]
@@ -64,10 +64,10 @@ Hoàn thiện toàn bộ các điểm chạm giao diện người dùng (User To
    - Chạy mock server và xác nhận toàn bộ quy trình hoạt động trơn tru.
 
 ## Success Criteria
-- [ ] Mở `Settings -> Appearance & Behavior -> System Settings -> Updates` hiển thị đầy đủ giao diện cấu hình và nút `Check Now...`.
-- [ ] Bấm `Help -> Check for Updates...` từ thanh menu TopBar mở ngay `UpdateModal`.
-- [ ] TopBar hiển thị badge thông báo khi có bản cập nhật mới trong nền.
-- [ ] Chạy kịch bản `mock-update-server.mjs`, client tải và xác thực SHA-256 thành công.
+- [x] Mở `Settings -> Appearance & Behavior -> System Settings -> Updates` hiển thị đầy đủ giao diện cấu hình và nút `Check Now...`.
+- [x] Bấm `Help -> Check for Updates...` từ thanh menu TopBar mở ngay `UpdateModal`.
+- [x] TopBar hiển thị badge thông báo khi có bản cập nhật mới trong nền.
+- [x] Chạy kịch bản `mock-update-server.mjs`, client tải và xác thực SHA-256 thành công.
 
 ## Risk Assessment
 - **Cấu hình nhầm endpoint trong môi trường dev:** Sử dụng biến môi trường hoặc fallback thông minh để khi dev có thể trỏ về mock server cục bộ, khi release thì trỏ về `gitlab.example.com`.

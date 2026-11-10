@@ -5,12 +5,12 @@ import { invoke } from '@tauri-apps/api/core';
 import { VersionMetadata, UpdateProgress } from '../types/updater';
 
 // Cấu hình cập nhật (ưu tiên biến môi trường hoặc cấu hình tùy chỉnh)
-export const DEFAULT_GITLAB_HOST = import.meta.env.VITE_GITLAB_HOST || 'gitlab.example.com';
-export const DEFAULT_PROJECT_ID = import.meta.env.VITE_GITLAB_PROJECT_ID || '299';
-export const DEFAULT_PACKAGE_NAME = import.meta.env.VITE_GITLAB_PACKAGE_NAME || 'custom-idea';
+export const DEFAULT_GITLAB_HOST = import.meta.env?.VITE_GITLAB_HOST || 'gitlab.example.com';
+export const DEFAULT_PROJECT_ID = import.meta.env?.VITE_GITLAB_PROJECT_ID || '299';
+export const DEFAULT_PACKAGE_NAME = import.meta.env?.VITE_GITLAB_PACKAGE_NAME || 'custom-idea';
 
 // Token xác thực đọc/tải từ GitLab Package Registry (lấy từ biến môi trường, tuyệt đối không hardcode)
-const READ_TOKEN = import.meta.env.VITE_GITLAB_READ_TOKEN || '';
+const READ_TOKEN = import.meta.env?.VITE_GITLAB_READ_TOKEN || '';
 
 /**
  * So sánh 2 chuỗi phiên bản SemVer (x.y.z)
@@ -44,39 +44,37 @@ export function getMetadataUrl(customBaseUrl?: string): string {
  * Kiểm tra phiên bản mới từ Package Registry
  */
 export async function checkUpdate(currentVersion: string, customBaseUrl?: string): Promise<VersionMetadata | null> {
+  const baseUrl = getMetadataUrl(customBaseUrl);
+  // Luôn nối timestamp chống cache proxy
+  const url = `${baseUrl}?t=${Date.now()}`;
+
+  const headers: Record<string, string> = {};
+  if (READ_TOKEN && !customBaseUrl) {
+    headers['PRIVATE-TOKEN'] = READ_TOKEN;
+  }
+
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 8000); // Timeout 8s
+
   try {
-    const baseUrl = getMetadataUrl(customBaseUrl);
-    // Luôn nối timestamp chống cache proxy
-    const url = `${baseUrl}?t=${Date.now()}`;
-
-    const headers: Record<string, string> = {};
-    if (READ_TOKEN && !customBaseUrl) {
-      headers['PRIVATE-TOKEN'] = READ_TOKEN;
-    }
-
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 8000); // Timeout 8s
-
     const res = await fetch(url, {
       method: 'GET',
       headers,
       signal: controller.signal
     });
-    clearTimeout(timeoutId);
 
     if (!res.ok) {
-      console.warn(`[Updater] GitLab API trả về HTTP ${res.status}`);
-      return null;
+      throw new Error(`Máy chủ cập nhật trả về HTTP ${res.status}`);
     }
 
     const data: VersionMetadata = await res.json();
     if (data && data.version && isNewerVersion(currentVersion, data.version)) {
       return data;
     }
-  } catch (err) {
-    console.error('[Updater] Lỗi khi kiểm tra bản mới từ Package Registry:', err);
+    return null;
+  } finally {
+    clearTimeout(timeoutId);
   }
-  return null;
 }
 
 /**
@@ -85,15 +83,21 @@ export async function checkUpdate(currentVersion: string, customBaseUrl?: string
 export async function downloadUpdateWithProgress(
   downloadUrl: string,
   expectedTotalBytes: number,
-  onProgress: (progress: UpdateProgress) => void
+  onProgress: (progress: UpdateProgress) => void,
+  signal?: AbortSignal
 ): Promise<ArrayBuffer> {
   const headers: Record<string, string> = {};
-  if (READ_TOKEN && downloadUrl.includes(DEFAULT_GITLAB_HOST)) {
-    headers['PRIVATE-TOKEN'] = READ_TOKEN;
+  if (READ_TOKEN) {
+    try {
+      const parsedDownload = new URL(downloadUrl);
+      if (parsedDownload.protocol === 'https:' && parsedDownload.hostname === DEFAULT_GITLAB_HOST) {
+        headers['PRIVATE-TOKEN'] = READ_TOKEN;
+      }
+    } catch (_) {}
   }
 
   const startTime = Date.now();
-  const res = await fetch(downloadUrl, { headers });
+  const res = await fetch(downloadUrl, { headers, signal });
   if (!res.ok) {
     throw new Error(`HTTP ${res.status} khi tải từ ${downloadUrl}`);
   }

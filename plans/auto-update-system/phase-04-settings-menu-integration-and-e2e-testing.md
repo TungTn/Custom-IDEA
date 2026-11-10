@@ -10,7 +10,7 @@ dependencies: [1, 2, 3]
 # Phase 4: Tích Hợp System Settings, Menu TopBar & Kiểm Thử E2E Cục Bộ
 
 ## Overview
-Hoàn thiện toàn bộ các điểm chạm giao diện người dùng (User Touchpoints): kích hoạt panel cấu hình `Settings -> Appearance & Behavior -> System Settings -> Updates` (`UpdatesSettingsPanel.tsx`), gắn huy hiệu cập nhật cạnh icon Settings và menu `Help -> Check for Updates...` trên `TopBar.tsx`, cùng script kiểm thử End-to-End (E2E) cục bộ giả lập máy chủ `gitlab.mic.vn` để nghiệm thu tính năng hoàn chỉnh mà không cần phụ thuộc vào mạng thật.
+Hoàn thiện toàn bộ các điểm chạm giao diện người dùng (User Touchpoints): kích hoạt panel cấu hình `Settings -> Appearance & Behavior -> System Settings -> Updates` (`UpdatesSettingsPanel.tsx`), gắn huy hiệu cập nhật cạnh icon Settings và menu `Help -> Check for Updates...` trên `TopBar.tsx`, cùng script kiểm thử End-to-End (E2E) cục bộ giả lập máy chủ `gitlab.example.com` để nghiệm thu tính năng hoàn chỉnh mà không cần phụ thuộc vào mạng thật.
 
 ## Requirements
 - **Functional:**
@@ -24,7 +24,7 @@ Hoàn thiện toàn bộ các điểm chạm giao diện người dùng (User To
     - Tùy chọn `Auto-download updates in background` (Tự động tải ngầm khi có bản mới).
     - Bảng thông tin hệ thống chuẩn JetBrains:
       - Tên ứng dụng & phiên bản: `Custom IDEA v1.0.0`
-      - Máy chủ cập nhật: `gitlab.mic.vn (Package Registry)`
+      - Máy chủ cập nhật: `gitlab.example.com (Package Registry)`
       - Package ID: `custom-idea (Generic: latest)`
       - Thời điểm kiểm tra gần nhất: `Just now` / `Today at 15:30`
     - Nút bấm `Check Now...`: kích hoạt mở `UpdateModal` để kiểm tra phiên bản mới ngay lập tức.
@@ -70,4 +70,4 @@ Hoàn thiện toàn bộ các điểm chạm giao diện người dùng (User To
 - [ ] Chạy kịch bản `mock-update-server.mjs`, client tải và xác thực SHA-256 thành công.
 
 ## Risk Assessment
-- **Cấu hình nhầm endpoint trong môi trường dev:** Sử dụng biến môi trường hoặc fallback thông minh để khi dev có thể trỏ về mock server cục bộ, khi release thì trỏ về `gitlab.mic.vn`.
+- **Cấu hình nhầm endpoint trong môi trường dev:** Sử dụng biến môi trường hoặc fallback thông minh để khi dev có thể trỏ về mock server cục bộ, khi release thì trỏ về `gitlab.example.com`.

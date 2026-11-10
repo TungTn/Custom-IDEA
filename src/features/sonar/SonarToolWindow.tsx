@@ -907,7 +907,7 @@ export const SonarToolWindow: React.FC<SonarToolWindowProps> = ({
     }
   };
 
-  // Phase 3: Fetch issues from remote SonarQube Server (https://sonar-dev-bpm.mic.vn)
+  // Phase 3: Fetch issues from remote SonarQube Server
   const handleFetchFromServer = async () => {
     setAnalyzing(true);
     setTelemetryMessage(`Connecting to SonarQube server ${sonarConfig.serverUrl}...`);
@@ -1676,7 +1676,7 @@ export const SonarToolWindow: React.FC<SonarToolWindowProps> = ({
                   type="text"
                   value={sonarConfig.serverUrl}
                   onChange={(e) => setSonarConfig(prev => ({ ...prev, serverUrl: e.target.value }))}
-                  placeholder="https://sonar-dev-bpm.mic.vn"
+                  placeholder="https://sonar.example.com"
                   className="w-full bg-[#1E1F22] border border-[#393B40] focus:border-[#3574F0] rounded px-3 py-1.5 text-white font-mono outline-none"
                 />
               </div>

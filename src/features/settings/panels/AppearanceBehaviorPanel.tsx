@@ -186,7 +186,7 @@ export const AppearanceBehaviorPanel: React.FC<SettingPanelProps> = (props) => {
   const [masterPassStatus, setMasterPassStatus] = useState<string | null>(null);
 
   // HTTP Proxy state
-  const [proxyTestUrl, setProxyTestUrl] = useState('https://gitlab.mic.vn');
+  const [proxyTestUrl, setProxyTestUrl] = useState('https://github.com');
   const [isTestingProxy, setIsTestingProxy] = useState(false);
   const [proxyTestResult, setProxyTestResult] = useState<{ success: boolean; msg: string } | null>(null);
 
@@ -973,8 +973,8 @@ export const AppearanceBehaviorPanel: React.FC<SettingPanelProps> = (props) => {
                   <label className="text-[#868A91] block">No proxy for (comma-separated):</label>
                   <input
                     type="text"
-                    placeholder="localhost, 127.0.0.1, *.local, gitlab.mic.vn"
-                    value={formSettings.proxyNoProxyFor || 'localhost, 127.0.0.1, *.local, gitlab.mic.vn'}
+                    placeholder="localhost, 127.0.0.1, *.local, github.com"
+                    value={formSettings.proxyNoProxyFor || 'localhost, 127.0.0.1, *.local'}
                     onChange={(e) => updateSetting('proxyNoProxyFor', e.target.value)}
                     className="w-full bg-[#1E1F22] border border-[#393B40] rounded px-2.5 py-1 text-white font-mono text-[11px] outline-none"
                   />
@@ -1024,7 +1024,7 @@ export const AppearanceBehaviorPanel: React.FC<SettingPanelProps> = (props) => {
                   type="text"
                   value={proxyTestUrl}
                   onChange={(e) => setProxyTestUrl(e.target.value)}
-                  placeholder="https://gitlab.mic.vn"
+                  placeholder="https://github.com"
                   className="flex-1 bg-[#1E1F22] border border-[#393B40] rounded px-2.5 py-1 text-white font-mono text-[11px] outline-none"
                 />
                 <button

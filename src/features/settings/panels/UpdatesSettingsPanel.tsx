@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { RotateCw, CheckCircle2, ShieldCheck, HardDrive, RefreshCw, AlertCircle } from 'lucide-react';
 import { SettingPanelProps } from './types';
 import { useModalStore } from '../../../stores/modalStore';
-import { getAppVersionInfo } from '../../../services/updaterService';
+import { getAppVersionInfo, DEFAULT_GITLAB_HOST, DEFAULT_PACKAGE_NAME, DEFAULT_PROJECT_ID } from '../../../services/updaterService';
 
 export const UpdatesSettingsPanel: React.FC<SettingPanelProps> = ({
   setIsDirty,
@@ -83,7 +83,7 @@ export const UpdatesSettingsPanel: React.FC<SettingPanelProps> = ({
       <div>
         <h2 className="text-base font-semibold text-white mb-1">Updates</h2>
         <p className="text-[#868A91] leading-relaxed">
-          Cấu hình tần suất kiểm tra phiên bản mới, tự động tải xuống và kênh phân phối từ GitLab Package Registry (gitlab.mic.vn).
+          Cấu hình tần suất kiểm tra phiên bản mới, tự động tải xuống và kênh phân phối từ Package Registry ({DEFAULT_GITLAB_HOST}).
         </p>
       </div>
 
@@ -161,12 +161,12 @@ export const UpdatesSettingsPanel: React.FC<SettingPanelProps> = ({
 
           <div className="col-span-2">
             <span className="text-[#868A91]">Máy chủ phân phối:</span>
-            <span className="ml-2 font-mono text-[#DFE1E5]">gitlab.mic.vn (Package Registry)</span>
+            <span className="ml-2 font-mono text-[#DFE1E5]">{DEFAULT_GITLAB_HOST} (Package Registry)</span>
           </div>
 
           <div className="col-span-2">
             <span className="text-[#868A91]">Gói phát hành (Package):</span>
-            <span className="ml-2 font-mono text-[#DFE1E5]">mic-idea:latest (Project ID: 302)</span>
+            <span className="ml-2 font-mono text-[#DFE1E5]">{DEFAULT_PACKAGE_NAME}:latest (Project ID: {DEFAULT_PROJECT_ID})</span>
           </div>
 
           <div className="col-span-2 pt-1 border-t border-[#2B2D30] text-[#868A91]">

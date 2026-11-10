@@ -15,7 +15,7 @@ Xây dựng module xử lý cập nhật cốt lõi (Client Update Engine) kết
 ## Requirements
 - **Functional:**
   - **Kiểm tra phiên bản (`checkUpdate`):**
-    - Gọi GET tới `https://gitlab.mic.vn/api/v4/projects/:projectId/packages/generic/:packageName/latest/version.json?t=${Date.now()}`.
+    - Gọi GET tới `https://gitlab.example.com/api/v4/projects/:projectId/packages/generic/:packageName/latest/version.json?t=${Date.now()}`.
     - So sánh SemVer giữa `remoteVersion` và `currentVersion`.
     - Trích xuất metadata: `version`, `releaseDate`, `notes`, `sha256`, `downloadUrl`, `size`, `forceUpdate`, `requireSetup`.
   - **Tải bản vá có tiến trình (`downloadUpdateWithProgress`):**

@@ -69,7 +69,7 @@ export const getSavedSonarConnections = (): SonarConnection[] => {
     {
       id: 'conn-sonar-1',
       name: 'Sonar',
-      serverUrl: legacy.serverUrl || 'https://sonar-dev-bpm.mic.vn',
+      serverUrl: legacy.serverUrl || 'https://sonar.example.com',
       token: legacy.token || '',
     },
   ];
@@ -126,8 +126,8 @@ export const getSavedSonarConfig = (): SonarServerConfig => {
     console.error('Failed to read SonarQube config:', e);
   }
   return {
-    serverUrl: 'https://sonar-dev-bpm.mic.vn',
-    projectKey: 'mic-fe-personal-pre',
+    serverUrl: 'https://sonar.example.com',
+    projectKey: 'my-project',
     token: '',
   };
 };

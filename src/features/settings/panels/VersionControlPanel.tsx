@@ -17,7 +17,7 @@ export const VersionControlPanel: React.FC<SettingPanelProps> = ({
   const [issuePatterns, setIssuePatterns] = useState<Array<{ id: string; pattern: string; targetUrl: string }>>(() => {
     return formSettings.vcsIssuePatterns || [
       { id: 'ip_1', pattern: '([A-Z]+-\\d+)', targetUrl: 'https://jira.example.com/browse/$1' },
-      { id: 'ip_2', pattern: '#(\\d+)', targetUrl: 'https://gitlab.mic.vn/tungtn/mic-idea/-/issues/$1' },
+      { id: 'ip_2', pattern: '#(\\d+)', targetUrl: 'https://github.com/example/repo/issues/$1' },
     ];
   });
   const [isAddPatternOpen, setIsAddPatternOpen] = useState(false);
@@ -306,7 +306,7 @@ export const VersionControlPanel: React.FC<SettingPanelProps> = ({
                     <label className="text-[#868A91] block mb-1">Issue URL ($1 replacement):</label>
                     <input
                       type="text"
-                      placeholder="https://gitlab.mic.vn/issues/$1"
+                      placeholder="https://github.com/example/repo/issues/$1"
                       value={newIssueUrl}
                       onChange={(e) => setNewIssueUrl(e.target.value)}
                       className="w-full bg-[#1E1F22] border border-[#393B40] rounded px-2.5 py-1 text-white font-mono text-[11px] outline-none"

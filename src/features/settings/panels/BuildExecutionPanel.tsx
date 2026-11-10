@@ -22,7 +22,7 @@ export const BuildExecutionPanel: React.FC<SettingPanelProps> = ({
   // Deployment servers state
   const [deploymentServers, setDeploymentServers] = useState(() => {
     return (formSettings as any).deploymentServers || [
-      { id: 'srv_1', name: 'Staging SFTP Server', type: 'SFTP', host: 'staging.mic.vn', port: 22, rootPath: '/var/www/app', autoUpload: true },
+      { id: 'srv_1', name: 'Staging SFTP Server', type: 'SFTP', host: 'sftp.example.com', port: 22, rootPath: '/var/www/app', autoUpload: true },
       { id: 'srv_2', name: 'Local Test Server', type: 'Local', host: 'localhost', port: 8080, rootPath: 'D:\\TestServer\\webapps', autoUpload: false },
     ];
   });
@@ -1052,7 +1052,7 @@ export const BuildExecutionPanel: React.FC<SettingPanelProps> = ({
                       id: `srv_${Date.now()}`,
                       name: `Remote Server ${deploymentServers.length + 1}`,
                       type: 'SFTP',
-                      host: 'deploy.mic.vn',
+                      host: 'deploy.example.com',
                       port: 22,
                       rootPath: '/var/www',
                       autoUpload: false
@@ -1225,7 +1225,7 @@ export const BuildExecutionPanel: React.FC<SettingPanelProps> = ({
           <div className="space-y-4 p-4 bg-[#26282B] border border-[#393B40] rounded-lg">
             <div className="space-y-1.5">
               <div className="flex items-center justify-between">
-                <label className="text-white font-medium block">SSH Host (e.g. user@remote.mic.vn):</label>
+                <label className="text-white font-medium block">SSH Host (e.g. user@remote.example.com):</label>
                 <button
                   onClick={handleTestSsh}
                   disabled={isTestingSsh}
@@ -1237,7 +1237,7 @@ export const BuildExecutionPanel: React.FC<SettingPanelProps> = ({
               </div>
               <input
                 type="text"
-                placeholder="developer@build-server.mic.vn"
+                placeholder="developer@build-server.example.com"
                 value={formSettings.remoteDevHost || ''}
                 onChange={(e) => updateSetting('remoteDevHost', e.target.value)}
                 className="w-full bg-[#1E1F22] border border-[#393B40] rounded px-2.5 py-1.5 text-white font-mono text-[11px] outline-none"

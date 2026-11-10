@@ -94,7 +94,7 @@ export function useAutoUpdate(showToast?: (title: string, message: string, type:
             // Kiểm tra ngầm tự động: thông báo balloon không gián đoạn
             showToast?.(
               'Có bản cập nhật mới',
-              `Custom IDEA v${latestMeta.version} đã sẵn sàng trên gitlab.mic.vn. Bấm vào icon Cài đặt hoặc Help để cập nhật.`,
+              `Custom IDEA v${latestMeta.version} đã sẵn sàng. Bấm vào icon Cài đặt hoặc Help để cập nhật.`,
               'info'
             );
           }
@@ -117,7 +117,7 @@ export function useAutoUpdate(showToast?: (title: string, message: string, type:
       console.error('[useAutoUpdate] Check failed:', err);
       if (isManual) {
         setStatus('error');
-        setErrorMessage(err?.message || 'Không thể kết nối đến máy chủ gitlab.mic.vn');
+        setErrorMessage(err?.message || 'Không thể kết nối đến máy chủ cập nhật');
       } else {
         setStatus('idle');
       }

@@ -1,6 +1,6 @@
 ---
-title: "Auto Update System for Custom IDEA via gitlab.mic.vn"
-description: "Hệ thống tự động cập nhật phần mềm (Auto Update System) chuẩn hóa cho Custom IDEA theo tiêu chuẩn MIC Studio: Phân phối qua GitLab Generic Package Registry (gitlab.mic.vn), tuân thủ Ba Thiết Luật Bắt Buộc (tên file -latest, Package riêng biệt, không commit binary vào Git), cơ chế cập nhật 2 tầng (Hot-patch nhị phân & Full Setup), xác thực tính toàn vẹn SHA-256, và giao diện JetBrains New UI."
+title: "Auto Update System for Custom IDEA via gitlab.example.com"
+description: "Hệ thống tự động cập nhật phần mềm (Auto Update System) chuẩn hóa cho Custom IDEA theo tiêu chuẩn MIC Studio: Phân phối qua GitLab Generic Package Registry (gitlab.example.com), tuân thủ Ba Thiết Luật Bắt Buộc (tên file -latest, Package riêng biệt, không commit binary vào Git), cơ chế cập nhật 2 tầng (Hot-patch nhị phân & Full Setup), xác thực tính toàn vẹn SHA-256, và giao diện JetBrains New UI."
 status: completed
 priority: P1
 branch: "main"
@@ -12,11 +12,11 @@ createdBy: "ck:plan"
 source: skill
 ---
 
-# Auto Update System for Custom IDEA via gitlab.mic.vn
+# Auto Update System for Custom IDEA via gitlab.example.com
 
 ## Overview
 
-Hệ thống **Tự động Cập nhật (Auto Update System)** cho **Custom IDEA** được thiết kế tuân thủ 100% **Tài liệu chuẩn hóa kiến trúc Auto-Update của MIC Studio** (`docs/mic-auto-update-guideline.md`), sử dụng hạ tầng **GitLab Generic Package Registry** nội bộ (`https://gitlab.mic.vn`).
+Hệ thống **Tự động Cập nhật (Auto Update System)** cho **Custom IDEA** được thiết kế tuân thủ 100% **Tài liệu chuẩn hóa kiến trúc Auto-Update của MIC Studio** (`docs/mic-auto-update-guideline.md`), sử dụng hạ tầng **GitLab Generic Package Registry** nội bộ (`https://gitlab.example.com`).
 
 ### 3 Thiết Luật Bắt Buộc (Three Iron Rules)
 1. **Lưu trữ tại Package Registry - CẤM commit file build vào Git repo:** Toàn bộ tệp `.exe`, bộ cài, thư mục `release/` tuyệt đối không được đưa vào Git. Mọi bản phát hành được đẩy trực tiếp lên GitLab Generic Package Registry của dự án.
@@ -51,7 +51,7 @@ Hệ thống **Tự động Cập nhật (Auto Update System)** cho **Custom IDE
 sequenceDiagram
     autonumber
     actor Dev as Lập trình viên / CI-CD
-    participant Git as Máy chủ gitlab.mic.vn (Package Registry)
+    participant Git as Máy chủ gitlab.example.com (Package Registry)
     participant Client as Custom IDEA Desktop
     participant OS as Windows (%TEMP%)
 

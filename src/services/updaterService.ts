@@ -1,16 +1,16 @@
 /**
- * Auto-Update Service (MIC Studio Standard via gitlab.mic.vn)
+ * Auto-Update Service
  */
 import { invoke } from '@tauri-apps/api/core';
 import { VersionMetadata, UpdateProgress } from '../types/updater';
 
-// Cấu hình mặc định cho dự án Custom IDEA trên gitlab.mic.vn
-const DEFAULT_GITLAB_HOST = 'gitlab.mic.vn';
-const DEFAULT_PROJECT_ID = '299';
-const DEFAULT_PACKAGE_NAME = 'mic-idea';
+// Cấu hình cập nhật (ưu tiên biến môi trường hoặc cấu hình tùy chỉnh)
+export const DEFAULT_GITLAB_HOST = import.meta.env.VITE_GITLAB_HOST || 'gitlab.example.com';
+export const DEFAULT_PROJECT_ID = import.meta.env.VITE_GITLAB_PROJECT_ID || '299';
+export const DEFAULT_PACKAGE_NAME = import.meta.env.VITE_GITLAB_PACKAGE_NAME || 'custom-idea';
 
-// Token xác thực đọc/tải từ GitLab Package Registry (Project Access Token)
-const READ_TOKEN = 'REDACTED';
+// Token xác thực đọc/tải từ GitLab Package Registry (lấy từ biến môi trường, tuyệt đối không hardcode)
+const READ_TOKEN = import.meta.env.VITE_GITLAB_READ_TOKEN || '';
 
 /**
  * So sánh 2 chuỗi phiên bản SemVer (x.y.z)
@@ -41,12 +41,12 @@ export function getMetadataUrl(customBaseUrl?: string): string {
 }
 
 /**
- * Kiểm tra phiên bản mới từ gitlab.mic.vn
+ * Kiểm tra phiên bản mới từ Package Registry
  */
 export async function checkUpdate(currentVersion: string, customBaseUrl?: string): Promise<VersionMetadata | null> {
   try {
     const baseUrl = getMetadataUrl(customBaseUrl);
-    // Luôn nối timestamp chống cache proxy theo Thiết luật MIC
+    // Luôn nối timestamp chống cache proxy
     const url = `${baseUrl}?t=${Date.now()}`;
 
     const headers: Record<string, string> = {};
@@ -74,7 +74,7 @@ export async function checkUpdate(currentVersion: string, customBaseUrl?: string
       return data;
     }
   } catch (err) {
-    console.error('[Updater] Lỗi khi kiểm tra bản mới từ gitlab.mic.vn:', err);
+    console.error('[Updater] Lỗi khi kiểm tra bản mới từ Package Registry:', err);
   }
   return null;
 }
@@ -88,7 +88,7 @@ export async function downloadUpdateWithProgress(
   onProgress: (progress: UpdateProgress) => void
 ): Promise<ArrayBuffer> {
   const headers: Record<string, string> = {};
-  if (READ_TOKEN && downloadUrl.includes('gitlab.mic.vn')) {
+  if (READ_TOKEN && downloadUrl.includes(DEFAULT_GITLAB_HOST)) {
     headers['PRIVATE-TOKEN'] = READ_TOKEN;
   }
 

@@ -2693,7 +2693,7 @@ export const App: React.FC = () => {
           onSuccessToast={(title, msg) => addToast(title, msg, 'success')}
         />
 
-        {/* Auto Update Modal (MIC Studio Standard via gitlab.mic.vn) */}
+        {/* Auto Update Modal */}
         <UpdateModal
           isOpen={isUpdateOpen || autoUpdate.isModalOpen}
           onClose={() => {

@@ -496,7 +496,7 @@ const SonarQubeSettingsPanel: React.FC<{ onShowToast?: (t: string, m: string, ty
     setEditingConn(activeConnection ? { ...activeConnection } : {
       id: `conn-${Date.now()}`,
       name: 'Sonar',
-      serverUrl: 'https://sonar-dev-bpm.mic.vn',
+      serverUrl: 'https://sonar.example.com',
       token: '',
     });
     setConnTestResult(null);
@@ -843,7 +843,7 @@ const SonarQubeSettingsPanel: React.FC<{ onShowToast?: (t: string, m: string, ty
                   type="text"
                   value={editingConn.serverUrl}
                   onChange={(e) => setEditingConn({ ...editingConn, serverUrl: e.target.value })}
-                  placeholder="https://sonar-dev-bpm.mic.vn"
+                  placeholder="https://sonar.example.com"
                   className="w-full bg-[#1E1F22] border border-[#393B40] rounded px-3 py-1.5 text-xs text-white font-mono outline-none focus:border-[#3574F0]"
                 />
               </div>

@@ -17,7 +17,7 @@ Thiết kế và xây dựng giao diện Modal cập nhật phần mềm chuẩn
   - **Component `UpdateModal.tsx`:**
     - Tông màu JetBrains Darcula: nền `#2B2D30`, viền `#43454A`, điểm nhấn `#3574F0`.
     - 6 trạng thái giao diện:
-      1. `checking`: Spinner động, text *"Checking for updates from gitlab.mic.vn..."*.
+      1. `checking`: Spinner động, text *"Checking for updates from gitlab.example.com..."*.
       2. `upToDate`: Biểu tượng tích xanh, text *"You have the latest version of Custom IDEA (v1.0.0)"*, *"Last checked: Today at 15:30"*.
       3. `available`:
          - Tiêu đề: *"New Version Available: Custom IDEA v1.0.1"*.

@@ -40,7 +40,7 @@ function loadEnv() {
     }
   }
   return {
-    host: env.GITLAB_HOST || 'gitlab.mic.vn',
+    host: env.GITLAB_HOST || 'gitlab.example.com',
     projectId: env.GITLAB_PROJECT_ID,
     token: env.GITLAB_TOKEN,
     packageName: env.PACKAGE_NAME || 'custom-idea'

@@ -12,6 +12,7 @@ import {
   HardDrive
 } from 'lucide-react';
 import { VersionMetadata, UpdateProgress, UpdateCheckStatus } from '../../types/updater';
+import { DEFAULT_GITLAB_HOST } from '../../services/updaterService';
 
 export interface UpdateModalProps {
   isOpen: boolean;
@@ -157,7 +158,7 @@ export const UpdateModal: React.FC<UpdateModalProps> = ({
               <RotateCw size={28} className="text-[#3574F0] animate-spin" />
               <div>
                 <p className="text-sm font-medium text-white">Đang kiểm tra bản cập nhật...</p>
-                <p className="text-xs text-[#868A91] mt-1">Đang kết nối tới GitLab Package Registry (gitlab.mic.vn)</p>
+                <p className="text-xs text-[#868A91] mt-1">Đang kết nối tới máy chủ cập nhật ({DEFAULT_GITLAB_HOST})</p>
               </div>
             </div>
           )}
@@ -174,7 +175,7 @@ export const UpdateModal: React.FC<UpdateModalProps> = ({
                   Custom IDEA phiên bản <span className="text-[#DFE1E5] font-mono font-medium">v{currentVersion}</span>
                 </p>
                 <p className="text-[11px] text-[#5A5D63] mt-2">
-                  Máy chủ: gitlab.mic.vn • Kiểm tra lúc: {new Date().toLocaleTimeString('vi-VN')}
+                  Máy chủ: {DEFAULT_GITLAB_HOST} • Kiểm tra lúc: {new Date().toLocaleTimeString('vi-VN')}
                 </p>
               </div>
             </div>
@@ -296,7 +297,7 @@ export const UpdateModal: React.FC<UpdateModalProps> = ({
                 <div className="text-xs text-[#DFE1E5]">
                   <p className="font-semibold text-[#F28B82]">Cập nhật không thành công</p>
                   <p className="text-[#868A91] mt-1 leading-relaxed">
-                    {errorMessage || 'Không thể kết nối hoặc xác thực tệp từ gitlab.mic.vn. Vui lòng kiểm tra lại mạng nội bộ.'}
+                    {errorMessage || 'Không thể kết nối hoặc xác thực tệp từ máy chủ cập nhật. Vui lòng kiểm tra lại kết nối mạng.'}
                   </p>
                 </div>
               </div>

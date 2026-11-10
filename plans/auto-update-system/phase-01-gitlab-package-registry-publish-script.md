@@ -10,13 +10,13 @@ dependencies: []
 # Phase 1: Kịch Bản Đóng Gói, Dọn Dẹp & Tải Lên GitLab Package Registry
 
 ## Overview
-Xây dựng kịch bản đóng gói và xuất bản tự động `scripts/publish-update.cjs` tuân thủ 100% **Ba Thiết Luật** của MIC Studio: tự động dọn dẹp (Purge) toàn bộ tệp cũ và package cũ trên `gitlab.mic.vn`, chuẩn hóa tên tệp thành `custom-idea-latest.exe`, tính mã băm SHA-256 dạng stream, sinh file chỉ dẫn `version.json`, và upload lên GitLab Generic Package Registry độc lập dưới gói `latest`.
+Xây dựng kịch bản đóng gói và xuất bản tự động `scripts/publish-update.cjs` tuân thủ 100% **Ba Thiết Luật** của MIC Studio: tự động dọn dẹp (Purge) toàn bộ tệp cũ và package cũ trên `gitlab.example.com`, chuẩn hóa tên tệp thành `custom-idea-latest.exe`, tính mã băm SHA-256 dạng stream, sinh file chỉ dẫn `version.json`, và upload lên GitLab Generic Package Registry độc lập dưới gói `latest`.
 
 ## Requirements
 - **Functional:**
   - Viết script `scripts/publish-update.cjs` bằng **Node.js thuần** (chỉ sử dụng `https`, `crypto`, `fs`, `path`, `child_process`, không phụ thuộc external npm packages).
   - Đọc cấu hình từ `.env`:
-    - `GITLAB_HOST=gitlab.mic.vn`
+    - `GITLAB_HOST=gitlab.example.com`
     - `GITLAB_PROJECT_ID=<project-id>`
     - `GITLAB_TOKEN=<token>`
     - `PACKAGE_NAME=custom-idea`

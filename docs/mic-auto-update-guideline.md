@@ -5,7 +5,7 @@
 
 ## 📑 MỤC LỤC
 1. [Tổng Quan Kiến Trúc & Thiết Luật Bắt Buộc (Architecture & Iron Rules)](#1-tổng-quan-kiến-trúc--thiết-luật-bắt-buộc-architecture--iron-rules)
-2. [Cấu Hình Dự Án Trên gitlab.mic.vn](#2-cấu-hình-dự-án-trên-gitlabmicvn)
+2. [Cấu Hình Dự Án Trên GitLab Package Registry](#2-cấu-hình-dự-án-trên-gitlab)
 3. [Chuẩn Hóa Metadata Phiên Bản (`version.json`)](#3-chuẩn-hóa-metadata-phiên-bản-versionjson)
 4. [Kịch Bản Đóng Gói, Dọn Dẹp & Tải Lên Tự Động (`publish-update.cjs`)](#4-kịch-bản-đóng-gói-dọn-dẹp--tải-lên-tự-động-publish-updatecjs)
 5. [Tích Hợp Phía Ứng Dụng Client (Frontend & Core)](#5-tích-hợp-phía-ứng-dụng-client-frontend--core)
@@ -21,7 +21,7 @@
 > [!IMPORTANT]
 > **THIẾT LUẬT 1: LƯU TRỮ TẠI PACKAGE REGISTRY - CẤM COMMIT FILE BUILD VÀO GIT REPO**
 > * Tuyệt đối **CẤM commit và push các tệp thực thi nhị phân (`.exe`), bộ cài đặt (`Setup.exe`) hay thư mục build (`release/`, `dist/`, `target/`)** vào nhánh Git repository. Git repo chỉ dùng để lưu trữ và quản lý mã nguồn (Source Code).
-> * Mọi bản cập nhật phần mềm bắt buộc phải được xuất bản trực tiếp lên **GitLab Generic Package Registry** (`https://gitlab.mic.vn/<group>/<project>/-/packages`).
+> * Mọi bản cập nhật phần mềm bắt buộc phải được xuất bản trực tiếp lên **GitLab Generic Package Registry** (`https://gitlab.example.com/<group>/<project>/-/packages`).
 
 > [!IMPORTANT]
 > **THIẾT LUẬT 2: TẠO MỤC (PACKAGE) RIÊNG BIỆT CHO TỪNG ỨNG DỤNG**
@@ -59,7 +59,7 @@ Hệ thống hỗ trợ song song 2 hình thức cập nhật linh hoạt tùy t
 sequenceDiagram
     autonumber
     actor Dev as Lập trình viên / CI-CD
-    participant Git as Máy chủ gitlab.mic.vn (Package Registry)
+    participant Git as Máy chủ GitLab (Package Registry)
     participant Client as Ứng dụng Client (Desktop)
     participant OS as Hệ điều hành Windows (%TEMP%)
 
@@ -109,11 +109,11 @@ sequenceDiagram
   "releaseDate": "2026-11-06T10:30:00.000Z",
   "notes": "• [Tính năng mới] Bổ sung giao diện tìm kiếm nhanh\n• [Sửa lỗi] Khắc phục lỗi tràn bộ nhớ khi tải tệp lớn",
   "sha256": "4a5c6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d",
-  "downloadUrl": "https://gitlab.mic.vn/api/v4/projects/299/packages/generic/custom-idea/latest/custom-idea-latest.exe",
+  "downloadUrl": "https://gitlab.example.com/api/v4/projects/299/packages/generic/custom-idea/latest/custom-idea-latest.exe",
   "size": 15420160,
   "forceUpdate": true,
   "requireSetup": false,
-  "setupUrl": "https://gitlab.mic.vn/api/v4/projects/299/packages/generic/custom-idea/latest/custom-idea-Setup-latest.exe",
+  "setupUrl": "https://gitlab.example.com/api/v4/projects/299/packages/generic/custom-idea/latest/custom-idea-Setup-latest.exe",
   "setupSha256": "8f7e6d5c4b3a201f9e8d7c6b5a403f2e1d0c9b8a7f6e5d4c3b2a109f8e7d6c5b",
   "setupSize": 45120300
 }

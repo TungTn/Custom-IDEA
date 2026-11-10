@@ -49,7 +49,7 @@ const server = http.createServer((req, res) => {
     const metadata = {
       version: '0.2.0',
       releaseDate: new Date().toISOString(),
-      notes: "• [Tính năng mới] Tích hợp hệ thống Auto Update qua gitlab.mic.vn\n• [Giao diện] Modal cập nhật chuẩn phong cách JetBrains Darcula New UI\n• [Tối ưu] Hoán đổi tệp nhị phân tức thì bằng Atomic Swapper script tự hủy\n• [Bảo mật] Kiểm tra tính toàn vẹn tệp nghiêm ngặt với SHA-256",
+      notes: "• [Tính năng mới] Tích hợp hệ thống Auto Update qua Package Registry\n• [Giao diện] Modal cập nhật chuẩn phong cách JetBrains Darcula New UI\n• [Tối ưu] Hoán đổi tệp nhị phân tức thì bằng Atomic Swapper script tự hủy\n• [Bảo mật] Kiểm tra tính toàn vẹn tệp nghiêm ngặt với SHA-256",
       sha256: sha256,
       downloadUrl: `http://localhost:${PORT}/custom-idea-latest.exe`,
       size: size,

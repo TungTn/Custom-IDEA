@@ -197,86 +197,102 @@ export const PluginsPanel: React.FC<SettingPanelProps> = ({
     return installedPlugins.some(p => p.id === id || (name && p.name.toLowerCase() === name.toLowerCase()));
   };
 
-  const handleInstallPlugin = (plugin: MarketplacePlugin) => {
+  const handleInstallPlugin = async (plugin: MarketplacePlugin) => {
     setInstallingPluginId(plugin.id);
-    setTimeout(() => {
-      const newInstalled: InstalledPluginItem = {
-        id: plugin.id,
-        name: plugin.name,
-        author: plugin.vendor?.name || 'JetBrains Marketplace',
-        version: '1.0.0',
-        desc: plugin.preview,
-        installed: true,
-        enabled: true,
-        icon: plugin.icon ? `https://plugins.jetbrains.com${plugin.icon}` : undefined,
-        downloads: plugin.downloads,
-        rating: plugin.rating,
-      };
-      installPlugin(newInstalled);
+    const isTauri = typeof window !== 'undefined' && ('__TAURI_INTERNALS__' in window || '__TAURI__' in window);
 
-      const pLower = plugin.name.toLowerCase();
-      // Auto-detect theme plugins & register to active themes list
-      const isThemePlugin = (Array.isArray(plugin.tags) ? plugin.tags.some((t: string) => t.toLowerCase().includes('theme')) : typeof plugin.tags === 'string' && (plugin.tags as string).toLowerCase().includes('theme')) || pLower.includes('theme');
-
-      if (pLower.includes('sonar')) {
-        onShowToast?.('SonarLint Activated', 'SonarQube quality gate & rules are now ready in the bottom panel!', 'success');
-      } else if (pLower.includes('rainbow')) {
-        onShowToast?.('Rainbow Brackets Activated', 'Rainbow brackets colorization is now active in the editor!', 'success');
-      } else if (pLower.includes('key promoter')) {
-        onShowToast?.('Key Promoter X Activated', 'Key Promoter X is now tracking mouse clicks and suggesting shortcuts!', 'success');
-      } else if (pLower.includes('nyan')) {
-        onShowToast?.('Nyan Progress Bar Activated', 'Nyan cat progress bar will appear during builds and runs!', 'success');
-      } else if (pLower.includes('git')) {
-        onShowToast?.('GitToolBox Activated', 'Git inline blame and branch sync status are now active!', 'success');
-      } else if (isThemePlugin) {
-        const preset = MARKETPLACE_THEMES.find(t =>
-          plugin.name.toLowerCase().includes(t.name.toLowerCase()) ||
-          t.name.toLowerCase().includes(plugin.name.toLowerCase()) ||
-          plugin.id.toString() === t.id
+    let localDownloadPath: string | undefined;
+    if (isTauri) {
+      try {
+        const res = await invoke<{ success: boolean; plugin_id: number; name: string; local_path: string; is_theme: boolean; message: string }>(
+          'download_and_install_plugin',
+          { pluginId: plugin.id, pluginName: plugin.name }
         );
-        const themeDef: ThemeDefinition = preset || {
-          id: `plugin-${plugin.id}`,
-          name: plugin.name,
-          type: 'dark',
-          description: plugin.preview || 'Installed theme from Marketplace',
-          badge: 'Plugin',
-          colors: {
-            bgPrimary: '#1E1F22',
-            bgSecondary: '#2B2D30',
-            bgTertiary: '#26282B',
-            bgHover: '#35373B',
-            borderColor: '#393B40',
-            textPrimary: '#DFE1E5',
-            textSecondary: '#868A91',
-            accentColor: '#3574F0',
-            selectionBg: '#214283',
-            statusBarBg: '#2B2D30',
-            gutterBg: '#1E1F22',
-            badgeBg: '#3574F022',
-          },
-          syntaxColors: {
-            keyword: '#CC7832',
-            string: '#6A8759',
-            number: '#6897BB',
-            function: '#FFC66D',
-            comment: '#7A7E85',
-            type: '#299999',
-            variable: '#9876AA',
-            operator: '#A9B7C6',
-            annotation: '#BBB529',
-          }
-        };
-        saveCustomTheme(themeDef);
-        updateSetting('theme', themeDef.id);
-        applyIdeTheme(themeDef.id);
-        onShowToast?.('Theme Installed & Applied', `Theme "${plugin.name}" is now active!`, 'success');
-      } else {
+        localDownloadPath = res.local_path;
+        onShowToast?.('Plugin Downloaded', res.message, 'success');
+      } catch (err: any) {
+        console.warn('download_and_install_plugin warning:', err);
+      }
+    }
+
+    const newInstalled: InstalledPluginItem = {
+      id: plugin.id,
+      name: plugin.name,
+      author: plugin.vendor?.name || 'JetBrains Marketplace',
+      version: '1.0.0',
+      desc: localDownloadPath ? `${plugin.preview || ''} (Saved: ${localDownloadPath})` : plugin.preview,
+      installed: true,
+      enabled: true,
+      icon: plugin.icon ? `https://plugins.jetbrains.com${plugin.icon}` : undefined,
+      downloads: plugin.downloads,
+      rating: plugin.rating,
+    };
+    installPlugin(newInstalled);
+
+    const pLower = plugin.name.toLowerCase();
+    // Auto-detect theme plugins & register to active themes list
+    const isThemePlugin = (Array.isArray(plugin.tags) ? plugin.tags.some((t: string) => t.toLowerCase().includes('theme')) : typeof plugin.tags === 'string' && (plugin.tags as string).toLowerCase().includes('theme')) || pLower.includes('theme');
+
+    if (pLower.includes('sonar')) {
+      onShowToast?.('SonarLint Activated', 'SonarQube quality gate & rules are now ready in the bottom panel!', 'success');
+    } else if (pLower.includes('rainbow')) {
+      onShowToast?.('Rainbow Brackets Activated', 'Rainbow brackets colorization is now active in the editor!', 'success');
+    } else if (pLower.includes('key promoter')) {
+      onShowToast?.('Key Promoter X Activated', 'Key Promoter X is now tracking mouse clicks and suggesting shortcuts!', 'success');
+    } else if (pLower.includes('nyan')) {
+      onShowToast?.('Nyan Progress Bar Activated', 'Nyan cat progress bar will appear during builds and runs!', 'success');
+    } else if (pLower.includes('git')) {
+      onShowToast?.('GitToolBox Activated', 'Git inline blame and branch sync status are now active!', 'success');
+    } else if (isThemePlugin) {
+      const preset = MARKETPLACE_THEMES.find(t =>
+        plugin.name.toLowerCase().includes(t.name.toLowerCase()) ||
+        t.name.toLowerCase().includes(plugin.name.toLowerCase()) ||
+        plugin.id.toString() === t.id
+      );
+      const themeDef: ThemeDefinition = preset || {
+        id: `plugin-${plugin.id}`,
+        name: plugin.name,
+        type: 'dark',
+        description: plugin.preview || 'Installed theme from Marketplace',
+        badge: 'Plugin',
+        colors: {
+          bgPrimary: '#1E1F22',
+          bgSecondary: '#2B2D30',
+          bgTertiary: '#26282B',
+          bgHover: '#35373B',
+          borderColor: '#393B40',
+          textPrimary: '#DFE1E5',
+          textSecondary: '#868A91',
+          accentColor: '#3574F0',
+          selectionBg: '#214283',
+          statusBarBg: '#2B2D30',
+          gutterBg: '#1E1F22',
+          badgeBg: '#3574F022',
+        },
+        syntaxColors: {
+          keyword: '#CC7832',
+          string: '#6A8759',
+          number: '#6897BB',
+          function: '#FFC66D',
+          comment: '#7A7E85',
+          type: '#299999',
+          variable: '#9876AA',
+          operator: '#A9B7C6',
+          annotation: '#BBB529',
+        }
+      };
+      saveCustomTheme(themeDef);
+      updateSetting('theme', themeDef.id);
+      applyIdeTheme(themeDef.id);
+      onShowToast?.('Theme Installed & Applied', `Theme "${plugin.name}" is now active!`, 'success');
+    } else {
+      if (!localDownloadPath) {
         onShowToast?.('Plugin Installed', `${plugin.name} installed successfully`, 'success');
       }
+    }
 
-      setInstallingPluginId(null);
-      setIsDirty(true);
-    }, 400);
+    setInstallingPluginId(null);
+    setIsDirty(true);
   };
 
   const handleUninstallPlugin = (id: number | string, name: string) => {

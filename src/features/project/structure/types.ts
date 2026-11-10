@@ -2,6 +2,7 @@ export interface ProjectStructureModalProps {
   isOpen: boolean;
   onClose: () => void;
   projectName: string;
+  projectPath?: string;
   files?: any[];
   problems?: any[];
   onSave: (newName: string) => void;

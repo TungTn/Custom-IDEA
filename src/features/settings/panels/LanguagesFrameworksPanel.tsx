@@ -39,6 +39,28 @@ export const LanguagesFrameworksPanel: React.FC<SettingPanelProps> = ({
     }
   };
 
+  const handleValidateToolchain = async (tool: string, customPath?: string) => {
+    const isTauri = typeof window !== 'undefined' && ('__TAURI_INTERNALS__' in window || '__TAURI__' in window);
+    if (isTauri) {
+      try {
+        const res = await invoke<{ tool: string; is_installed: boolean; version?: string; path?: string; message: string }>(
+          'check_toolchain_binary',
+          { tool, customPath }
+        );
+        if (res.is_installed) {
+          onShowToast?.(`${res.tool} Verified`, res.version ? `${res.version} detected (${res.message})` : res.message, 'success');
+        } else {
+          onShowToast?.(`${res.tool} Not Found`, res.message, 'warning');
+        }
+        return;
+      } catch (err: any) {
+        onShowToast?.(`${tool} Check Failed`, String(err), 'error');
+        return;
+      }
+    }
+    onShowToast?.(`${tool} Check`, `Browser Preview mode - install verification simulated.`, 'info');
+  };
+
   return (
     <div>
       {/* Sub-page: Languages > Rust */}
@@ -744,11 +766,16 @@ export const LanguagesFrameworksPanel: React.FC<SettingPanelProps> = ({
         <div className="space-y-5">
           <div className="flex items-center justify-between">
             <div>
-              <h2 className="text-base font-semibold text-white mb-1">Android (Experimental)</h2>
-              <p className="text-xs text-[#868A91]">Configure Android SDK, NDK location, Gradle sync, and build tools.</p>
+              <div className="flex items-center gap-2 mb-1">
+                <h2 className="text-base font-semibold text-white">Android</h2>
+                <span className="text-[10px] px-1.5 py-0.5 rounded bg-[#EDA200]/20 text-[#EDA200] border border-[#EDA200]/30 font-medium">
+                  UI Preview
+                </span>
+              </div>
+              <p className="text-xs text-[#868A91]">Android SDK, NDK location, and Gradle sync (engine integration in development).</p>
             </div>
             <button
-              onClick={() => onShowToast?.('Android SDK', 'Android SDK location verified', 'success')}
+              onClick={() => handleValidateToolchain('android', (formSettings as any).androidSdkPath || 'C:\\Users\\adminlocal\\AppData\\Local\\Android\\Sdk')}
               className="px-3 py-1.5 bg-[#3574F0] hover:bg-[#3069D9] text-white rounded text-xs flex items-center gap-1.5"
             >
               <CheckCircle2 size={12} />
@@ -859,11 +886,16 @@ export const LanguagesFrameworksPanel: React.FC<SettingPanelProps> = ({
         <div className="space-y-5">
           <div className="flex items-center justify-between">
             <div>
-              <h2 className="text-base font-semibold text-white mb-1">Dart</h2>
-              <p className="text-xs text-[#868A91]">Configure Dart SDK location, analysis server, and web development.</p>
+              <div className="flex items-center gap-2 mb-1">
+                <h2 className="text-base font-semibold text-white">Dart</h2>
+                <span className="text-[10px] px-1.5 py-0.5 rounded bg-[#EDA200]/20 text-[#EDA200] border border-[#EDA200]/30 font-medium">
+                  UI Preview
+                </span>
+              </div>
+              <p className="text-xs text-[#868A91]">Configure Dart SDK location and analysis server (integration in development).</p>
             </div>
             <button
-              onClick={() => onShowToast?.('Dart SDK', 'Dart SDK 3.4.3 detected and operational', 'success')}
+              onClick={() => handleValidateToolchain('dart', (formSettings as any).dartSdkPath || 'C:\\tools\\dart-sdk')}
               className="px-3 py-1.5 bg-[#3574F0] hover:bg-[#3069D9] text-white rounded text-xs flex items-center gap-1.5"
             >
               <CheckCircle2 size={12} />
@@ -910,11 +942,16 @@ export const LanguagesFrameworksPanel: React.FC<SettingPanelProps> = ({
         <div className="space-y-5">
           <div className="flex items-center justify-between">
             <div>
-              <h2 className="text-base font-semibold text-white mb-1">Flutter</h2>
-              <p className="text-xs text-[#868A91]">Configure Flutter SDK path, Hot Reload, and Flutter Inspector.</p>
+              <div className="flex items-center gap-2 mb-1">
+                <h2 className="text-base font-semibold text-white">Flutter</h2>
+                <span className="text-[10px] px-1.5 py-0.5 rounded bg-[#EDA200]/20 text-[#EDA200] border border-[#EDA200]/30 font-medium">
+                  UI Preview
+                </span>
+              </div>
+              <p className="text-xs text-[#868A91]">Configure Flutter SDK path and DevTools (runner integration in development).</p>
             </div>
             <button
-              onClick={() => onShowToast?.('Flutter Doctor', 'Flutter 3.22.2: No issues found', 'success')}
+              onClick={() => handleValidateToolchain('flutter', (formSettings as any).flutterSdkPath || 'C:\\tools\\flutter')}
               className="px-3 py-1.5 bg-[#3574F0] hover:bg-[#3069D9] text-white rounded text-xs flex items-center gap-1.5"
             >
               <CheckCircle2 size={12} />
@@ -1141,7 +1178,7 @@ export const LanguagesFrameworksPanel: React.FC<SettingPanelProps> = ({
               <p className="text-xs text-[#868A91]">Configure Swagger / OpenAPI 3.0 & 3.1 specification validation, Swagger UI preview, and Spectral rules.</p>
             </div>
             <button
-              onClick={() => onShowToast?.('OpenAPI Validated', 'OpenAPI 3.1.0 schema registry synchronized', 'success')}
+              onClick={() => handleValidateToolchain('openapi')}
               className="px-3 py-1.5 bg-[#3574F0] hover:bg-[#3069D9] text-white rounded text-xs flex items-center gap-1.5"
             >
               <CheckCircle2 size={12} />
@@ -1185,7 +1222,7 @@ export const LanguagesFrameworksPanel: React.FC<SettingPanelProps> = ({
               <p className="text-xs text-[#868A91]">Configure protoc executable, proto2/proto3 syntax validation, and gRPC service definitions.</p>
             </div>
             <button
-              onClick={() => onShowToast?.('Protobuf Compiler', 'protoc v26.1 detected', 'success')}
+              onClick={() => handleValidateToolchain('protoc', (formSettings as any).protocPath || 'protoc')}
               className="px-3 py-1.5 bg-[#3574F0] hover:bg-[#3069D9] text-white rounded text-xs flex items-center gap-1.5"
             >
               <CheckCircle2 size={12} />

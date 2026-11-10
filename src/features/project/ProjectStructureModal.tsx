@@ -39,11 +39,13 @@ import {
   GlobalLibrariesPanel,
   ProblemsStructurePanel,
 } from './structure/panels';
+import { scanProjectStructure } from './structure/projectStructureScanner';
 
 export interface ProjectStructureModalProps {
   isOpen: boolean;
   onClose: () => void;
   projectName: string;
+  projectPath?: string;
   files?: any[];
   problems?: any[];
   onSave: (newName: string) => void;
@@ -56,6 +58,7 @@ export const ProjectStructureModal: React.FC<ProjectStructureModalProps> = ({
   isOpen,
   onClose,
   projectName,
+  projectPath,
   files = [],
   problems: incomingProblems = [],
   onSave,
@@ -79,7 +82,7 @@ export const ProjectStructureModal: React.FC<ProjectStructureModalProps> = ({
   const [libraries, setLibraries] = useState<LibraryItem[]>(INITIAL_LIBRARIES);
   const [selectedLibId, setSelectedLibId] = useState<string>('lib-tauri');
 
-  const [facets] = useState<FacetItem[]>(INITIAL_FACETS);
+  const [facets, setFacets] = useState<FacetItem[]>(INITIAL_FACETS);
 
   const [artifacts, setArtifacts] = useState<ArtifactItem[]>(INITIAL_ARTIFACTS);
   const [selectedArtifactId, setSelectedArtifactId] = useState<string>('art-portable');
@@ -87,7 +90,7 @@ export const ProjectStructureModal: React.FC<ProjectStructureModalProps> = ({
   const [sdks, setSdks] = useState<SdkItem[]>(INITIAL_SDKS);
   const [selectedSdkId, setSelectedSdkId] = useState<string>('sdk-rust');
 
-  const [globalLibraries] = useState<GlobalLibraryItem[]>(INITIAL_GLOBAL_LIBRARIES);
+  const [globalLibraries, setGlobalLibraries] = useState<GlobalLibraryItem[]>(INITIAL_GLOBAL_LIBRARIES);
   const [problems, setProblems] = useState<ProblemItem[]>([]);
 
   // Sync incoming LSP diagnostics to problems
@@ -124,6 +127,32 @@ export const ProjectStructureModal: React.FC<ProjectStructureModalProps> = ({
       console.error(e);
     }
   }, []);
+
+  // Dynamically scan project structure from disk (pom.xml, package.json, Cargo.toml)
+  useEffect(() => {
+    if (!isOpen || !projectPath) return;
+    let isMounted = true;
+    scanProjectStructure(projectPath).then((scanned) => {
+      if (!isMounted || !scanned) return;
+      setName(scanned.projectName);
+      setProjectSdk(scanned.projectSdk);
+      setProjectLangLevel(scanned.projectLangLevel);
+      setCompilerOutput(scanned.compilerOutput);
+      setModules(scanned.modules);
+      if (scanned.modules.length > 0) setSelectedModuleId(scanned.modules[0].id);
+      setLibraries(scanned.libraries);
+      if (scanned.libraries.length > 0) setSelectedLibId(scanned.libraries[0].id);
+      setFacets(scanned.facets);
+      setArtifacts(scanned.artifacts);
+      if (scanned.artifacts.length > 0) setSelectedArtifactId(scanned.artifacts[0].id);
+      setSdks(scanned.sdks);
+      if (scanned.sdks.length > 0) setSelectedSdkId(scanned.sdks[0].id);
+      setGlobalLibraries(scanned.globalLibraries);
+    }).catch(err => {
+      console.warn('Scan project structure error:', err);
+    });
+    return () => { isMounted = false; };
+  }, [isOpen, projectPath]);
 
   // Update Language Level dropdown when Project SDK changes
   const handleSdkChange = (sdkName: string) => {

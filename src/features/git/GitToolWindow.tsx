@@ -227,8 +227,29 @@ export const GitToolWindow: React.FC<GitToolWindowProps> = ({
   const handleExecuteInteractiveRebase = async (rebaseItems: RebaseCommitItem[]) => {
     setIsRebaseModalOpen(false);
     addConsoleLog(`git rebase -i ${rebaseBaseCommitHash}`, 'Executing interactive rebase plan...');
-    onShowToast?.('Interactive Rebase', `Rebase plan applied with ${rebaseItems.length} commits`, 'success');
-    loadGitLog();
+    try {
+      if (typeof window !== 'undefined' && ('__TAURI_INTERNALS__' in window || '__TAURI__' in window)) {
+        const res = await invoke<string>('git_interactive_rebase', {
+          projectPath,
+          baseCommit: rebaseBaseCommitHash,
+          items: rebaseItems.map(item => ({
+            hash: item.hash,
+            action: item.action,
+            subject: item.subject,
+          })),
+        });
+        addConsoleLog(`git rebase -i`, res || 'Rebase applied successfully.');
+        onShowToast?.('Interactive Rebase', `Rebase plan applied with ${rebaseItems.length} commits`, 'success');
+      } else {
+        onShowToast?.('Interactive Rebase (Simulated)', `Rebase plan applied with ${rebaseItems.length} commits`, 'info');
+      }
+      loadGitLog();
+    } catch (err: any) {
+      const errMsg = String(err);
+      addConsoleLog('git rebase -i error', errMsg);
+      onShowToast?.('Interactive Rebase Failed', errMsg, 'error');
+      loadGitLog();
+    }
   };
 
   // Diff Viewer Modal States

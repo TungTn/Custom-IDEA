@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Search, X, Code2, Sparkles, CornerDownLeft, FileText, ChevronRight, Check } from 'lucide-react';
+import { Search, X, Code2, Sparkles, CornerDownLeft, FileText, ChevronRight, Check, Globe, FileCode2 } from 'lucide-react';
+import { invoke } from '@tauri-apps/api/core';
 import {
   astSearchService,
   StructuralMatch,
@@ -12,6 +13,7 @@ export interface StructuralSearchModalProps {
   onClose: () => void;
   currentContent?: string;
   currentFilePath?: string;
+  projectPath?: string;
   onNavigateToLine: (filePath: string, line: number) => void;
   onShowToast?: (title: string, message: string, type?: 'info' | 'success' | 'warning' | 'error') => void;
 }
@@ -21,11 +23,14 @@ export const StructuralSearchModal: React.FC<StructuralSearchModalProps> = ({
   onClose,
   currentContent = '',
   currentFilePath = 'active-file',
+  projectPath,
   onNavigateToLine,
   onShowToast,
 }) => {
   const [pattern, setPattern] = useState('$func$($args$)');
   const [selectedTemplate, setSelectedTemplate] = useState<string>('all');
+  const [scope, setScope] = useState<'file' | 'project'>('file');
+  const [isSearching, setIsSearching] = useState(false);
   const [matches, setMatches] = useState<StructuralMatch[]>([]);
   const [selectedMatchId, setSelectedMatchId] = useState<string>('');
   const inputRef = useRef<HTMLInputElement>(null);
@@ -33,28 +38,78 @@ export const StructuralSearchModal: React.FC<StructuralSearchModalProps> = ({
   useEffect(() => {
     if (isOpen) {
       setTimeout(() => inputRef.current?.focus(), 50);
-      handleSearch(pattern);
+      handleSearch(pattern, scope);
     }
   }, [isOpen]);
 
-  const handleSearch = (searchPattern: string) => {
-    if (!currentContent || !searchPattern.trim()) {
+  const handleSearch = async (searchPattern: string, searchScope: 'file' | 'project' = scope) => {
+    const trimmed = searchPattern.trim();
+    if (!trimmed) {
       setMatches([]);
       return;
     }
-    const results = astSearchService.searchStructural(currentContent, currentFilePath, searchPattern);
-    setMatches(results);
-    if (results.length > 0) {
-      setSelectedMatchId(results[0].id);
-    } else {
-      setSelectedMatchId('');
+
+    if (searchScope === 'file') {
+      if (!currentContent) {
+        setMatches([]);
+        return;
+      }
+      const results = astSearchService.searchStructural(currentContent, currentFilePath, trimmed);
+      setMatches(results);
+      if (results.length > 0) setSelectedMatchId(results[0].id);
+      else setSelectedMatchId('');
+      return;
     }
+
+    // Whole Project Structural Search
+    setIsSearching(true);
+    const isTauri = typeof window !== 'undefined' && ('__TAURI_INTERNALS__' in window || '__TAURI__' in window);
+    const allMatches: StructuralMatch[] = [];
+
+    if (isTauri && projectPath) {
+      try {
+        // Extract non-variable literal tokens to narrow down files via ripgrep
+        const tokens = trimmed.replace(/\$[a-zA-Z0-9_]+\$/g, ' ').match(/[a-zA-Z0-9_]{3,}/g);
+        const searchToken = tokens && tokens.length > 0 ? tokens[0] : '';
+
+        if (searchToken) {
+          const hits = await invoke<any[]>('search_project_text', {
+            projectPath,
+            query: searchToken,
+            caseSensitive: false,
+            limit: 120,
+          }).catch(() => []);
+
+          const uniqueFiles = Array.from(new Set(hits.map((h: any) => h.file_path).filter(Boolean)));
+          for (const fPath of uniqueFiles.slice(0, 30)) {
+            try {
+              const fContent = await invoke<string>('read_file_content', { path: fPath });
+              if (fContent) {
+                const fResults = astSearchService.searchStructural(fContent, fPath, trimmed);
+                allMatches.push(...fResults);
+              }
+            } catch (_) {}
+          }
+        } else if (currentContent) {
+          allMatches.push(...astSearchService.searchStructural(currentContent, currentFilePath, trimmed));
+        }
+      } catch (err) {
+        console.warn('Whole project structural search error:', err);
+      }
+    } else if (currentContent) {
+      allMatches.push(...astSearchService.searchStructural(currentContent, currentFilePath, trimmed));
+    }
+
+    setMatches(allMatches);
+    if (allMatches.length > 0) setSelectedMatchId(allMatches[0].id);
+    else setSelectedMatchId('');
+    setIsSearching(false);
   };
 
   const handleApplyTemplate = (tpl: StructuralTemplate) => {
     setSelectedTemplate(tpl.id);
     setPattern(tpl.pattern);
-    handleSearch(tpl.pattern);
+    handleSearch(tpl.pattern, scope);
   };
 
   const selectedMatch = matches.find((m) => m.id === selectedMatchId) || matches[0];
@@ -108,11 +163,45 @@ export const StructuralSearchModal: React.FC<StructuralSearchModalProps> = ({
                 className="w-full rounded bg-[#1e1f22] pl-8 pr-3 py-1.5 text-xs text-[#dfe1e5] border border-[#43454a] focus:border-[#3574f0] outline-none font-mono placeholder:text-[#6f737a]"
               />
             </div>
+
+            {/* Scope Selector */}
+            <div className="flex items-center bg-[#1e1f22] border border-[#393b40] rounded p-0.5 text-[11px] shrink-0">
+              <button
+                type="button"
+                onClick={() => {
+                  setScope('file');
+                  handleSearch(pattern, 'file');
+                }}
+                className={`px-2 py-1 rounded flex items-center gap-1 transition-colors cursor-pointer ${
+                  scope === 'file' ? 'bg-[#3574f0] text-white font-medium' : 'text-[#868a91] hover:text-[#dfe1e5]'
+                }`}
+                title="Search structural pattern in currently active file"
+              >
+                <FileCode2 size={12} />
+                <span>Active File</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setScope('project');
+                  handleSearch(pattern, 'project');
+                }}
+                className={`px-2 py-1 rounded flex items-center gap-1 transition-colors cursor-pointer ${
+                  scope === 'project' ? 'bg-[#3574f0] text-white font-medium' : 'text-[#868a91] hover:text-[#dfe1e5]'
+                }`}
+                title="Search structural pattern across all project files"
+              >
+                <Globe size={12} />
+                <span>Project</span>
+              </button>
+            </div>
+
             <button
-              onClick={() => handleSearch(pattern)}
-              className="px-3 py-1.5 rounded bg-[#3574f0] hover:bg-[#3369d6] text-white text-xs font-medium transition-colors cursor-pointer"
+              onClick={() => handleSearch(pattern, scope)}
+              disabled={isSearching}
+              className="px-3 py-1.5 rounded bg-[#3574f0] hover:bg-[#3369d6] text-white text-xs font-medium transition-colors cursor-pointer shrink-0 disabled:opacity-50"
             >
-              Search
+              {isSearching ? 'Searching...' : 'Search'}
             </button>
           </div>
 

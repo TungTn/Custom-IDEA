@@ -64,18 +64,28 @@ export const EndpointsPanel: React.FC<EndpointsPanelProps> = ({
             projectPath,
             query: q,
             caseSensitive: true,
-            limit: 60,
+            limit: 80,
           }).catch(() => []);
 
           if (results && Array.isArray(results)) {
             for (const item of results) {
-              const line = item.line_text.trim();
+              const rawLine = item.line_content ?? item.line_text ?? '';
+              const line = rawLine.trim();
+              if (!line) continue;
               const p = item.file_path;
 
-              // 1. Spring Framework: @GetMapping("/api/...")
-              const springMatch = line.match(/@(Get|Post|Put|Delete|Patch|Request)Mapping\s*\(\s*(?:value\s*=\s*)?["']([^"']+)["']/i);
+              // 1. Spring Framework: @GetMapping("/api/...") or @RequestMapping(...)
+              const springMatch = line.match(/@(Get|Post|Put|Delete|Patch|Request)Mapping\s*\(\s*(?:(?:value|path)\s*=\s*)?["']([^"']+)["']/i);
               if (springMatch) {
-                const method = springMatch[1].toUpperCase() === 'REQUEST' ? 'ALL' : (springMatch[1].toUpperCase() as any);
+                let method: 'GET' | 'POST' | 'PUT' | 'DELETE' | 'PATCH' | 'ALL' = 'GET';
+                const tag = springMatch[1].toUpperCase();
+                if (tag === 'REQUEST') {
+                  const mMatch = line.match(/method\s*=\s*(?:RequestMethod\.)?([A-Z]+)/);
+                  method = mMatch ? (mMatch[1] as any) : 'ALL';
+                } else {
+                  method = tag as any;
+                }
+
                 discovered.push({
                   id: `ep-${p}-${item.line_number}`,
                   method,
@@ -118,7 +128,7 @@ export const EndpointsPanel: React.FC<EndpointsPanelProps> = ({
                 continue;
               }
 
-              // 4. Rust: #[get("/api/v1/health")]
+              // 4. Rust: #[get("/api/v1/health")] or #[post(...)]
               const rustMatch = line.match(/#\[(get|post|put|delete|patch)\s*\(\s*["']([^"']+)["']/i);
               if (rustMatch) {
                 discovered.push({

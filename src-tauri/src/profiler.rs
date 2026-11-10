@@ -1,4 +1,7 @@
 use serde::Serialize;
+use std::collections::HashMap;
+use std::sync::Mutex;
+use std::time::Instant;
 
 #[derive(Debug, Serialize, Clone)]
 pub struct ProcessMetricsDto {
@@ -8,10 +11,17 @@ pub struct ProcessMetricsDto {
     pub cores_count: u32,
 }
 
+#[derive(Debug, Serialize, Clone)]
+pub struct JavaProcessDto {
+    pub pid: u32,
+    pub name: String,
+    pub main_class: String,
+    pub is_current_app: bool,
+}
+
 #[cfg(windows)]
 mod win_impl {
-    use std::sync::Mutex;
-    use std::time::Instant;
+    use super::*;
 
     #[repr(C)]
     #[allow(non_snake_case)]
@@ -47,6 +57,9 @@ mod win_impl {
     #[link(name = "kernel32")]
     extern "system" {
         fn GetCurrentProcess() -> isize;
+        fn GetCurrentProcessId() -> u32;
+        fn OpenProcess(dwDesiredAccess: u32, bInheritHandle: i32, dwProcessId: u32) -> isize;
+        fn CloseHandle(hObject: isize) -> i32;
         fn GetProcessMemoryInfo(
             hProcess: isize,
             ppsmemCounters: *mut PROCESS_MEMORY_COUNTERS_EX,
@@ -67,11 +80,23 @@ mod win_impl {
         last_cpu_time: u64,
     }
 
-    static CPU_SAMPLE: Mutex<Option<CpuSample>> = Mutex::new(None);
+    static CPU_SAMPLES: Mutex<Option<HashMap<u32, CpuSample>>> = Mutex::new(None);
 
-    pub fn sample_metrics() -> (f32, f32, f32) {
+    pub fn sample_metrics(target_pid: Option<u32>) -> (f32, f32, f32) {
         unsafe {
-            let handle = GetCurrentProcess();
+            let current_id = GetCurrentProcessId();
+            let pid = target_pid.unwrap_or(current_id);
+
+            let (handle, should_close) = if pid == current_id {
+                (GetCurrentProcess(), false)
+            } else {
+                // PROCESS_QUERY_INFORMATION (0x0400) | PROCESS_VM_READ (0x0010)
+                let h = OpenProcess(0x0400 | 0x0010, 0, pid);
+                if h == 0 {
+                    return (0.0, 0.0, 16384.0);
+                }
+                (h, true)
+            };
 
             // 1. Process Memory (WorkingSet & PrivateUsage in MB)
             let mut mem_counters: PROCESS_MEMORY_COUNTERS_EX = std::mem::zeroed();
@@ -84,7 +109,7 @@ mod win_impl {
                 };
                 (bytes as f32) / (1024.0 * 1024.0)
             } else {
-                120.0
+                0.0
             };
 
             // 2. System Total Physical Memory in MB
@@ -106,9 +131,10 @@ mod win_impl {
             if GetProcessTimes(handle, &mut ct, &mut et, &mut kt, &mut ut) != 0 {
                 let total_cpu_100ns = kt.wrapping_add(ut);
                 let now = Instant::now();
-                let mut guard = CPU_SAMPLE.lock().unwrap();
+                let mut guard = CPU_SAMPLES.lock().unwrap();
+                let map = guard.get_or_insert_with(HashMap::new);
 
-                if let Some(prev) = &*guard {
+                if let Some(prev) = map.get(&pid) {
                     let elapsed_secs = now.duration_since(prev.last_time).as_secs_f32();
                     if elapsed_secs > 0.05 {
                         let delta_cpu_secs = (total_cpu_100ns.saturating_sub(prev.last_cpu_time) as f32) / 10_000_000.0;
@@ -116,17 +142,21 @@ mod win_impl {
                             .map(|n| n.get())
                             .unwrap_or(1) as f32;
                         cpu_percent = ((delta_cpu_secs / elapsed_secs) * 100.0 / cores).clamp(0.0, 100.0);
-                        *guard = Some(CpuSample {
+                        map.insert(pid, CpuSample {
                             last_time: now,
                             last_cpu_time: total_cpu_100ns,
                         });
                     }
                 } else {
-                    *guard = Some(CpuSample {
+                    map.insert(pid, CpuSample {
                         last_time: now,
                         last_cpu_time: total_cpu_100ns,
                     });
                 }
+            }
+
+            if should_close {
+                CloseHandle(handle);
             }
 
             (
@@ -136,18 +166,26 @@ mod win_impl {
             )
         }
     }
+
+    pub fn get_current_pid() -> u32 {
+        unsafe { GetCurrentProcessId() }
+    }
 }
 
 #[cfg(not(windows))]
 mod win_impl {
-    pub fn sample_metrics() -> (f32, f32, f32) {
+    pub fn sample_metrics(_target_pid: Option<u32>) -> (f32, f32, f32) {
         (0.0, 120.0, 8192.0)
+    }
+
+    pub fn get_current_pid() -> u32 {
+        std::process::id()
     }
 }
 
 #[tauri::command]
-pub fn get_process_metrics() -> Result<ProcessMetricsDto, String> {
-    let (cpu_percent, memory_mb, system_total_mb) = win_impl::sample_metrics();
+pub fn get_process_metrics(target_pid: Option<u32>) -> Result<ProcessMetricsDto, String> {
+    let (cpu_percent, memory_mb, system_total_mb) = win_impl::sample_metrics(target_pid);
     let cores = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1) as u32;
     Ok(ProcessMetricsDto {
         cpu_percent,
@@ -155,4 +193,124 @@ pub fn get_process_metrics() -> Result<ProcessMetricsDto, String> {
         system_total_mb,
         cores_count: cores,
     })
+}
+
+#[tauri::command]
+pub fn list_running_java_processes() -> Result<Vec<JavaProcessDto>, String> {
+    let mut list = Vec::new();
+    let current_pid = win_impl::get_current_pid();
+
+    // 1. Add Custom-IDEA Host as default process
+    list.push(JavaProcessDto {
+        pid: current_pid,
+        name: "Custom-IDEA (IDE Host)".to_string(),
+        main_class: "Custom-IDEA.exe".to_string(),
+        is_current_app: true,
+    });
+
+    // 2. Discover Java processes via `jps -l`
+    let mut cmd = std::process::Command::new("jps");
+    cmd.arg("-l");
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+    }
+
+    if let Ok(output) = cmd.output() {
+        if output.status.success() {
+            let text = String::from_utf8_lossy(&output.stdout);
+            for line in text.lines() {
+                let parts: Vec<&str> = line.trim().split_whitespace().collect();
+                if parts.is_empty() { continue; }
+                if let Ok(pid) = parts[0].parse::<u32>() {
+                    let main_class = if parts.len() > 1 { parts[1] } else { "Java Application" };
+                    if main_class == "jdk.jcmd/sun.tools.jps.Jps" || main_class == "sun.tools.jps.Jps" {
+                        continue;
+                    }
+
+                    // Extract clean name from class or jar path
+                    let clean_name = if main_class.ends_with(".jar") {
+                        std::path::Path::new(main_class)
+                            .file_name()
+                            .map(|s| s.to_string_lossy().to_string())
+                            .unwrap_or_else(|| main_class.to_string())
+                    } else if let Some(last) = main_class.split('.').last() {
+                        last.to_string()
+                    } else {
+                        main_class.to_string()
+                    };
+
+                    list.push(JavaProcessDto {
+                        pid,
+                        name: clean_name,
+                        main_class: main_class.to_string(),
+                        is_current_app: false,
+                    });
+                }
+            }
+        }
+    }
+
+    Ok(list)
+}
+
+#[tauri::command]
+pub fn trigger_jvm_gc(pid: u32) -> Result<String, String> {
+    let mut cmd = std::process::Command::new("jcmd");
+    cmd.arg(pid.to_string());
+    cmd.arg("GC.run");
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x08000000);
+    }
+
+    match cmd.output() {
+        Ok(out) => {
+            let stdout = String::from_utf8_lossy(&out.stdout).trim().to_string();
+            let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
+            if out.status.success() {
+                Ok(if stdout.is_empty() { "GC sweep completed successfully.".to_string() } else { stdout })
+            } else {
+                Err(if !stderr.is_empty() { stderr } else { stdout })
+            }
+        }
+        Err(e) => Err(format!("Failed to execute jcmd: {}. Ensure JDK bin is in PATH.", e)),
+    }
+}
+
+#[tauri::command]
+pub fn trigger_jvm_heap_dump(pid: u32, output_path: Option<String>) -> Result<String, String> {
+    let target_path = output_path.unwrap_or_else(|| {
+        let ts = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        let temp_dir = std::env::temp_dir();
+        temp_dir.join(format!("heap_dump_{}_{}.hprof", pid, ts)).to_string_lossy().to_string()
+    });
+
+    let mut cmd = std::process::Command::new("jcmd");
+    cmd.arg(pid.to_string());
+    cmd.arg("GC.heap_dump");
+    cmd.arg(&target_path);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x08000000);
+    }
+
+    match cmd.output() {
+        Ok(out) => {
+            let stdout = String::from_utf8_lossy(&out.stdout).trim().to_string();
+            let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
+            if out.status.success() {
+                Ok(target_path)
+            } else {
+                Err(if !stderr.is_empty() { stderr } else { stdout })
+            }
+        }
+        Err(e) => Err(format!("Failed to execute jcmd heap dump: {}. Ensure JDK bin is in PATH.", e)),
+    }
 }

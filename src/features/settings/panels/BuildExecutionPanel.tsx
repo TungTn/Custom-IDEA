@@ -1,5 +1,5 @@
-import React, { useState } from 'react';
-import { RefreshCw, Check, Plus, Trash2, Cpu, Hammer, Play, Bug, Upload, Shield, Server, Box, CheckCircle2 } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { RefreshCw, RotateCw, Check, Plus, Trash2, Cpu, Hammer, Play, Bug, Upload, Shield, Server, Box, CheckCircle2 } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
 import { SettingPanelProps } from './types';
 
@@ -20,11 +20,108 @@ export const BuildExecutionPanel: React.FC<SettingPanelProps> = ({
   const [showAddExclude, setShowAddExclude] = useState(false);
 
   // Deployment servers state
-  const [deploymentServers, setDeploymentServers] = useState([
-    { id: 'srv_1', name: 'Staging SFTP Server', type: 'SFTP', host: 'staging.mic.vn', port: 22, rootPath: '/var/www/app', autoUpload: true },
-    { id: 'srv_2', name: 'Local Test Server', type: 'Local', host: 'localhost', port: 8080, rootPath: 'D:\\TestServer\\webapps', autoUpload: false },
-  ]);
+  const [deploymentServers, setDeploymentServers] = useState(() => {
+    return (formSettings as any).deploymentServers || [
+      { id: 'srv_1', name: 'Staging SFTP Server', type: 'SFTP', host: 'staging.mic.vn', port: 22, rootPath: '/var/www/app', autoUpload: true },
+      { id: 'srv_2', name: 'Local Test Server', type: 'Local', host: 'localhost', port: 8080, rootPath: 'D:\\TestServer\\webapps', autoUpload: false },
+    ];
+  });
   const [selectedServerId, setSelectedServerId] = useState('srv_1');
+  const [isTestingSftp, setIsTestingSftp] = useState(false);
+  const [sftpTestResult, setSftpTestResult] = useState<{ success: boolean; message: string } | null>(null);
+
+  const handleUpdateServers = (updater: (prev: any[]) => any[]) => {
+    setDeploymentServers((prev: any) => {
+      const next = updater(prev);
+      updateSetting('deploymentServers' as any, next);
+      return next;
+    });
+  };
+
+  const handleTestSftp = async (host: string, port: number) => {
+    setIsTestingSftp(true);
+    setSftpTestResult(null);
+    const isTauri = typeof window !== 'undefined' && ('__TAURI_INTERNALS__' in window || '__TAURI__' in window);
+    if (isTauri) {
+      try {
+        const res = await invoke<{ success: boolean; host: string; port: number; latency_ms?: number; message: string }>(
+          'test_sftp_connection',
+          { host, port }
+        );
+        setSftpTestResult(res);
+        if (res.success) {
+          onShowToast?.('SFTP Connected', res.message, 'success');
+        } else {
+          onShowToast?.('SFTP Failed', res.message, 'error');
+        }
+      } catch (err: any) {
+        setSftpTestResult({ success: false, message: String(err) });
+        onShowToast?.('SFTP Error', String(err), 'error');
+      }
+    } else {
+      setSftpTestResult({ success: true, message: 'Browser Preview: SFTP handshake simulated.' });
+    }
+    setIsTestingSftp(false);
+  };
+
+  // Remote Dev & WSL state
+  const [wslDistros, setWslDistros] = useState<string[]>([]);
+  const [isLoadingWsl, setIsLoadingWsl] = useState(false);
+  const [isTestingSsh, setIsTestingSsh] = useState(false);
+  const [sshTestResult, setSshTestResult] = useState<{ success: boolean; message: string } | null>(null);
+
+  const handleFetchWsl = async () => {
+    setIsLoadingWsl(true);
+    const isTauri = typeof window !== 'undefined' && ('__TAURI_INTERNALS__' in window || '__TAURI__' in window);
+    if (isTauri) {
+      try {
+        const distros = await invoke<string[]>('detect_wsl_distros');
+        setWslDistros(distros || []);
+      } catch (err) {
+        console.warn('detect_wsl_distros error:', err);
+      }
+    } else {
+      setWslDistros(['Ubuntu-22.04', 'Debian']);
+    }
+    setIsLoadingWsl(false);
+  };
+
+  useEffect(() => {
+    if (selectedId === 'build-remote') {
+      handleFetchWsl();
+    }
+  }, [selectedId]);
+
+  const handleTestSsh = async () => {
+    const host = formSettings.remoteDevHost;
+    if (!host) {
+      onShowToast?.('SSH Host Missing', 'Please enter an SSH host or IP address', 'warning');
+      return;
+    }
+    setIsTestingSsh(true);
+    setSshTestResult(null);
+    const isTauri = typeof window !== 'undefined' && ('__TAURI_INTERNALS__' in window || '__TAURI__' in window);
+    if (isTauri) {
+      try {
+        const res = await invoke<{ success: boolean; host: string; port: number; latency_ms?: number; message: string }>(
+          'test_remote_ssh_connection',
+          { host }
+        );
+        setSshTestResult(res);
+        if (res.success) {
+          onShowToast?.('SSH Connected', res.message, 'success');
+        } else {
+          onShowToast?.('SSH Connection Failed', res.message, 'error');
+        }
+      } catch (err: any) {
+        setSshTestResult({ success: false, message: String(err) });
+        onShowToast?.('SSH Test Error', String(err), 'error');
+      }
+    } else {
+      setSshTestResult({ success: true, message: 'Browser Preview: SSH handshake simulated.' });
+    }
+    setIsTestingSsh(false);
+  };
 
   const handleDetectToolchains = async (notify = false) => {
     setIsDetectingTools(true);
@@ -936,8 +1033,13 @@ export const BuildExecutionPanel: React.FC<SettingPanelProps> = ({
       {selectedId === 'build-deployment' && (
         <div className="space-y-6 max-w-2xl text-xs">
           <div>
-            <h2 className="text-base font-semibold text-white mb-1">Deployment</h2>
-            <p className="text-xs text-[#868A91]">Configure remote SFTP, FTP, and local server deployment targets with upload on save.</p>
+            <div className="flex items-center gap-2 mb-1">
+              <h2 className="text-base font-semibold text-white">Deployment</h2>
+              <span className="text-[10px] px-1.5 py-0.5 rounded bg-[#59A869]/20 text-[#59A869] border border-[#59A869]/30 font-medium">
+                Active Integration
+              </span>
+            </div>
+            <p className="text-xs text-[#868A91]">Configure remote SFTP, FTP, and local server deployment targets with real handshake testing.</p>
           </div>
 
           <div className="grid grid-cols-3 gap-4">
@@ -955,7 +1057,7 @@ export const BuildExecutionPanel: React.FC<SettingPanelProps> = ({
                       rootPath: '/var/www',
                       autoUpload: false
                     };
-                    setDeploymentServers(prev => [...prev, newServer]);
+                    handleUpdateServers(prev => [...prev, newServer]);
                     setSelectedServerId(newServer.id);
                   }}
                   className="text-[#3574F0]"
@@ -963,10 +1065,13 @@ export const BuildExecutionPanel: React.FC<SettingPanelProps> = ({
                   <Plus size={13} />
                 </button>
               </div>
-              {deploymentServers.map((srv) => (
+              {deploymentServers.map((srv: any) => (
                 <div
                   key={srv.id}
-                  onClick={() => setSelectedServerId(srv.id)}
+                  onClick={() => {
+                    setSelectedServerId(srv.id);
+                    setSftpTestResult(null);
+                  }}
                   className={`p-2 rounded cursor-pointer flex justify-between items-center transition-colors ${
                     selectedServerId === srv.id ? 'bg-[#2E436E] text-white font-medium' : 'text-[#DFE1E5] hover:bg-[#35373B]'
                   }`}
@@ -979,12 +1084,22 @@ export const BuildExecutionPanel: React.FC<SettingPanelProps> = ({
 
             <div className="col-span-2 p-3.5 bg-[#26282B] border border-[#393B40] rounded space-y-3">
               {(() => {
-                const curr = deploymentServers.find(s => s.id === selectedServerId) || deploymentServers[0];
+                const curr = deploymentServers.find((s: any) => s.id === selectedServerId) || deploymentServers[0];
                 return (
                   <>
                     <div className="flex items-center justify-between pb-1 border-b border-[#393B40]/60">
                       <span className="font-semibold text-white">{curr.name}</span>
-                      <span className="text-[10px] px-1.5 py-0.5 rounded bg-[#3574F0]/20 text-[#679EF5]">{curr.type}</span>
+                      <div className="flex items-center gap-2">
+                        <button
+                          onClick={() => handleTestSftp(curr.host, curr.port)}
+                          disabled={isTestingSftp}
+                          className="px-2 py-0.5 bg-[#3574F0] hover:bg-[#3069D9] text-white rounded text-[10px] font-medium flex items-center gap-1 transition-colors disabled:opacity-50"
+                        >
+                          <RotateCw size={10} className={isTestingSftp ? 'animate-spin' : ''} />
+                          <span>{isTestingSftp ? 'Testing...' : 'Test Connection'}</span>
+                        </button>
+                        <span className="text-[10px] px-1.5 py-0.5 rounded bg-[#3574F0]/20 text-[#679EF5]">{curr.type}</span>
+                      </div>
                     </div>
 
                     <div className="grid grid-cols-3 gap-2">
@@ -995,7 +1110,7 @@ export const BuildExecutionPanel: React.FC<SettingPanelProps> = ({
                           value={curr.host}
                           onChange={(e) => {
                             const val = e.target.value;
-                            setDeploymentServers(prev => prev.map(s => s.id === curr.id ? { ...s, host: val } : s));
+                            handleUpdateServers(prev => prev.map(s => s.id === curr.id ? { ...s, host: val } : s));
                           }}
                           className="w-full bg-[#1E1F22] border border-[#393B40] rounded px-2.5 py-1 text-white font-mono text-[11px] outline-none"
                         />
@@ -1007,12 +1122,22 @@ export const BuildExecutionPanel: React.FC<SettingPanelProps> = ({
                           value={curr.port}
                           onChange={(e) => {
                             const val = Number(e.target.value);
-                            setDeploymentServers(prev => prev.map(s => s.id === curr.id ? { ...s, port: val } : s));
+                            handleUpdateServers(prev => prev.map(s => s.id === curr.id ? { ...s, port: val } : s));
                           }}
                           className="w-full bg-[#1E1F22] border border-[#393B40] rounded px-2.5 py-1 text-white font-mono text-[11px] outline-none"
                         />
                       </div>
                     </div>
+
+                    {sftpTestResult && (
+                      <div className={`p-2 rounded text-[11px] font-mono border ${
+                        sftpTestResult.success
+                          ? 'bg-[#59A869]/10 border-[#59A869]/30 text-[#59A869]'
+                          : 'bg-[#E05555]/10 border-[#E05555]/30 text-[#E05555]'
+                      }`}>
+                        {sftpTestResult.message}
+                      </div>
+                    )}
 
                     <div>
                       <label className="text-[#868A91] block mb-1">Root path on remote server:</label>
@@ -1021,7 +1146,7 @@ export const BuildExecutionPanel: React.FC<SettingPanelProps> = ({
                         value={curr.rootPath}
                         onChange={(e) => {
                           const val = e.target.value;
-                          setDeploymentServers(prev => prev.map(s => s.id === curr.id ? { ...s, rootPath: val } : s));
+                          handleUpdateServers(prev => prev.map(s => s.id === curr.id ? { ...s, rootPath: val } : s));
                         }}
                         className="w-full bg-[#1E1F22] border border-[#393B40] rounded px-2.5 py-1 text-white font-mono text-[11px] outline-none"
                       />
@@ -1033,7 +1158,7 @@ export const BuildExecutionPanel: React.FC<SettingPanelProps> = ({
                         checked={curr.autoUpload}
                         onChange={(e) => {
                           const val = e.target.checked;
-                          setDeploymentServers(prev => prev.map(s => s.id === curr.id ? { ...s, autoUpload: val } : s));
+                          handleUpdateServers(prev => prev.map(s => s.id === curr.id ? { ...s, autoUpload: val } : s));
                         }}
                         className="accent-[#3574F0] rounded"
                       />
@@ -1088,13 +1213,28 @@ export const BuildExecutionPanel: React.FC<SettingPanelProps> = ({
       {selectedId === 'build-remote' && (
         <div className="space-y-6 max-w-2xl text-xs">
           <div>
-            <h2 className="text-base font-semibold text-white mb-1">Remote Development</h2>
+            <div className="flex items-center gap-2 mb-1">
+              <h2 className="text-base font-semibold text-white">Remote Development</h2>
+              <span className="text-[10px] px-1.5 py-0.5 rounded bg-[#59A869]/20 text-[#59A869] border border-[#59A869]/30 font-medium">
+                Active Integration
+              </span>
+            </div>
             <p className="text-xs text-[#868A91]">Connect to SSH remote hosts, WSL 2 Linux subsystems, or Docker devcontainers.</p>
           </div>
 
           <div className="space-y-4 p-4 bg-[#26282B] border border-[#393B40] rounded-lg">
             <div className="space-y-1.5">
-              <label className="text-white font-medium block">SSH Host (e.g. user@remote.mic.vn):</label>
+              <div className="flex items-center justify-between">
+                <label className="text-white font-medium block">SSH Host (e.g. user@remote.mic.vn):</label>
+                <button
+                  onClick={handleTestSsh}
+                  disabled={isTestingSsh}
+                  className="px-2.5 py-1 bg-[#3574F0] hover:bg-[#3069D9] text-white rounded text-[11px] font-medium flex items-center gap-1.5 transition-colors disabled:opacity-50"
+                >
+                  <RotateCw size={11} className={isTestingSsh ? 'animate-spin' : ''} />
+                  <span>{isTestingSsh ? 'Connecting...' : 'Test Connection'}</span>
+                </button>
+              </div>
               <input
                 type="text"
                 placeholder="developer@build-server.mic.vn"
@@ -1102,13 +1242,52 @@ export const BuildExecutionPanel: React.FC<SettingPanelProps> = ({
                 onChange={(e) => updateSetting('remoteDevHost', e.target.value)}
                 className="w-full bg-[#1E1F22] border border-[#393B40] rounded px-2.5 py-1.5 text-white font-mono text-[11px] outline-none"
               />
+              {sshTestResult && (
+                <div className={`mt-2 p-2 rounded text-[11px] font-mono border ${
+                  sshTestResult.success
+                    ? 'bg-[#59A869]/10 border-[#59A869]/30 text-[#59A869]'
+                    : 'bg-[#E05555]/10 border-[#E05555]/30 text-[#E05555]'
+                }`}>
+                  {sshTestResult.message}
+                </div>
+              )}
             </div>
 
-            <div className="pt-2 border-t border-[#393B40]/60 space-y-2">
-              <span className="text-[#DFE1E5] font-medium block">WSL 2 Integration:</span>
-              <label className="flex items-center gap-2 cursor-pointer">
+            <div className="pt-3 border-t border-[#393B40]/60 space-y-2.5">
+              <div className="flex items-center justify-between">
+                <span className="text-[#DFE1E5] font-medium block">Detected WSL 2 Distributions:</span>
+                <button
+                  onClick={handleFetchWsl}
+                  disabled={isLoadingWsl}
+                  className="text-[#868A91] hover:text-white flex items-center gap-1 text-[11px] transition-colors"
+                  title="Query wsl.exe -l -q"
+                >
+                  <RotateCw size={11} className={isLoadingWsl ? 'animate-spin' : ''} />
+                  <span>Refresh Distros</span>
+                </button>
+              </div>
+
+              {wslDistros.length > 0 ? (
+                <div className="flex flex-wrap gap-2 pt-1">
+                  {wslDistros.map((distro) => (
+                    <div
+                      key={distro}
+                      className="px-2.5 py-1 rounded bg-[#1E1F22] border border-[#393B40] text-white font-mono text-[11px] flex items-center gap-1.5"
+                    >
+                      <span className="w-2 h-2 rounded-full bg-[#59A869]" />
+                      <span>{distro}</span>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="p-2.5 rounded bg-[#1E1F22] border border-[#393B40] text-[#868A91] text-[11px]">
+                  {isLoadingWsl ? 'Scanning installed WSL distributions...' : 'No WSL distributions detected (wsl.exe -l -q returned empty).'}
+                </div>
+              )}
+
+              <label className="flex items-center gap-2 cursor-pointer pt-1">
                 <input type="checkbox" defaultChecked={true} className="accent-[#3574F0] rounded" />
-                <span className="text-[#DFE1E5]">Automatically detect installed WSL distributions (Ubuntu, Debian)</span>
+                <span className="text-[#868A91] text-[11px]">Use default distribution for WSL terminal sessions</span>
               </label>
             </div>
           </div>

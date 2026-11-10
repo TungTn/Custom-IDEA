@@ -711,6 +711,99 @@ pub fn git_rebase_branch(project_path: String, upstream: String) -> Result<Strin
   run_git_cmd(&project_path, &["rebase", &upstream])
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct GitRebaseItemDto {
+  pub hash: String,
+  pub action: String,
+  pub subject: Option<String>,
+}
+
+#[tauri::command]
+pub fn git_interactive_rebase(
+  project_path: String,
+  base_commit: String,
+  items: Vec<GitRebaseItemDto>,
+) -> Result<String, String> {
+  let git_bin = get_git_executable();
+  let temp_dir = std::env::temp_dir();
+  let timestamp = std::time::SystemTime::now()
+    .duration_since(std::time::UNIX_EPOCH)
+    .unwrap_or_default()
+    .as_millis();
+
+  let todo_file = temp_dir.join(format!("git-rebase-todo-{}.txt", timestamp));
+  let mut todo_content = String::new();
+  for item in &items {
+    let act = match item.action.to_lowercase().as_str() {
+      "squash" | "s" => "squash",
+      "fixup" | "f" => "fixup",
+      "drop" | "d" => "drop",
+      "reword" | "r" => "reword",
+      "edit" | "e" => "edit",
+      _ => "pick",
+    };
+    let subj = item.subject.as_deref().unwrap_or("");
+    todo_content.push_str(&format!("{} {} {}\n", act, item.hash, subj));
+  }
+  std::fs::write(&todo_file, &todo_content)
+    .map_err(|e| format!("Failed to create rebase todo file: {}", e))?;
+
+  #[cfg(windows)]
+  let script_file = temp_dir.join(format!("seq-editor-{}.bat", timestamp));
+  #[cfg(not(windows))]
+  let script_file = temp_dir.join(format!("seq-editor-{}.sh", timestamp));
+
+  #[cfg(windows)]
+  {
+    let todo_str = todo_file.to_string_lossy().replace('/', "\\");
+    let script_content = format!("@echo off\r\ncopy /y \"{}\" \"%~1\" >nul\r\n", todo_str);
+    let _ = std::fs::write(&script_file, script_content);
+  }
+  #[cfg(not(windows))]
+  {
+    let script_content = format!("#!/bin/sh\ncp -f \"{}\" \"$1\"\n", todo_file.to_string_lossy());
+    let _ = std::fs::write(&script_file, script_content);
+    #[cfg(unix)]
+    {
+      use std::os::unix::fs::PermissionsExt;
+      let _ = std::fs::set_permissions(&script_file, std::fs::Permissions::from_mode(0o755));
+    }
+  }
+
+  let work_dir = if project_path.trim().is_empty() { "." } else { project_path.trim() };
+  let mut cmd = Command::new(&git_bin);
+  cmd.args(&["rebase", "-i", &base_commit]);
+  cmd.current_dir(work_dir);
+  cmd.env("GIT_SEQUENCE_EDITOR", format!("\"{}\"", script_file.to_string_lossy().replace('/', "\\")));
+  #[cfg(windows)]
+  cmd.env("GIT_EDITOR", "cmd /c exit 0");
+  #[cfg(not(windows))]
+  cmd.env("GIT_EDITOR", "true");
+
+  #[cfg(windows)]
+  cmd.creation_flags(0x08000000);
+
+  let output = cmd.output();
+
+  // Cleanup temp files
+  let _ = std::fs::remove_file(&todo_file);
+  let _ = std::fs::remove_file(&script_file);
+
+  match output {
+    Ok(out) => {
+      if out.status.success() {
+        Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
+      } else {
+        let err_msg = String::from_utf8_lossy(&out.stderr).trim().to_string();
+        let out_msg = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        let combined = if err_msg.is_empty() { out_msg } else { format!("{}\n{}", err_msg, out_msg) };
+        Err(combined)
+      }
+    }
+    Err(e) => Err(format!("Failed to execute git rebase: {}", e)),
+  }
+}
+
 #[tauri::command]
 pub fn git_create_patch(project_path: String, commit_hash: String) -> Result<String, String> {
   run_git_cmd(&project_path, &["format-patch", "-1", "--stdout", &commit_hash])

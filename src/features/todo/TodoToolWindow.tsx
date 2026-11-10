@@ -19,8 +19,10 @@ export interface SearchTextResultDto {
   file_path: string;
   relative_path: string;
   line_number: number;
-  column_number: number;
-  line_text: string;
+  column_number?: number;
+  match_start?: number;
+  line_content?: string;
+  line_text?: string;
 }
 
 export interface TodoItem {
@@ -84,7 +86,9 @@ export const TodoToolWindow: React.FC<TodoToolWindowProps> = ({
           if (seen.has(key)) continue;
           seen.add(key);
 
-          const trimmed = item.line_text.trim();
+          const rawLine = item.line_content ?? item.line_text ?? '';
+          const trimmed = rawLine.trim();
+          if (!trimmed) continue;
           let type: 'TODO' | 'FIXME' | 'NOTE' | 'HACK' = 'TODO';
           if (/fixme/i.test(trimmed)) type = 'FIXME';
           else if (/hack/i.test(trimmed)) type = 'HACK';
@@ -102,7 +106,7 @@ export const TodoToolWindow: React.FC<TodoToolWindowProps> = ({
             filePath: item.file_path,
             relativePath: item.relative_path,
             line: item.line_number,
-            col: item.column_number,
+            col: (item.match_start !== undefined ? item.match_start + 1 : item.column_number) || 1,
           });
         }
       } else if (activeTab?.content) {

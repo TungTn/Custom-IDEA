@@ -6,13 +6,12 @@ import {
   RotateCw, 
   HardDrive, 
   Cpu, 
-  Flame, 
   Trash2, 
   Download,
-  AlertCircle,
   Zap,
   TrendingUp,
-  Clock
+  Clock,
+  Server
 } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
 
@@ -21,6 +20,15 @@ interface ProfilerSample {
   cpuPercent: number;
   memoryMb: number;
 }
+
+interface JavaProcessDto {
+  pid: u32;
+  name: string;
+  main_class: string;
+  is_current_app: boolean;
+}
+
+type u32 = number;
 
 interface ProfilerToolWindowProps {
   onShowToast?: (title: string, message: string, type?: 'info' | 'success' | 'warning' | 'error') => void;
@@ -32,7 +40,40 @@ export const ProfilerToolWindow: React.FC<ProfilerToolWindowProps> = ({ onShowTo
   const [memoryUsage, setMemoryUsage] = useState(148.5);
   const [history, setHistory] = useState<ProfilerSample[]>([]);
   const [snapshotsCount, setSnapshotsCount] = useState(0);
+  const [processes, setProcesses] = useState<JavaProcessDto[]>([]);
+  const [selectedPid, setSelectedPid] = useState<number | null>(null);
+  const [isRefreshing, setIsRefreshing] = useState(false);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+
+  // Discover running Java processes & IDE Host
+  const refreshProcesses = async () => {
+    setIsRefreshing(true);
+    const isTauri = typeof window !== 'undefined' && ('__TAURI_INTERNALS__' in window || '__TAURI__' in window);
+    if (isTauri) {
+      try {
+        const procs = await invoke<JavaProcessDto[]>('list_running_java_processes');
+        if (procs && procs.length > 0) {
+          setProcesses(procs);
+          if (selectedPid === null) {
+            setSelectedPid(procs[0].pid);
+          }
+        }
+      } catch (err) {
+        console.warn('Failed to list processes:', err);
+      }
+    } else {
+      setProcesses([
+        { pid: 1024, name: 'Custom-IDEA (IDE Host)', main_class: 'Custom-IDEA.exe', is_current_app: true },
+        { pid: 8840, name: 'mic-vehicles Application', main_class: 'com.mic.v1.VehiclesApplication', is_current_app: false }
+      ]);
+      if (selectedPid === null) setSelectedPid(1024);
+    }
+    setIsRefreshing(false);
+  };
+
+  useEffect(() => {
+    refreshProcesses();
+  }, []);
 
   // Live sampling interval
   useEffect(() => {
@@ -47,7 +88,10 @@ export const ProfilerToolWindow: React.FC<ProfilerToolWindowProps> = ({ onShowTo
 
       if (isTauri) {
         try {
-          const metrics = await invoke<{ cpu_percent: number; memory_mb: number; system_total_mb: number; cores_count: number }>('get_process_metrics');
+          const metrics = await invoke<{ cpu_percent: number; memory_mb: number; system_total_mb: number; cores_count: number }>(
+            'get_process_metrics',
+            { targetPid: selectedPid }
+          );
           if (metrics) {
             cpu = metrics.cpu_percent;
             memMb = metrics.memory_mb;
@@ -85,7 +129,7 @@ export const ProfilerToolWindow: React.FC<ProfilerToolWindowProps> = ({ onShowTo
       isMounted = false;
       clearInterval(interval);
     };
-  }, [isProfiling]);
+  }, [isProfiling, selectedPid]);
 
   // Render CPU / Memory waveform graph on Canvas
   useEffect(() => {
@@ -111,14 +155,14 @@ export const ProfilerToolWindow: React.FC<ProfilerToolWindowProps> = ({ onShowTo
     if (history.length < 2) return;
 
     const stepX = w / Math.max(30, history.length - 1);
+    const maxMemScale = Math.max(300, ...history.map(s => s.memoryMb * 1.2));
 
     // 1. Draw Memory Waveform (Blue filled area)
     ctx.beginPath();
     ctx.moveTo(0, h);
     history.forEach((sample, i) => {
       const x = i * stepX;
-      // Scale memory max ~300 MB
-      const y = h - (Math.min(sample.memoryMb, 300) / 300) * (h - 10);
+      const y = h - (Math.min(sample.memoryMb, maxMemScale) / maxMemScale) * (h - 10);
       if (i === 0) ctx.lineTo(x, y);
       else ctx.lineTo(x, y);
     });
@@ -130,7 +174,7 @@ export const ProfilerToolWindow: React.FC<ProfilerToolWindowProps> = ({ onShowTo
     ctx.beginPath();
     history.forEach((sample, i) => {
       const x = i * stepX;
-      const y = h - (Math.min(sample.memoryMb, 300) / 300) * (h - 10);
+      const y = h - (Math.min(sample.memoryMb, maxMemScale) / maxMemScale) * (h - 10);
       if (i === 0) ctx.moveTo(x, y);
       else ctx.lineTo(x, y);
     });
@@ -142,7 +186,6 @@ export const ProfilerToolWindow: React.FC<ProfilerToolWindowProps> = ({ onShowTo
     ctx.beginPath();
     history.forEach((sample, i) => {
       const x = i * stepX;
-      // Scale CPU 0-100%
       const y = h - (Math.min(sample.cpuPercent, 100) / 100) * (h - 10);
       if (i === 0) ctx.moveTo(x, y);
       else ctx.lineTo(x, y);
@@ -152,18 +195,41 @@ export const ProfilerToolWindow: React.FC<ProfilerToolWindowProps> = ({ onShowTo
     ctx.stroke();
   }, [history]);
 
-  const handleTakeSnapshot = () => {
+  const handleTakeSnapshot = async () => {
+    const isTauri = typeof window !== 'undefined' && ('__TAURI_INTERNALS__' in window || '__TAURI__' in window);
+    if (isTauri && selectedPid) {
+      try {
+        const outPath = await invoke<string>('trigger_jvm_heap_dump', { pid: selectedPid });
+        setSnapshotsCount(prev => prev + 1);
+        onShowToast?.('Heap Dump Saved', `Snapshot created: ${outPath}`, 'success');
+        return;
+      } catch (err: any) {
+        onShowToast?.('Heap Dump Failed', String(err), 'error');
+        return;
+      }
+    }
     setSnapshotsCount(prev => prev + 1);
     onShowToast?.('Memory Snapshot Captured', `Heap snapshot #${snapshotsCount + 1} (${memoryUsage} MB) saved for inspection`, 'success');
   };
 
-  const handleForceGc = () => {
+  const handleForceGc = async () => {
+    const isTauri = typeof window !== 'undefined' && ('__TAURI_INTERNALS__' in window || '__TAURI__' in window);
+    if (isTauri && selectedPid) {
+      try {
+        const res = await invoke<string>('trigger_jvm_gc', { pid: selectedPid });
+        onShowToast?.('JVM Garbage Collection', res, 'success');
+        return;
+      } catch (err: any) {
+        onShowToast?.('GC Request', String(err), 'warning');
+      }
+    }
     if (typeof window !== 'undefined' && (window as any).gc) {
       (window as any).gc();
     }
-    setMemoryUsage(prev => Math.max(90, Math.round((prev * 0.75) * 10) / 10));
     onShowToast?.('Garbage Collection', 'Forced full GC sweep & memory compaction', 'info');
   };
+
+  const currentProc = processes.find(p => p.pid === selectedPid) || processes[0];
 
   return (
     <div className="h-full flex flex-col bg-[#1E1F22] text-[#DFE1E5] text-xs select-none">
@@ -172,10 +238,39 @@ export const ProfilerToolWindow: React.FC<ProfilerToolWindowProps> = ({ onShowTo
         <div className="flex items-center gap-4">
           <div className="flex items-center gap-1.5 font-semibold text-white">
             <Activity size={14} className="text-[#59A869]" />
-            <span>Profiler</span>
+            <span>JVM Profiler</span>
           </div>
 
-          <div className="flex items-center gap-3 pl-3 border-l border-[#393B40]">
+          {/* Process Selector */}
+          <div className="flex items-center gap-1.5 bg-[#2B2D30] border border-[#393B40] rounded px-2 py-0.5">
+            <Server size={12} className="text-[#3574F0]" />
+            <span className="text-[#868A91] text-[11px]">Target:</span>
+            <select
+              value={selectedPid || ''}
+              onChange={(e) => {
+                const pid = Number(e.target.value);
+                setSelectedPid(pid);
+                setHistory([]); // reset history for new process
+              }}
+              className="bg-transparent text-white font-mono text-[11px] outline-none cursor-pointer max-w-[200px] truncate"
+            >
+              {processes.map((p) => (
+                <option key={p.pid} value={p.pid} className="bg-[#2B2D30] text-white">
+                  [{p.pid}] {p.name} {p.is_current_app ? '(Host)' : ''}
+                </option>
+              ))}
+            </select>
+            <button
+              onClick={refreshProcesses}
+              disabled={isRefreshing}
+              className="text-[#868A91] hover:text-white transition-colors"
+              title="Refresh process list (jps)"
+            >
+              <RotateCw size={11} className={isRefreshing ? 'animate-spin' : ''} />
+            </button>
+          </div>
+
+          <div className="flex items-center gap-3 pl-2 border-l border-[#393B40]">
             <div className="flex items-center gap-1.5 font-mono">
               <span className="w-2 h-2 rounded-full bg-[#59A869]" />
               <span className="text-[#868A91]">CPU:</span>
@@ -184,7 +279,7 @@ export const ProfilerToolWindow: React.FC<ProfilerToolWindowProps> = ({ onShowTo
 
             <div className="flex items-center gap-1.5 font-mono">
               <span className="w-2 h-2 rounded-full bg-[#3574F0]" />
-              <span className="text-[#868A91]">Heap:</span>
+              <span className="text-[#868A91]">Memory:</span>
               <span className="font-bold text-white">{memoryUsage} MB</span>
             </div>
           </div>
@@ -206,16 +301,16 @@ export const ProfilerToolWindow: React.FC<ProfilerToolWindowProps> = ({ onShowTo
           <button
             onClick={handleTakeSnapshot}
             className="px-2.5 py-0.5 bg-[#2B2D30] hover:bg-[#35373B] text-[#DFE1E5] rounded text-xs font-medium flex items-center gap-1.5 border border-[#393B40] transition-colors"
-            title="Capture Memory Heap Snapshot"
+            title="Execute jcmd GC.heap_dump on selected target"
           >
             <Download size={11} />
-            <span>Dump Heap</span>
+            <span>Dump Heap (.hprof)</span>
           </button>
 
           <button
             onClick={handleForceGc}
             className="p-1 hover:bg-[#2B2D30] text-[#868A91] hover:text-[#DFE1E5] rounded transition-colors"
-            title="Trigger Garbage Collection"
+            title="Execute jcmd GC.run (Force Garbage Collection)"
           >
             <Trash2 size={13} />
           </button>
@@ -229,11 +324,11 @@ export const ProfilerToolWindow: React.FC<ProfilerToolWindowProps> = ({ onShowTo
           <div className="flex items-center justify-between text-[11px] text-[#868A91] mb-1 px-1">
             <span className="flex items-center gap-1.5">
               <TrendingUp size={12} className="text-[#3574F0]" />
-              <span>Realtime CPU & Heap Allocation Timeline</span>
+              <span>Realtime Telemetry: PID {selectedPid || 'Host'} ({currentProc?.name || 'Java Application'})</span>
             </span>
             <span className="flex items-center gap-3 font-mono text-[10px]">
               <span className="text-[#59A869]">● CPU %</span>
-              <span className="text-[#3574F0]">■ Heap (MB)</span>
+              <span className="text-[#3574F0]">■ Memory RSS / Heap (MB)</span>
             </span>
           </div>
 
@@ -252,19 +347,19 @@ export const ProfilerToolWindow: React.FC<ProfilerToolWindowProps> = ({ onShowTo
           <div className="bg-[#2B2D30]/60 border border-[#393B40] rounded p-2.5">
             <div className="text-[#868A91] text-[11px] mb-1 flex items-center gap-1.5">
               <Cpu size={12} className="text-[#59A869]" />
-              <span>Processor Load</span>
+              <span>Target CPU Usage</span>
             </div>
             <div className="text-base font-bold text-white font-mono">{cpuUsage}%</div>
-            <div className="text-[10px] text-[#868A91] mt-0.5">Active thread sampling</div>
+            <div className="text-[10px] text-[#868A91] mt-0.5 truncate">PID: {selectedPid || 'Host'}</div>
           </div>
 
           <div className="bg-[#2B2D30]/60 border border-[#393B40] rounded p-2.5">
             <div className="text-[#868A91] text-[11px] mb-1 flex items-center gap-1.5">
               <HardDrive size={12} className="text-[#3574F0]" />
-              <span>Allocated Heap</span>
+              <span>Target Memory</span>
             </div>
             <div className="text-base font-bold text-white font-mono">{memoryUsage} MB</div>
-            <div className="text-[10px] text-[#868A91] mt-0.5">JS & Native buffers</div>
+            <div className="text-[10px] text-[#868A91] mt-0.5">Physical RSS & Heap</div>
           </div>
 
           <div className="bg-[#2B2D30]/60 border border-[#393B40] rounded p-2.5">
@@ -273,16 +368,16 @@ export const ProfilerToolWindow: React.FC<ProfilerToolWindowProps> = ({ onShowTo
               <span>Sampling Frequency</span>
             </div>
             <div className="text-base font-bold text-white font-mono">1.0 Hz</div>
-            <div className="text-[10px] text-[#868A91] mt-0.5">Continuous telemetry</div>
+            <div className="text-[10px] text-[#868A91] mt-0.5">Win32 QueryInformation</div>
           </div>
 
           <div className="bg-[#2B2D30]/60 border border-[#393B40] rounded p-2.5">
             <div className="text-[#868A91] text-[11px] mb-1 flex items-center gap-1.5">
               <Zap size={12} className="text-[#B180D7]" />
-              <span>Memory Dumps</span>
+              <span>Hprof Snapshots</span>
             </div>
             <div className="text-base font-bold text-white font-mono">{snapshotsCount}</div>
-            <div className="text-[10px] text-[#868A91] mt-0.5">Captured snapshots</div>
+            <div className="text-[10px] text-[#868A91] mt-0.5">jcmd GC.heap_dump</div>
           </div>
         </div>
       </div>

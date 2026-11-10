@@ -233,6 +233,7 @@ export const OverlayHost: React.FC<OverlayHostProps> = (props) => {
           isOpen={modalStore.isProjectStructureOpen}
           onClose={() => modalStore.setIsProjectStructureOpen(false)}
           projectName={projectStore.projectName}
+          projectPath={projectStore.projectRootPath}
           files={projectStore.files}
           problems={props.problems}
           onSave={(newName) => {
@@ -372,6 +373,7 @@ export const OverlayHost: React.FC<OverlayHostProps> = (props) => {
             onClose={() => modalStore.setIsStructuralSearchOpen(false)}
             currentContent={activeTab?.content || ''}
             currentFilePath={activeTab?.path || activeTab?.title}
+            projectPath={projectStore.projectRootPath}
             onNavigateToLine={(filePath, line) => {
               props.handleOpenFileAtLocation?.(filePath, line, 1);
             }}

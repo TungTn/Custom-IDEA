@@ -72,6 +72,7 @@ pub fn get_ipc_handler() -> impl Fn(tauri::ipc::Invoke<tauri::Wry>) -> bool + Se
     window::app_start_dragging,
     window::fetch_marketplace_plugins,
     window::fetch_plugin_details,
+    window::download_and_install_plugin,
     window::reveal_in_explorer,
 
     // ─── 6. Toolchains & Process Commands (ide-run) ───
@@ -84,6 +85,12 @@ pub fn get_ipc_handler() -> impl Fn(tauri::ipc::Invoke<tauri::Wry>) -> bool + Se
     process::start_process,
     process::stop_process,
     process::stop_all_processes,
+    process::check_toolchain_binary,
+    process::detect_wsl_distros,
+    process::test_remote_ssh_connection,
+    process::test_sftp_connection,
+    process::deploy_files_to_server,
+    process::fetch_github_issues,
 
     // ─── 7. PTY Terminal Commands (ide-terminal) ───
     pty::terminal_spawn,
@@ -128,6 +135,7 @@ pub fn get_ipc_handler() -> impl Fn(tauri::ipc::Invoke<tauri::Wry>) -> bool + Se
     git::git_rename_branch,
     git::git_merge_branch,
     git::git_rebase_branch,
+    git::git_interactive_rebase,
     git::git_create_patch,
     git::git_get_conflicts,
     git::git_get_conflict_stages,
@@ -171,6 +179,9 @@ pub fn get_ipc_handler() -> impl Fn(tauri::ipc::Invoke<tauri::Wry>) -> bool + Se
     crate::updater::get_app_version_info,
 
     // ─── 14. Profiler & System Metrics Commands ───
-    crate::profiler::get_process_metrics
+    crate::profiler::get_process_metrics,
+    crate::profiler::list_running_java_processes,
+    crate::profiler::trigger_jvm_gc,
+    crate::profiler::trigger_jvm_heap_dump
   ]
 }

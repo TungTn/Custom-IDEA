@@ -1,5 +1,6 @@
 import React from 'react';
-import { Plus, Check, Link as LinkIcon, Search, Settings as SettingsIcon, Trash2, Globe, ShieldCheck, CheckCircle2, AlertCircle, X } from 'lucide-react';
+import { Plus, Check, Link as LinkIcon, Search, Settings as SettingsIcon, Trash2, Globe, ShieldCheck, CheckCircle2, AlertCircle, X, RotateCw, ExternalLink } from 'lucide-react';
+import { invoke } from '@tauri-apps/api/core';
 import { SettingPanelProps } from './types';
 import { LocalAiSettingsPanel } from '../../ai/LocalAiSettingsPanel';
 import { 
@@ -33,6 +34,40 @@ export const ToolsPanel: React.FC<SettingPanelProps> = ({
     { id: 't2', name: 'Postman CLI', exec: 'postman.cmd', menu: 'Tools | External Tools' },
   ]);
   const [isAddToolOpen, setIsAddToolOpen] = React.useState(false);
+
+  // Tasks & GitHub Issues state
+  const [taskRepo, setTaskRepo] = React.useState('mic-corp/mic-vehicles');
+  const [taskToken, setTaskToken] = React.useState('');
+  const [taskIssues, setTaskIssues] = React.useState<any[]>([]);
+  const [isLoadingIssues, setIsLoadingIssues] = React.useState(false);
+
+  const handleFetchTasks = async () => {
+    if (!taskRepo.trim()) {
+      onShowToast?.('Repository Required', 'Please enter a GitHub repository (e.g. owner/repo)', 'warning');
+      return;
+    }
+    setIsLoadingIssues(true);
+    const isTauri = typeof window !== 'undefined' && ('__TAURI_INTERNALS__' in window || '__TAURI__' in window);
+    if (isTauri) {
+      try {
+        const issues = await invoke<any[]>('fetch_github_issues', {
+          repo: taskRepo,
+          token: taskToken.trim() || undefined,
+        });
+        setTaskIssues(issues || []);
+        onShowToast?.('Tasks Synchronized', `Fetched ${issues?.length || 0} open issues from ${taskRepo}`, 'success');
+      } catch (err: any) {
+        onShowToast?.('Task Sync Failed', String(err), 'error');
+      }
+    } else {
+      setTaskIssues([
+        { id: 1, number: 101, title: 'Fix TAX_CODE_LENGTH_14 cross-file navigation', state: 'open', user: 'adminlocal', comments: 3, updated_at: '2026-11-10' },
+        { id: 2, number: 102, title: 'Add JMX/JFR JVM profiler telemetry', state: 'open', user: 'developer', comments: 1, updated_at: '2026-11-09' },
+      ]);
+      onShowToast?.('Tasks Demo', 'Sample issues loaded in preview mode.', 'info');
+    }
+    setIsLoadingIssues(false);
+  };
   const [newToolName, setNewToolName] = React.useState('');
   const [newToolExec, setNewToolExec] = React.useState('');
   return (
@@ -192,18 +227,96 @@ export const ToolsPanel: React.FC<SettingPanelProps> = ({
       {selectedId === 'tools-tasks' && (
         <div className="space-y-5">
           <div>
-            <h2 className="text-base font-semibold text-white mb-1">Tasks</h2>
-            <p className="text-xs text-[#868A91]">Integrate issue trackers (Jira, GitHub Issues, YouTrack) with IDE changelists.</p>
+            <div className="flex items-center gap-2 mb-1">
+              <h2 className="text-base font-semibold text-white">Tasks & Issue Trackers</h2>
+              <span className="text-[10px] px-1.5 py-0.5 rounded bg-[#59A869]/20 text-[#59A869] border border-[#59A869]/30 font-medium">
+                Active Integration
+              </span>
+            </div>
+            <p className="text-xs text-[#868A91]">Integrate issue trackers (GitHub Issues) with IDE changelists and work items.</p>
           </div>
 
-          <div className="space-y-3 max-w-xl text-xs">
-            <div className="border border-[#393B40] rounded bg-[#26282B] p-3 space-y-2">
-              <div className="font-semibold text-white">Configured Task Servers:</div>
-              <div className="text-[#868A91]">GitHub Issues (api.github.com)</div>
+          <div className="space-y-4 max-w-xl text-xs">
+            <div className="border border-[#393B40] rounded bg-[#26282B] p-3 space-y-3">
+              <div className="font-semibold text-white flex items-center justify-between">
+                <span>Task Server: GitHub Issues</span>
+                <span className="text-[10px] text-[#868A91] font-mono">api.github.com</span>
+              </div>
+
+              <div className="grid grid-cols-3 gap-2">
+                <div className="col-span-2">
+                  <label className="text-[#868A91] block mb-1">Repository (owner/repo):</label>
+                  <input
+                    type="text"
+                    value={taskRepo}
+                    onChange={(e) => setTaskRepo(e.target.value)}
+                    placeholder="e.g. mic-corp/mic-vehicles"
+                    className="w-full bg-[#1E1F22] border border-[#393B40] rounded px-2.5 py-1 text-white font-mono text-[11px] outline-none"
+                  />
+                </div>
+                <div>
+                  <label className="text-[#868A91] block mb-1">Action:</label>
+                  <button
+                    onClick={handleFetchTasks}
+                    disabled={isLoadingIssues}
+                    className="w-full py-1 bg-[#3574F0] hover:bg-[#3069D9] text-white rounded text-[11px] font-medium flex items-center justify-center gap-1.5 transition-colors disabled:opacity-50"
+                  >
+                    <RotateCw size={11} className={isLoadingIssues ? 'animate-spin' : ''} />
+                    <span>{isLoadingIssues ? 'Fetching...' : 'Fetch Issues'}</span>
+                  </button>
+                </div>
+              </div>
+
+              <div>
+                <label className="text-[#868A91] block mb-1">Personal Access Token (Optional for public repos):</label>
+                <input
+                  type="password"
+                  value={taskToken}
+                  onChange={(e) => setTaskToken(e.target.value)}
+                  placeholder="ghp_xxxxxxxxxxxxxxxxxxxx"
+                  className="w-full bg-[#1E1F22] border border-[#393B40] rounded px-2.5 py-1 text-white font-mono text-[11px] outline-none"
+                />
+              </div>
+
+              {taskIssues.length > 0 && (
+                <div className="mt-3 border-t border-[#393B40]/60 pt-2 space-y-1.5 max-h-56 overflow-y-auto">
+                  <div className="text-[#868A91] font-medium text-[11px] pb-1">
+                    Open Issues ({taskIssues.length}):
+                  </div>
+                  {taskIssues.map((issue) => (
+                    <div
+                      key={issue.id}
+                      className="p-2 rounded bg-[#1E1F22] border border-[#393B40]/60 flex items-center justify-between hover:border-[#3574F0] transition-colors"
+                    >
+                      <div className="flex-1 min-w-0 pr-2">
+                        <div className="flex items-center gap-2">
+                          <span className="font-mono text-[#3574F0] font-semibold">#{issue.number}</span>
+                          <span className="text-white truncate font-medium">{issue.title}</span>
+                        </div>
+                        <div className="text-[10px] text-[#868A91] mt-0.5">
+                          Opened by @{issue.user} • {issue.comments} comments
+                        </div>
+                      </div>
+                      {issue.html_url && (
+                        <a
+                          href={issue.html_url}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="text-[#868A91] hover:text-[#3574F0] p-1 transition-colors"
+                          title="Open on GitHub"
+                        >
+                          <ExternalLink size={12} />
+                        </a>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
-            <label className="flex items-center gap-2 cursor-pointer">
+
+            <label className="flex items-center gap-2 cursor-pointer pt-1">
               <input type="checkbox" defaultChecked className="accent-[#3574F0] rounded" />
-              <span>Create changelist automatically when opening a task</span>
+              <span className="text-[#DFE1E5]">Create changelist automatically when opening a task</span>
             </label>
           </div>
         </div>

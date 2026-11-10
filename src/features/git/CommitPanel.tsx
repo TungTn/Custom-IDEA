@@ -364,22 +364,35 @@ export const CommitPanel: React.FC<CommitPanelProps> = ({
   const handleExpandAll = () => {
     setIsChangesExpanded(true);
     setIsUnversionedExpanded(true);
-    setCollapsedDirs(new Set());
+    if (groupBy === 'none') {
+      // Khi đang ở danh sách phẳng, tự động chuyển sang Tree View để người dùng thấy các thư mục được mở rộng
+      setGroupBy('directory');
+      setCollapsedDirs(new Set());
+      addToast('View Mode', 'Switched to Directory Tree and expanded all folders', 'info');
+    } else {
+      setCollapsedDirs(new Set());
+    }
   };
 
   const handleCollapseAll = () => {
-    const allDirIds = new Set<string>();
-    const collect = (nodes: GitTreeNode[]) => {
-      for (const n of nodes) {
-        if (n.isFolder) {
-          allDirIds.add(n.id);
-          collect(n.children);
+    if (groupBy === 'none') {
+      // Khi đang ở danh sách phẳng, thu gọn các nhóm lớn Changes và Unversioned
+      setIsChangesExpanded(false);
+      setIsUnversionedExpanded(false);
+    } else {
+      const allDirIds = new Set<string>();
+      const collect = (nodes: GitTreeNode[]) => {
+        for (const n of nodes) {
+          if (n.isFolder) {
+            allDirIds.add(n.id);
+            collect(n.children);
+          }
         }
-      }
-    };
-    collect(versionedTree);
-    collect(unversionedTree);
-    setCollapsedDirs(allDirIds);
+      };
+      collect(versionedTree);
+      collect(unversionedTree);
+      setCollapsedDirs(allDirIds);
+    }
   };
 
 
@@ -521,16 +534,28 @@ export const CommitPanel: React.FC<CommitPanelProps> = ({
     }
   };
 
-  // Rollback all selected files
+  // Rollback selected files or active focused file (IntelliJ Standard)
   const handleRollbackSelected = async () => {
-    const filesToRollback = Object.keys(selectedFiles).filter((p) => selectedFiles[p]);
+    let filesToRollback = Object.keys(selectedFiles).filter((p) => selectedFiles[p]);
+    
+    // Nếu chưa tick checkbox file nào, tự động chọn file đang active/highlight
+    if (filesToRollback.length === 0 && activeFile) {
+      filesToRollback = [activeFile];
+    }
+
     if (filesToRollback.length === 0) {
-      addToast('Rollback', 'No files selected to rollback', 'info');
+      addToast('Rollback', 'No file selected. Please check or click a file to rollback.', 'info');
       return;
     }
-    if (!confirm(`Are you sure you want to rollback ${filesToRollback.length} selected file(s)?`)) {
+
+    const confirmMsg = filesToRollback.length === 1
+      ? `Are you sure you want to rollback changes in "${filesToRollback[0]}"?`
+      : `Are you sure you want to rollback ${filesToRollback.length} selected file(s)?`;
+
+    if (!confirm(confirmMsg)) {
       return;
     }
+
     try {
       if (typeof window !== 'undefined' && ('__TAURI_INTERNALS__' in window || '__TAURI__' in window)) {
         for (const f of filesToRollback) {
@@ -538,7 +563,17 @@ export const CommitPanel: React.FC<CommitPanelProps> = ({
         }
       }
       addToast('Rollback Successful', `Reverted ${filesToRollback.length} file(s)`, 'success');
-      fetchStatus();
+      
+      // Bỏ chọn các file đã hoàn tác
+      setSelectedFiles((prev) => {
+        const next = { ...prev };
+        for (const f of filesToRollback) {
+          delete next[f];
+        }
+        return next;
+      });
+
+      await fetchStatus();
     } catch (err) {
       addToast('Rollback Error', String(err), 'error');
     }
@@ -773,17 +808,30 @@ export const CommitPanel: React.FC<CommitPanelProps> = ({
           {/* Rollback (Ctrl+Alt+Z) */}
           <button
             onClick={handleRollbackSelected}
-            className="p-1.5 hover:bg-[#35373B] hover:text-[#DFE1E5] rounded cursor-pointer transition-colors"
-            title="Rollback... (Ctrl+Alt+Z)"
+            className={`p-1.5 rounded cursor-pointer transition-colors ${
+              (Object.values(selectedFiles).some(Boolean) || activeFile)
+                ? 'hover:bg-[#35373B] text-[#DFE1E5] hover:text-white'
+                : 'text-[#6C707E] cursor-not-allowed'
+            }`}
+            title={
+              Object.values(selectedFiles).some(Boolean)
+                ? `Rollback ${Object.values(selectedFiles).filter(Boolean).length} selected file(s)... (Ctrl+Alt+Z)`
+                : activeFile
+                ? `Rollback active file "${activeFile.split(/[/\\]/).pop()}"... (Ctrl+Alt+Z)`
+                : 'Rollback... (Ctrl+Alt+Z)'
+            }
           >
             <RotateCcw size={13} />
           </button>
 
           {/* Refresh VCS Changes */}
           <button
-            onClick={fetchStatus}
-            className="p-1.5 hover:bg-[#35373B] hover:text-[#DFE1E5] rounded cursor-pointer transition-colors"
-            title="Refresh VCS Changes"
+            onClick={async () => {
+              await fetchStatus();
+              addToast('Git Status', 'VCS changes refreshed', 'info');
+            }}
+            className="p-1.5 hover:bg-[#35373B] text-[#DFE1E5] hover:text-white rounded cursor-pointer transition-colors"
+            title="Refresh VCS Changes (Ctrl+F5)"
           >
             <RefreshCw size={13} className={isLoading ? 'animate-spin text-[#3574F0]' : ''} />
           </button>
@@ -793,14 +841,16 @@ export const CommitPanel: React.FC<CommitPanelProps> = ({
             onClick={() => {
               const next = !showDiffInEditor;
               setShowDiffInEditor(next);
-              if (next && activeFile) {
-                handleOpenDiffInTab(activeFile, false);
+              const target = activeFile || changes[0]?.path;
+              if (next && target) {
+                if (!activeFile) setActiveFile(target);
+                handleOpenDiffInTab(target, false);
               }
             }}
             className={`p-1.5 rounded cursor-pointer transition-colors ${
-              showDiffInEditor ? 'bg-[#3574F0]/20 text-[#3574F0]' : 'hover:bg-[#35373B] hover:text-[#DFE1E5]'
+              showDiffInEditor ? 'bg-[#3574F0]/25 text-[#3574F0]' : 'hover:bg-[#35373B] text-[#868A91] hover:text-[#DFE1E5]'
             }`}
-            title="Show Diff in Editor (Ctrl+D)"
+            title={showDiffInEditor ? "Hide Diff in Editor (Ctrl+D)" : "Show Diff in Editor (Ctrl+D)"}
           >
             <Columns size={13} />
           </button>
@@ -811,7 +861,9 @@ export const CommitPanel: React.FC<CommitPanelProps> = ({
           <div className="relative">
             <button
               onClick={() => {
-                setGroupBy(prev => prev === 'directory' ? 'none' : 'directory');
+                const nextMode = groupBy === 'directory' ? 'none' : 'directory';
+                setGroupBy(nextMode);
+                addToast('View Mode', nextMode === 'directory' ? 'Switched to Directory Tree' : 'Switched to Flat List', 'info');
               }}
               onContextMenu={(e) => {
                 e.preventDefault();
@@ -822,7 +874,7 @@ export const CommitPanel: React.FC<CommitPanelProps> = ({
                   ? 'bg-[#3574F0]/25 text-[#3574F0]'
                   : 'hover:bg-[#35373B] text-[#868A91] hover:text-[#DFE1E5]'
               }`}
-              title={groupBy === 'directory' ? "View as Tree (Directory) - Click to toggle Flat List" : "View as Flat List - Click to toggle Tree"}
+              title={groupBy === 'directory' ? "View Mode: Directory (Tree) - Click to toggle Flat List" : "View Mode: Flat List - Click to toggle Tree"}
             >
               <FolderTree size={13} />
             </button>
@@ -853,8 +905,8 @@ export const CommitPanel: React.FC<CommitPanelProps> = ({
           {/* Expand All */}
           <button
             onClick={handleExpandAll}
-            className="p-1.5 hover:bg-[#35373B] hover:text-[#DFE1E5] rounded cursor-pointer transition-colors"
-            title="Expand All"
+            className="p-1.5 hover:bg-[#35373B] text-[#DFE1E5] hover:text-white rounded cursor-pointer transition-colors"
+            title={groupBy === 'directory' ? "Expand All Folders" : "Expand All (switches to Tree View)"}
           >
             <ChevronsUpDown size={13} />
           </button>
@@ -862,8 +914,8 @@ export const CommitPanel: React.FC<CommitPanelProps> = ({
           {/* Collapse All */}
           <button
             onClick={handleCollapseAll}
-            className="p-1.5 hover:bg-[#35373B] hover:text-[#DFE1E5] rounded cursor-pointer transition-colors"
-            title="Collapse All"
+            className="p-1.5 hover:bg-[#35373B] text-[#DFE1E5] hover:text-white rounded cursor-pointer transition-colors"
+            title={groupBy === 'directory' ? "Collapse All Folders" : "Collapse Groups"}
           >
             <FoldHorizontal size={13} />
           </button>

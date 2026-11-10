@@ -6,7 +6,7 @@ import { VersionMetadata, UpdateProgress } from '../types/updater';
 
 // Cấu hình mặc định cho dự án Custom IDEA trên gitlab.mic.vn
 const DEFAULT_GITLAB_HOST = 'gitlab.mic.vn';
-const DEFAULT_PROJECT_ID = '302';
+const DEFAULT_PROJECT_ID = '299';
 const DEFAULT_PACKAGE_NAME = 'mic-idea';
 
 // Token xác thực đọc/tải từ GitLab Package Registry (Project Access Token)

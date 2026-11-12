@@ -66,16 +66,30 @@ Authorization: Bearer token123
 
 #[tokio::test]
 async fn test_http_execute_request_error() {
+    // Bind and immediately drop an ephemeral listener so the port is guaranteed unbound
+    let addr = {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.local_addr().unwrap()
+    };
     let req = HttpRequestDto {
         id: Some("test".into()),
         method: "GET".into(),
-        url: "http://127.0.0.1:59999/unreachable_non_existent".into(),
+        url: format!("http://{}/unreachable_non_existent", addr),
         headers: HashMap::new(),
         body: None,
     };
 
     let result = http_execute_request(req).await;
     assert!(result.is_err());
+
+    let ftp_req = HttpRequestDto {
+        id: Some("test_ftp".into()),
+        method: "GET".into(),
+        url: "ftp://example.com/file.txt".into(),
+        headers: HashMap::new(),
+        body: None,
+    };
+    assert!(http_execute_request(ftp_req).await.is_err());
 }
 
 #[tokio::test]
@@ -108,4 +122,119 @@ async fn test_http_execute_blocks_metadata_ip() {
     assert!(result.is_err());
     let err = result.unwrap_err();
     assert!(err.contains("cloud metadata"));
+}
+
+#[tokio::test]
+async fn test_http_execute_local_roundtrip() {
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+
+    let server = std::thread::spawn(move || {
+        if let Ok((mut stream, _)) = listener.accept() {
+            let mut req_buf = [0u8; 1024];
+            let _ = stream.read(&mut req_buf);
+            let resp = b"HTTP/1.1 200 OK\r\nX-Test: local-ok\r\nContent-Type: text/plain\r\nContent-Length: 5\r\nConnection: close\r\n\r\nhello";
+            let _ = stream.write_all(resp);
+        }
+    });
+
+    let req = HttpRequestDto {
+        id: Some("test_local".into()),
+        method: "GET".into(),
+        url: format!("http://{}/ping", addr),
+        headers: HashMap::new(),
+        body: None,
+    };
+
+    let res = http_execute_request(req).await.expect("local roundtrip should succeed");
+    assert_eq!(res.status, 200);
+    assert_eq!(res.body, "hello");
+    assert_eq!(res.size_bytes, 5);
+    assert_eq!(res.headers.get("x-test").map(String::as_str), Some("local-ok"));
+    let _ = server.join();
+}
+
+#[tokio::test]
+async fn test_http_execute_blocks_redirect_to_metadata_ip() {
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+
+    let server = std::thread::spawn(move || {
+        if let Ok((mut stream, _)) = listener.accept() {
+            let mut req_buf = [0u8; 1024];
+            let _ = stream.read(&mut req_buf);
+            let resp = b"HTTP/1.1 302 Found\r\nLocation: http://169.254.169.254/latest/meta-data/\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+            let _ = stream.write_all(resp);
+        }
+    });
+
+    let req = HttpRequestDto {
+        id: Some("test_redir_meta".into()),
+        method: "GET".into(),
+        url: format!("http://{}/redir", addr),
+        headers: HashMap::new(),
+        body: None,
+    };
+
+    let err = http_execute_request(req).await.unwrap_err();
+    assert!(
+        err.to_lowercase().contains("redirect") || err.contains("metadata"),
+        "expected redirect SSRF block error, got: {}",
+        err
+    );
+    let _ = server.join();
+}
+
+#[tokio::test]
+async fn test_http_execute_rejects_oversized_response() {
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+
+    let server = std::thread::spawn(move || {
+        if let Ok((mut stream, _)) = listener.accept() {
+            let mut req_buf = [0u8; 1024];
+            let _ = stream.read(&mut req_buf);
+            let total_len = 16 * 1024 * 1024 + 4096;
+            let header = format!(
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                total_len
+            );
+            if stream.write_all(header.as_bytes()).is_ok() {
+                let chunk = vec![b'x'; 64 * 1024];
+                let mut sent = 0;
+                while sent < total_len {
+                    let to_send = (total_len - sent).min(chunk.len());
+                    if stream.write_all(&chunk[..to_send]).is_err() {
+                        break;
+                    }
+                    sent += to_send;
+                }
+            }
+        }
+    });
+
+    let req = HttpRequestDto {
+        id: Some("test_oversized".into()),
+        method: "GET".into(),
+        url: format!("http://{}/huge", addr),
+        headers: HashMap::new(),
+        body: None,
+    };
+
+    let err = http_execute_request(req).await.unwrap_err();
+    assert!(
+        err.contains("Response body exceeded"),
+        "expected size-limit error, got: {}",
+        err
+    );
+    let _ = server.join();
 }

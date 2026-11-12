@@ -99,6 +99,14 @@ fn send_dap_request_internal(
   }
 }
 
+fn validate_dap_frame_size(len: usize) -> Result<(), String> {
+  if len > MAX_DAP_CONTENT_LENGTH {
+    Err("DAP message exceeded maximum size limit".to_string())
+  } else {
+    Ok(())
+  }
+}
+
 fn find_debugger_executable(debug_type: &str) -> Result<(String, Vec<String>), String> {
   let dt = debug_type.to_lowercase();
   match dt.as_str() {
@@ -216,7 +224,7 @@ pub fn dap_start_session(
       }
 
       if let Some(len) = content_length {
-        if len > MAX_DAP_CONTENT_LENGTH {
+        if validate_dap_frame_size(len).is_err() {
           if let Ok(mut map) = pending_clone.lock() {
             for (_, tx) in map.drain() {
               let _ = tx.send(Err("DAP message exceeded maximum size limit".to_string()));
@@ -547,5 +555,38 @@ pub fn dap_evaluate(session_id: String, expression: String, frame_id: Option<usi
     args,
   )?;
   Ok(res)
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  #[test]
+  fn test_find_debugger_executable() {
+    let (py_cmd, py_args) = find_debugger_executable("python").unwrap();
+    assert_eq!(py_cmd, "python");
+    assert_eq!(py_args, vec!["-m", "debugpy.adapter"]);
+    assert!(find_debugger_executable("PY").is_ok());
+
+    let (rust_cmd, _) = find_debugger_executable("rust").unwrap();
+    assert!(rust_cmd.starts_with("lldb-dap"));
+    assert!(find_debugger_executable("lldb").is_ok());
+
+    for js_type in ["node", "js", "ts", "javascript", "typescript"] {
+      let err = find_debugger_executable(js_type).unwrap_err();
+      assert!(err.contains("js-debug"), "expected js-debug guidance for {}", js_type);
+    }
+
+    let unknown_err = find_debugger_executable("ruby").unwrap_err();
+    assert!(unknown_err.contains("Unsupported debug type"));
+  }
+
+  #[test]
+  fn test_validate_dap_frame_size() {
+    assert!(validate_dap_frame_size(0).is_ok());
+    assert!(validate_dap_frame_size(MAX_DAP_CONTENT_LENGTH).is_ok());
+    let err = validate_dap_frame_size(MAX_DAP_CONTENT_LENGTH + 1).unwrap_err();
+    assert!(err.contains("maximum size limit"));
+  }
 }
 

@@ -854,5 +854,168 @@ mod tests {
     assert!(!is_same_or_child_path("D:/project/src/main", "D:/project/src/main.rs"));
     assert!(!is_same_or_child_path("D:/project/src/main", "D:/project/src/main_test.go"));
   }
+
+  struct TempTestDir(std::path::PathBuf);
+  impl TempTestDir {
+    fn new(prefix: &str) -> Self {
+      let uniq = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+      let p = std::env::temp_dir().join(format!("{}_{}_{}", prefix, std::process::id(), uniq));
+      std::fs::create_dir_all(&p).unwrap();
+      Self(p)
+    }
+  }
+  impl Drop for TempTestDir {
+    fn drop(&mut self) {
+      let _ = std::fs::remove_dir_all(&self.0);
+    }
+  }
+
+  #[test]
+  fn test_copy_and_move_reject_self_subpath() {
+    let dir = TempTestDir::new("vfs_subpath");
+    let src_dir = dir.0.join("parent");
+    std::fs::create_dir_all(&src_dir).unwrap();
+    std::fs::write(src_dir.join("file.txt"), "hello").unwrap();
+
+    let nested_dst = src_dir.join("sub").join("parent_copy");
+    let copy_res = vfs_copy_file(
+      src_dir.to_string_lossy().to_string(),
+      nested_dst.to_string_lossy().to_string(),
+    );
+    assert!(copy_res.is_err());
+    assert!(copy_res.unwrap_err().contains("into itself"));
+
+    let move_res = vfs_move_path(
+      src_dir.to_string_lossy().to_string(),
+      nested_dst.to_string_lossy().to_string(),
+    );
+    assert!(move_res.is_err());
+    assert!(move_res.unwrap_err().contains("into itself"));
+  }
+
+  #[test]
+  fn test_read_file_reflects_external_disk_edits() {
+    let dir = TempTestDir::new("vfs_fresh");
+    let file_path = dir.0.join("sample.txt");
+    let path_str = file_path.to_string_lossy().to_string();
+
+    save_file_content(path_str.clone(), "v1".to_string()).unwrap();
+    assert_eq!(read_file_content(path_str.clone()).unwrap(), "v1");
+
+    // External writer modifies file on disk
+    std::fs::write(&file_path, "v2-updated").unwrap();
+    assert_eq!(read_file_content(path_str.clone()).unwrap(), "v2-updated");
+  }
+
+  #[test]
+  fn test_search_project_text_utf8_case_insensitive() {
+    let dir = TempTestDir::new("vfs_utf8");
+    let file_path = dir.0.join("utf8.txt");
+    // Multi-byte UTF-8 chars whose lowercase/uppercase byte lengths differ or are multi-byte
+    std::fs::write(&file_path, "Prefix İSTANBUL and Tiếng Việt ĐẶC BIỆT suffix\n").unwrap();
+
+    let hits_vi = search_project_text(
+      dir.0.to_string_lossy().to_string(),
+      "đặc biệt".to_string(),
+      false,
+      Some(10),
+    ).unwrap();
+    assert_eq!(hits_vi.len(), 1);
+    assert_eq!(hits_vi[0].line_number, 1);
+    assert!(hits_vi[0].match_end <= hits_vi[0].line_content.len());
+    assert!(hits_vi[0].line_content.is_char_boundary(hits_vi[0].match_start));
+    assert!(hits_vi[0].line_content.is_char_boundary(hits_vi[0].match_end));
+    assert_eq!(
+      &hits_vi[0].line_content[hits_vi[0].match_start..hits_vi[0].match_end],
+      "ĐẶC BIỆT"
+    );
+
+    let hits_suffix = search_project_text(
+      dir.0.to_string_lossy().to_string(),
+      "SUFFIX".to_string(),
+      false,
+      Some(10),
+    ).unwrap();
+    assert_eq!(hits_suffix.len(), 1);
+    assert!(hits_suffix[0].line_content.is_char_boundary(hits_suffix[0].match_start));
+    assert!(hits_suffix[0].line_content.is_char_boundary(hits_suffix[0].match_end));
+    assert_eq!(
+      &hits_suffix[0].line_content[hits_suffix[0].match_start..hits_suffix[0].match_end],
+      "suffix"
+    );
+  }
+
+  #[test]
+  fn test_zip_import_skips_traversal_and_rejects_oversized_entry() {
+    use std::io::Write;
+    let dir = TempTestDir::new("vfs_zip");
+    let zip_ok = dir.0.join("safe.zip");
+    {
+      let file = std::fs::File::create(&zip_ok).unwrap();
+      let mut writer = zip::ZipWriter::new(file);
+      let opts = zip::write::SimpleFileOptions::default();
+      writer.start_file("../evil.xml", opts).unwrap();
+      writer.write_all(b"<bad/>").unwrap();
+      writer.start_file("options/editor.xml", opts).unwrap();
+      writer.write_all(b"<ok/>").unwrap();
+      writer.finish().unwrap();
+    }
+    let imported = read_settings_from_zip_or_folder(zip_ok.to_string_lossy().to_string()).unwrap();
+    assert!(!imported.contains_key("../evil.xml"));
+    assert_eq!(imported.get("options/editor.xml").map(String::as_str), Some("<ok/>"));
+
+    let zip_bomb = dir.0.join("oversize.zip");
+    {
+      let file = std::fs::File::create(&zip_bomb).unwrap();
+      let mut writer = zip::ZipWriter::new(file);
+      let opts = zip::write::SimpleFileOptions::default();
+      writer.start_file("options/huge.xml", opts).unwrap();
+      // > 10 MiB uncompressed
+      let chunk = vec![b'a'; 1024 * 1024];
+      for _ in 0..11 {
+        writer.write_all(&chunk).unwrap();
+      }
+      writer.finish().unwrap();
+    }
+    let bomb_res = read_settings_from_zip_or_folder(zip_bomb.to_string_lossy().to_string());
+    assert!(bomb_res.is_err());
+    assert!(bomb_res.unwrap_err().contains("exceeds 10 MiB limit"));
+  }
+
+  #[test]
+  fn test_read_directory_tree_max_depth() {
+    let dir = TempTestDir::new("vfs_depth");
+    let deep_dir = dir.0.join("d0").join("d1").join("d2");
+    std::fs::create_dir_all(&deep_dir).unwrap();
+    std::fs::write(deep_dir.join("leaf.txt"), "hi").unwrap();
+
+    // depth 0 (root) -> depth 1 (d0) -> depth 2 (d1 stops before d2)
+    let shallow = read_directory_tree(&dir.0, 0, 2);
+    let d0 = shallow
+      .children
+      .as_ref()
+      .unwrap()
+      .iter()
+      .find(|c| c.name == "d0")
+      .unwrap();
+    let d1 = d0
+      .children
+      .as_ref()
+      .unwrap()
+      .iter()
+      .find(|c| c.name == "d1")
+      .unwrap();
+    assert!(d1.children.as_ref().unwrap().is_empty(), "max_depth=2 must stop at d1");
+
+    // depth 4 reaches leaf.txt
+    let full = read_directory_tree(&dir.0, 0, 4);
+    let d0_f = &full.children.as_ref().unwrap()[0];
+    let d1_f = &d0_f.children.as_ref().unwrap()[0];
+    let d2_f = &d1_f.children.as_ref().unwrap()[0];
+    assert_eq!(d2_f.children.as_ref().unwrap()[0].name, "leaf.txt");
+  }
 }
 

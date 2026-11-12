@@ -44,6 +44,30 @@ static JAVA_METHOD_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"^\s*(?:public|protected|private)\s+(?:static\s+)?(?:final\s+)?(?:synchronized\s+)?(?:<[^>]+>\s+)?[a-zA-Z0-9_<>\[\],\s]+\s+([a-zA-Z0-9_]+)\s*\([^)]*\)\s*(?:throws\s+[^{;]+)?\s*[\{;]").unwrap()
 });
 
+fn strip_trailing_line_comment(s: &str) -> &str {
+    let bytes = s.as_bytes();
+    let mut quote: Option<u8> = None;
+    let mut i = 0;
+    while i < bytes.len() {
+        let b = bytes[i];
+        if let Some(q) = quote {
+            if b == b'\\' {
+                i += 2;
+                continue;
+            }
+            if b == q {
+                quote = None;
+            }
+        } else if b == b'"' || b == b'\'' {
+            quote = Some(b);
+        } else if b == b'/' && i + 1 < bytes.len() && bytes[i + 1] == b'/' {
+            return &s[..i];
+        }
+        i += 1;
+    }
+    s
+}
+
 pub fn extract_symbols_from_content(
     file_path: &str,
     relative_path: &str,
@@ -89,7 +113,15 @@ pub fn extract_symbols_from_content(
             continue;
         }
 
-        let eval_line = if line_to_parse != trimmed { line_to_parse } else { line };
+        let base_eval = if line_to_parse != trimmed { line_to_parse } else { line };
+        let eval_line = if is_c_family {
+            strip_trailing_line_comment(base_eval)
+        } else {
+            base_eval
+        };
+        if eval_line.trim().is_empty() {
+            continue;
+        }
 
         match ext.as_str() {
             "rs" => {
@@ -127,11 +159,11 @@ pub fn extract_symbols_from_content(
                 }
             }
             "ts" | "tsx" | "js" | "jsx" | "vue" => {
-                if let Some(caps) = JS_TS_CLASS_RE.captures(line) {
+                if let Some(caps) = JS_TS_CLASS_RE.captures(eval_line) {
                     if let Some(m) = caps.get(1) {
-                        let kind = if line.contains("interface ") {
+                        let kind = if eval_line.contains("interface ") {
                             SymbolKind::Interface
-                        } else if line.contains("enum ") {
+                        } else if eval_line.contains("enum ") {
                             SymbolKind::Enum
                         } else {
                             SymbolKind::Class
@@ -146,7 +178,7 @@ pub fn extract_symbols_from_content(
                             snippet: Some(trimmed.to_string()),
                         });
                     }
-                } else if let Some(caps) = JS_TS_FN_RE.captures(line) {
+                } else if let Some(caps) = JS_TS_FN_RE.captures(eval_line) {
                     if let Some(m) = caps.get(1) {
                         symbols.push(IndexedSymbol {
                             name: m.as_str().to_string(),
@@ -158,7 +190,7 @@ pub fn extract_symbols_from_content(
                             snippet: Some(trimmed.to_string()),
                         });
                     }
-                } else if let Some(caps) = JS_TS_CONST_FN_RE.captures(line) {
+                } else if let Some(caps) = JS_TS_CONST_FN_RE.captures(eval_line) {
                     if let Some(m) = caps.get(1) {
                         symbols.push(IndexedSymbol {
                             name: m.as_str().to_string(),
@@ -200,9 +232,9 @@ pub fn extract_symbols_from_content(
                 }
             }
             "go" => {
-                if let Some(caps) = GO_TYPE_RE.captures(line) {
+                if let Some(caps) = GO_TYPE_RE.captures(eval_line) {
                     if let Some(m) = caps.get(1) {
-                        let kind = if line.contains("interface") {
+                        let kind = if eval_line.contains("interface") {
                             SymbolKind::Interface
                         } else {
                             SymbolKind::Struct
@@ -217,7 +249,7 @@ pub fn extract_symbols_from_content(
                             snippet: Some(trimmed.to_string()),
                         });
                     }
-                } else if let Some(caps) = GO_FUNC_RE.captures(line) {
+                } else if let Some(caps) = GO_FUNC_RE.captures(eval_line) {
                     if let Some(m) = caps.get(1) {
                         symbols.push(IndexedSymbol {
                             name: m.as_str().to_string(),
@@ -232,11 +264,11 @@ pub fn extract_symbols_from_content(
                 }
             }
             "java" | "kt" | "cs" => {
-                if let Some(caps) = JAVA_CLASS_RE.captures(line) {
+                if let Some(caps) = JAVA_CLASS_RE.captures(eval_line) {
                     if let Some(m) = caps.get(1) {
-                        let kind = if line.contains("interface ") {
+                        let kind = if eval_line.contains("interface ") {
                             SymbolKind::Interface
-                        } else if line.contains("enum ") {
+                        } else if eval_line.contains("enum ") {
                             SymbolKind::Enum
                         } else {
                             SymbolKind::Class
@@ -251,9 +283,9 @@ pub fn extract_symbols_from_content(
                             snippet: Some(trimmed.to_string()),
                         });
                     }
-                } else if let Some(caps) = JAVA_FIELD_CONST_RE.captures(line) {
+                } else if let Some(caps) = JAVA_FIELD_CONST_RE.captures(eval_line) {
                     if let Some(m) = caps.get(1) {
-                        let kind = if line.contains("final ") {
+                        let kind = if eval_line.contains("final ") {
                             SymbolKind::Constant
                         } else {
                             SymbolKind::Property
@@ -268,7 +300,7 @@ pub fn extract_symbols_from_content(
                             snippet: Some(trimmed.to_string()),
                         });
                     }
-                } else if let Some(caps) = JAVA_METHOD_RE.captures(line) {
+                } else if let Some(caps) = JAVA_METHOD_RE.captures(eval_line) {
                     if let Some(m) = caps.get(1) {
                         symbols.push(IndexedSymbol {
                             name: m.as_str().to_string(),
@@ -332,5 +364,29 @@ mod tests {
         assert_eq!(symbols[2].kind, SymbolKind::Class);
         assert_eq!(symbols[3].name, "TabProps");
         assert_eq!(symbols[3].kind, SymbolKind::Interface);
+    }
+
+    #[test]
+    fn test_comments_block_and_trailing() {
+        let code = r#"
+/*
+ * pub fn commented_out() {}
+ * pub struct FakeStruct {}
+ */
+/* note */ pub fn after_comment() {}
+pub struct Foo {} // enum FakeEnum {}
+// pub fn line_commented() {}
+"#;
+        let symbols = extract_symbols_from_content("lib.rs", "src/lib.rs", code);
+        let names: Vec<&str> = symbols.iter().map(|s| s.name.as_str()).collect();
+        assert_eq!(names, vec!["after_comment", "Foo"]);
+        assert_eq!(symbols[0].kind, SymbolKind::Function);
+        assert_eq!(symbols[1].kind, SymbolKind::Struct);
+
+        let ts_code = "export class RealClass {} // interface FakeInterface {}\n";
+        let ts_symbols = extract_symbols_from_content("app.ts", "src/app.ts", ts_code);
+        assert_eq!(ts_symbols.len(), 1);
+        assert_eq!(ts_symbols[0].name, "RealClass");
+        assert_eq!(ts_symbols[0].kind, SymbolKind::Class);
     }
 }

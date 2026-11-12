@@ -7,35 +7,44 @@ use std::time::Instant;
 
 const MAX_HTTP_RESPONSE_BYTES: usize = 16 * 1024 * 1024; // 16 MiB
 
+fn is_loopback_host(host: &str) -> bool {
+    host == "localhost"
+        || host == "127.0.0.1"
+        || host.starts_with("127.")
+        || host == "::1"
+        || host == "[::1]"
+        || host == "0.0.0.0"
+        || host == "[::]"
+}
+
+fn validate_redirect_target(
+    target_url: &reqwest::Url,
+    previous: &[reqwest::Url],
+) -> Result<(), &'static str> {
+    if previous.len() >= 10 {
+        return Err("Too many redirects (max 10)");
+    }
+    if target_url.scheme() != "http" && target_url.scheme() != "https" {
+        return Err("Redirect to non-http/https scheme is blocked");
+    }
+    if let Some(host) = target_url.host_str() {
+        if host == "169.254.169.254" || host.starts_with("169.254.") {
+            return Err("Redirect to link-local/cloud metadata address is blocked");
+        }
+        if let Some(initial_url) = previous.first() {
+            let initial_host = initial_url.host_str().unwrap_or("");
+            if !is_loopback_host(initial_host) && is_loopback_host(host) {
+                return Err("Redirect from remote host to localhost is blocked (SSRF protection)");
+            }
+        }
+    }
+    Ok(())
+}
+
 static HTTP_CLIENT: LazyLock<reqwest::Client> = LazyLock::new(|| {
     let redirect_policy = reqwest::redirect::Policy::custom(|attempt| {
-        if attempt.previous().len() >= 10 {
-            return attempt.error("Too many redirects (max 10)");
-        }
-        let target_url = attempt.url();
-        if target_url.scheme() != "http" && target_url.scheme() != "https" {
-            return attempt.error("Redirect to non-http/https scheme is blocked");
-        }
-        if let Some(host) = target_url.host_str() {
-            if host == "169.254.169.254" || host.starts_with("169.254.") {
-                return attempt.error("Redirect to link-local/cloud metadata address is blocked");
-            }
-            let is_loopback = |h: &str| {
-                h == "localhost"
-                    || h == "127.0.0.1"
-                    || h.starts_with("127.")
-                    || h == "::1"
-                    || h == "[::1]"
-                    || h == "0.0.0.0"
-                    || h == "[::]"
-            };
-            let initial_url = &attempt.previous()[0];
-            let initial_host = initial_url.host_str().unwrap_or("");
-            let initial_is_local = is_loopback(initial_host);
-            let target_is_local = is_loopback(host);
-            if !initial_is_local && target_is_local {
-                return attempt.error("Redirect from remote host to localhost is blocked (SSRF protection)");
-            }
+        if let Err(msg) = validate_redirect_target(attempt.url(), attempt.previous()) {
+            return attempt.error(msg);
         }
         attempt.follow()
     });
@@ -164,4 +173,42 @@ pub async fn http_execute_file_block(
     };
 
     http_execute_request(req).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_validate_redirect_target_ssrf_and_schemes() {
+        let remote = [reqwest::Url::parse("https://api.example.com/start").unwrap()];
+        let local = [reqwest::Url::parse("http://127.0.0.1:8080/start").unwrap()];
+
+        // Remote -> loopback blocked
+        let to_local = reqwest::Url::parse("http://127.0.0.1:9000/secret").unwrap();
+        assert_eq!(
+            validate_redirect_target(&to_local, &remote),
+            Err("Redirect from remote host to localhost is blocked (SSRF protection)")
+        );
+        let to_localhost = reqwest::Url::parse("http://localhost:3000/").unwrap();
+        assert!(validate_redirect_target(&to_localhost, &remote).is_err());
+
+        // Loopback -> loopback allowed (e.g. local test redirects)
+        assert!(validate_redirect_target(&to_local, &local).is_ok());
+
+        // Remote -> metadata IP blocked
+        let to_meta = reqwest::Url::parse("http://169.254.169.254/latest/meta-data/").unwrap();
+        assert!(validate_redirect_target(&to_meta, &remote).is_err());
+
+        // Non-http/https schemes blocked
+        let to_file = reqwest::Url::parse("file:///etc/passwd").unwrap();
+        assert!(validate_redirect_target(&to_file, &local).is_err());
+        let to_ftp = reqwest::Url::parse("ftp://example.com/a").unwrap();
+        assert!(validate_redirect_target(&to_ftp, &local).is_err());
+
+        // Hop cap enforced
+        let ten_hops = vec![remote[0].clone(); 10];
+        let to_remote = reqwest::Url::parse("https://cdn.example.com/next").unwrap();
+        assert!(validate_redirect_target(&to_remote, &ten_hops).is_err());
+    }
 }

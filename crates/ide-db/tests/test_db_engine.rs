@@ -66,3 +66,87 @@ async fn test_sqlite_engine_full_workflow() {
 
     println!("All SQLite engine tests PASSED!");
 }
+
+#[test]
+fn test_escape_sql_identifier_and_comment_stripping() {
+    // SQLite / Postgres double-quote escaping
+    assert_eq!(escape_sql_identifier("users", false), "\"users\"");
+    assert_eq!(escape_sql_identifier("weird\"name", false), "\"weird\"\"name\"");
+
+    // MySQL backtick escaping
+    assert_eq!(escape_sql_identifier("users", true), "`users`");
+    assert_eq!(escape_sql_identifier("weird`name", true), "`weird``name`");
+
+    // Comment and whitespace stripping
+    assert_eq!(
+        strip_leading_sql_comments_and_whitespace("  -- line comment\r\n  /* block /* nested-text */ SELECT 1"),
+        "SELECT 1"
+    );
+    assert_eq!(
+        strip_leading_sql_comments_and_whitespace("-- first\n-- second\n\tWITH x AS (SELECT 1) SELECT * FROM x"),
+        "WITH x AS (SELECT 1) SELECT * FROM x"
+    );
+    assert_eq!(
+        strip_leading_sql_comments_and_whitespace("/* unterminated comment"),
+        ""
+    );
+}
+
+#[tokio::test]
+async fn test_db_get_table_data_with_quoted_table_name() {
+    struct TempDbFile(std::path::PathBuf);
+    impl Drop for TempDbFile {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_file(&self.0);
+        }
+    }
+
+    let unique = format!(
+        "ide_db_quoted_test_{}.sqlite",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    );
+    let tmp = TempDbFile(std::env::temp_dir().join(unique));
+    let db_url = format!("sqlite:///{}", tmp.0.to_string_lossy().replace('\\', "/"));
+
+    let test_res: Result<(), String> = async {
+        let setup = db_execute_query(
+            db_url.clone(),
+            r#"CREATE TABLE "odd""table" (id INTEGER PRIMARY KEY, label TEXT); INSERT INTO "odd""table" (id, label) VALUES (1, 'safe');"#.to_string(),
+            None,
+        )
+        .await?;
+        if setup.error.is_some() {
+            return Err(format!("setup SQL error: {:?}", setup.error));
+        }
+
+        let data = db_get_table_data(
+            db_url.clone(),
+            Some("main".into()),
+            r#"odd"table"#.to_string(),
+            Some(10),
+            Some(0),
+            None,
+            None,
+        )
+        .await?;
+
+        if data.error.is_some() {
+            return Err(format!("query SQL error: {:?}", data.error));
+        }
+        if data.rows.len() != 1 {
+            return Err(format!("expected 1 row, got {}", data.rows.len()));
+        }
+        if data.rows[0]["label"] != "safe" {
+            return Err(format!("unexpected label: {:?}", data.rows[0]["label"]));
+        }
+        Ok(())
+    }
+    .await;
+
+    // Always close the pooled SQLite handle before asserting or dropping TempDbFile on Windows
+    let _ = db_close_pool(db_url).await;
+    test_res.expect("quoted table query test failed");
+}

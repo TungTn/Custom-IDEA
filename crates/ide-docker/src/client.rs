@@ -284,3 +284,90 @@ pub async fn get_container_logs(container_id: &str, tail: Option<usize>) -> Resu
     }
     Ok(lines)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct TempDockerDir(std::path::PathBuf);
+
+    impl TempDockerDir {
+        fn new(tag: &str) -> Self {
+            let unique = format!(
+                "ide_docker_test_{}_{}",
+                tag,
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos()
+            );
+            let dir = std::env::temp_dir().join(unique);
+            std::fs::create_dir_all(&dir).unwrap();
+            Self(dir)
+        }
+    }
+
+    impl Drop for TempDockerDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn test_validate_container_id() {
+        assert!(validate_container_id("abc1234").is_ok());
+        assert!(validate_container_id("my-app_v1.2").is_ok());
+
+        assert!(validate_container_id("").is_err());
+        assert!(validate_container_id(&"a".repeat(129)).is_err());
+        assert!(validate_container_id("-f").is_err());
+        assert!(validate_container_id("--follow").is_err());
+        assert!(validate_container_id("-v").is_err());
+        assert!(validate_container_id("bad id").is_err());
+        assert!(validate_container_id("bad/id").is_err());
+        assert!(validate_container_id("id;rm").is_err());
+    }
+
+    #[test]
+    fn test_validate_docker_socket_path() {
+        assert_eq!(
+            validate_docker_socket_path("  npipe:////./pipe/docker_engine ").unwrap(),
+            "npipe:////./pipe/docker_engine"
+        );
+        assert!(validate_docker_socket_path("unix:///var/run/docker.sock").is_ok());
+        assert!(validate_docker_socket_path("tls://127.0.0.1:2376").is_ok());
+
+        assert!(validate_docker_socket_path("   ").is_err());
+        assert!(validate_docker_socket_path("-H=unix:///var/run/docker.sock").is_err());
+        assert!(validate_docker_socket_path("unix:///bad path").is_err());
+        assert!(validate_docker_socket_path("unix:///bad\npath").is_err());
+        assert!(validate_docker_socket_path("http://127.0.0.1:2375").is_err());
+        assert!(validate_docker_socket_path("ssh://user@remote-host").is_err());
+        assert!(validate_docker_socket_path("/var/run/docker.sock").is_err());
+    }
+
+    #[test]
+    fn test_validate_docker_cli_path() {
+        assert_eq!(validate_docker_cli_path(" docker ").unwrap(), "docker");
+        assert_eq!(validate_docker_cli_path("docker.exe").unwrap(), "docker.exe");
+
+        assert!(validate_docker_cli_path("").is_err());
+        assert!(validate_docker_cli_path(r"\\evil-server\share\docker.exe").is_err());
+        assert!(validate_docker_cli_path("//evil-server/share/docker").is_err());
+
+        let tmp = TempDockerDir::new("cli");
+        let missing = tmp.0.join("docker.exe");
+        assert!(validate_docker_cli_path(&missing.to_string_lossy()).is_err());
+
+        let wrong_name = tmp.0.join("evil.exe");
+        std::fs::write(&wrong_name, b"stub").unwrap();
+        assert!(validate_docker_cli_path(&wrong_name.to_string_lossy()).is_err());
+
+        let valid_cli = tmp.0.join("docker.exe");
+        std::fs::write(&valid_cli, b"stub").unwrap();
+        assert_eq!(
+            validate_docker_cli_path(&valid_cli.to_string_lossy()).unwrap(),
+            valid_cli.to_string_lossy()
+        );
+    }
+}

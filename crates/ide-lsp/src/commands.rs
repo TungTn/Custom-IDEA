@@ -35,6 +35,14 @@ pub fn stop_all_lsp_servers() {
   }
 }
 
+fn validate_lsp_frame_size(len: usize) -> Result<(), String> {
+  if len > MAX_LSP_CONTENT_LENGTH {
+    Err("LSP message exceeded maximum size limit".to_string())
+  } else {
+    Ok(())
+  }
+}
+
 fn validate_custom_lsp_path(path: &str) -> Result<String, String> {
   let trimmed = path.trim();
   if trimmed.is_empty() {
@@ -285,7 +293,7 @@ pub fn lsp_start_server(
       }
 
       if let Some(len) = content_length {
-        if len > MAX_LSP_CONTENT_LENGTH {
+        if validate_lsp_frame_size(len).is_err() {
           drain_pending("LSP message exceeded maximum size limit");
           return;
         }
@@ -537,4 +545,93 @@ pub fn lsp_get_active_servers() -> Result<HashMap<String, String>, String> {
     result.insert(lang.clone(), proc.server_name.clone());
   }
   Ok(result)
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  struct TempLspDir(std::path::PathBuf);
+
+  impl TempLspDir {
+    fn new(tag: &str) -> Self {
+      let unique = format!(
+        "ide_lsp_test_{}_{}",
+        tag,
+        std::time::SystemTime::now()
+          .duration_since(std::time::UNIX_EPOCH)
+          .unwrap()
+          .as_nanos()
+      );
+      let dir = std::env::temp_dir().join(unique);
+      std::fs::create_dir_all(&dir).unwrap();
+      Self(dir)
+    }
+  }
+
+  impl Drop for TempLspDir {
+    fn drop(&mut self) {
+      let _ = std::fs::remove_dir_all(&self.0);
+    }
+  }
+
+  #[test]
+  fn test_validate_custom_lsp_path() {
+    assert!(validate_custom_lsp_path("").is_err());
+    assert!(validate_custom_lsp_path("   ").is_err());
+    assert!(validate_custom_lsp_path(r"\\attacker\share\lsp.exe").is_err());
+    assert!(validate_custom_lsp_path("//attacker/share/lsp").is_err());
+
+    let tmp = TempLspDir::new("validate");
+    let missing = tmp.0.join("rust-analyzer.exe");
+    assert!(validate_custom_lsp_path(&missing.to_string_lossy()).is_err());
+
+    for ext in ["bat", "cmd", "ps1", "vbs", "js"] {
+      let script = tmp.0.join(format!("server.{}", ext));
+      std::fs::write(&script, b"echo").unwrap();
+      let err = validate_custom_lsp_path(&script.to_string_lossy()).unwrap_err();
+      assert!(err.contains("Script extension"), "unexpected error for {}: {}", ext, err);
+    }
+
+    let valid_exe = tmp.0.join("rust-analyzer.exe");
+    std::fs::write(&valid_exe, b"mz").unwrap();
+    assert_eq!(
+      validate_custom_lsp_path(&format!(" {} ", valid_exe.display())).unwrap(),
+      valid_exe.to_string_lossy()
+    );
+  }
+
+  #[test]
+  fn test_path_to_file_uri() {
+    let tmp = TempLspDir::new("uri dir");
+    let sub = tmp.0.join("my project");
+    std::fs::create_dir_all(&sub).unwrap();
+    let uri = path_to_file_uri(&sub.to_string_lossy());
+    assert!(uri.starts_with("file:///") || uri.starts_with("file://"));
+    assert!(!uri.contains("//?/"), "UNC prefix must be stripped: {}", uri);
+    assert!(uri.contains("uri%20dir"), "spaces must be percent-encoded: {}", uri);
+    assert!(uri.contains("my%20project"), "spaces must be percent-encoded: {}", uri);
+  }
+
+  #[test]
+  fn test_validate_lsp_frame_size() {
+    assert!(validate_lsp_frame_size(0).is_ok());
+    assert!(validate_lsp_frame_size(MAX_LSP_CONTENT_LENGTH).is_ok());
+    let err = validate_lsp_frame_size(MAX_LSP_CONTENT_LENGTH + 1).unwrap_err();
+    assert!(err.contains("maximum size limit"));
+  }
+
+  #[test]
+  fn test_lsp_registry_and_custom_path_setter() {
+    // Rejecting invalid script must not pollute CUSTOM_LSP_PATHS or ACTIVE_SERVERS
+    let tmp = TempLspDir::new("setter");
+    let bad_script = tmp.0.join("fake-ls.bat");
+    std::fs::write(&bad_script, b"@echo off").unwrap();
+    let err = lsp_set_server_path("test_lang_invalid".into(), Some(bad_script.to_string_lossy().into()));
+    assert!(err.is_err());
+
+    let active = lsp_get_active_servers().unwrap();
+    assert!(!active.contains_key("test_lang_invalid"));
+    assert!(lsp_stop_server("test_lang_invalid".into()).is_ok());
+  }
 }

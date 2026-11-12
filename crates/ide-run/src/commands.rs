@@ -1251,6 +1251,12 @@ mod tests {
   fn test_expand_home_path() {
     let p = expand_home_path("my/path");
     assert_eq!(p, "my/path");
+    let home = std::env::var("HOME").or_else(|_| std::env::var("USERPROFILE"));
+    if let Ok(home_dir) = home {
+      let expanded = expand_home_path("~/sub/file");
+      assert!(expanded.starts_with(&home_dir), "expected '{}' to start with '{}'", expanded, home_dir);
+      assert!(expanded.ends_with("sub/file") || expanded.ends_with(r"sub\file"));
+    }
   }
 
   #[test]
@@ -1263,14 +1269,44 @@ mod tests {
   }
 
   #[test]
-  fn test_cmd_mvn() {
-    let mut c = std::process::Command::new("cmd.exe");
-    c.arg("/d").arg("/c").arg("mvn.cmd -v");
-    c.env("JAVA_HOME", "C:\\Program Files\\Java\\jdk-25.0.5.0.3");
-    let out = c.output().unwrap();
-    println!("STATUS: {:?}", out.status);
-    println!("STDOUT: {}", String::from_utf8_lossy(&out.stdout));
-    println!("STDERR: {}", String::from_utf8_lossy(&out.stderr));
+  fn test_reject_control_chars_and_build_process_command() {
+    assert!(reject_control_chars("normal arg & | ; $()", "arg").is_ok());
+    assert!(reject_control_chars("bad\0arg", "arg").is_err());
+    assert!(reject_control_chars("bad\rarg", "arg").is_err());
+    assert!(reject_control_chars("bad\narg", "arg").is_err());
+
+    let args = vec![
+      "hello & whoami".to_string(),
+      "space arg".to_string(),
+      "foo|bar".to_string(),
+    ];
+    let cmd = build_process_command("git", &args, Some("."), None).expect("valid args should succeed");
+    let collected: Vec<String> = cmd
+      .get_args()
+      .map(|a| a.to_string_lossy().to_string())
+      .collect();
+    assert_eq!(collected, args);
+
+    // Control characters rejected in command, arg, cwd, and env
+    assert!(build_process_command("git\nwhoami", &[], None, None).is_err());
+    assert!(build_process_command("git", &["status\r\nevil".to_string()], None, None).is_err());
+    assert!(build_process_command("git", &[], Some(".\0bad"), None).is_err());
+
+    let mut bad_env = HashMap::new();
+    bad_env.insert("GOOD".to_string(), "bad\nval".to_string());
+    assert!(build_process_command("git", &[], None, Some(&bad_env)).is_err());
+
+    let mut bad_env_key = HashMap::new();
+    bad_env_key.insert("BAD\0KEY".to_string(), "ok".to_string());
+    assert!(build_process_command("git", &[], None, Some(&bad_env_key)).is_err());
+  }
+
+  #[tokio::test]
+  async fn test_fetch_github_issues_validates_repo_format() {
+    assert!(fetch_github_issues("justone".to_string(), None).await.is_err());
+    assert!(fetch_github_issues("../../etc/passwd".to_string(), None).await.is_err());
+    assert!(fetch_github_issues("a/b/c".to_string(), None).await.is_err());
+    assert!(fetch_github_issues("".to_string(), None).await.is_err());
   }
 }
 

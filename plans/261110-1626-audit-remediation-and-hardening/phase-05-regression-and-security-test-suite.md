@@ -1,10 +1,14 @@
 ---
 phase: 5
-title: "Regression and Security Test Suite"
-status: pending
+title: Regression and Security Test Suite
+status: completed
 priority: P1
-effort: "4h"
-dependencies: [1, 2, 3, 4]
+effort: 4h
+dependencies:
+  - 1
+  - 2
+  - 3
+  - 4
 ---
 
 # Phase 5: Regression and Security Test Suite
@@ -55,17 +59,17 @@ Replace author-specific hardcoded tests (`test_cmd_mvn`) with real deterministic
    - `node --test scripts/publish-update.test.cjs`
 
 ## Todo List
-- [ ] Replace `test_cmd_mvn` with command-preparation security tests in `ide-run`
-- [ ] Add VFS path safety, symlink, self-copy, ignore filter, UTF-8, and freshness tests in `ide-vfs`
-- [ ] Add indexer component-filter and parser edge-case tests in `ide-index`
-- [ ] Add Docker/DAP/LSP input validation & framing limit tests
-- [ ] Expand `test_http_client.rs` and `test_db_engine.rs` for SSRF/caps and CTE/identifier escaping
-- [ ] Run full Rust + TypeScript + Node test and build verification gates
+- [x] Replace `test_cmd_mvn` with command-preparation security tests in `ide-run`
+- [x] Add VFS path safety, symlink, self-copy, ignore filter, UTF-8, and freshness tests in `ide-vfs`
+- [x] Add indexer component-filter and parser edge-case tests in `ide-index`
+- [x] Add Docker/DAP/LSP input validation & framing limit tests
+- [x] Expand `test_http_client.rs` and `test_db_engine.rs` for SSRF/caps and CTE/identifier escaping
+- [x] Run full Rust + TypeScript + Node test and build verification gates
 
 ## Success Criteria
-- [ ] `cargo test --workspace` passes 100% with 0 ignored/failed tests across all 11 crates + `src-tauri`.
-- [ ] `pnpm exec tsc --noEmit` and `pnpm build` pass cleanly.
-- [ ] Zero tests depend on machine-specific JDK paths or external internet connectivity.
+- [x] `cargo test --workspace` passes 100% with 0 ignored/failed tests across all 11 crates + `src-tauri`.
+- [x] `pnpm exec tsc --noEmit` and `pnpm build` pass cleanly.
+- [x] Zero tests depend on machine-specific JDK paths or external internet connectivity.
 
 ## Risk Assessment
 - `export_bindings` tests run alongside `cargo test --workspace` and write TypeScript files under `crates/*/bindings` — run `git status` after `cargo test --workspace` to ensure bindings match current DTOs without unexpected diffs (especially after removing `DeploymentResultDto`).

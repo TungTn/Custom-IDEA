@@ -3,7 +3,7 @@ title: 'Audit Remediation, Security Hardening & Bloat Cleanup'
 description: >-
   Remediate all 20 findings (13 Must Fix, 5 Should Fix, 2 Nice to Have) from the
   2026-11-10 /ponytail-audit across Rust crates and React frontend.
-status: pending
+status: completed
 priority: P1
 branch: master
 tags:
@@ -41,7 +41,7 @@ End-to-end remediation plan addressing all 20 verified findings from the 2026-11
 | 2 | [VFS Indexer HTTP and DB Integrity](./phase-02-vfs-indexer-http-and-db-integrity.md) | Completed |
 | 3 | [WebView Security and Credential Storage](./phase-03-webview-security-and-credential-storage.md) | Completed |
 | 4 | [Frontend Lifecycle Speed and Dead Code Cleanup](./phase-04-frontend-lifecycle-speed-and-dead-code-cleanup.md) | Completed |
-| 5 | [Regression and Security Test Suite](./phase-05-regression-and-security-test-suite.md) | Pending |
+| 5 | [Regression and Security Test Suite](./phase-05-regression-and-security-test-suite.md) | Completed |
 
 ## Dependencies
 

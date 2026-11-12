@@ -305,3 +305,23 @@ impl IndexManager {
             .collect()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_is_ignored_relative_path_component_matching() {
+        let root = Path::new("D:/build/my_app");
+        // Files whose names contain ignored substrings should NOT be ignored
+        assert!(!is_ignored_relative_path(root, Path::new("D:/build/my_app/src/builder.rs")));
+        assert!(!is_ignored_relative_path(root, Path::new("D:/build/my_app/src/distribution.ts")));
+        assert!(!is_ignored_relative_path(root, Path::new("D:/build/my_app/.github/workflows/ci.yml")));
+
+        // Actual ignored directory components MUST be ignored
+        assert!(is_ignored_relative_path(root, Path::new("D:/build/my_app/node_modules/pkg/index.js")));
+        assert!(is_ignored_relative_path(root, Path::new("D:/build/my_app/target/debug/app.exe")));
+        assert!(is_ignored_relative_path(root, Path::new("D:/build/my_app/.git/HEAD")));
+        assert!(is_ignored_relative_path(root, Path::new("D:/build/my_app/Build/output.js")));
+    }
+}

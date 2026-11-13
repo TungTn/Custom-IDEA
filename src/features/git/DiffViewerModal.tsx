@@ -23,6 +23,7 @@ import {
 import { languages } from '@codemirror/language-data';
 import { darculaTheme } from '../../editor/cm/darculaTheme';
 import { invoke } from '@tauri-apps/api/core';
+import { resolveProjectPath } from '../../utils/pathUtils';
 
 export interface DiffViewerModalProps {
   isOpen: boolean;
@@ -405,13 +406,11 @@ export const DiffViewerModal: React.FC<DiffViewerModalProps> = ({
       if (onSave) {
         await onSave(currentLocalRef.current);
       } else if (typeof window !== 'undefined' && ('__TAURI_INTERNALS__' in window || '__TAURI__' in window)) {
-        let fullPath = fileName;
-        if (projectPath && !fileName.startsWith('/') && !/^[a-zA-Z]:/.test(fileName)) {
-          const normProj = projectPath.replace(/\\/g, '/');
-          const normFile = fileName.replace(/\\/g, '/');
-          fullPath = `${normProj}/${normFile}`;
+        const fullPath = resolveProjectPath(fileName, projectPath);
+        if (!fullPath) {
+          throw new Error('Cannot resolve file path without an active projectPath');
         }
-        await invoke('write_file_content', { path: fullPath, content: currentLocalRef.current });
+        await invoke('save_file_content', { path: fullPath, content: currentLocalRef.current });
       }
       setHasModified(false);
       setSaveStatus('saved');
@@ -422,26 +421,29 @@ export const DiffViewerModal: React.FC<DiffViewerModalProps> = ({
     }
   };
 
+  const keyHandlersRef = useRef({ onClose, handleNextChunk, handlePrevChunk, handleSave });
+  keyHandlersRef.current = { onClose, handleNextChunk, handlePrevChunk, handleSave };
+
   // Keyboard navigation
   useEffect(() => {
     if (!isOpen) return;
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
-        onClose();
+        keyHandlersRef.current.onClose();
       } else if (e.key === 'F7' && !e.shiftKey) {
         e.preventDefault();
-        handleNextChunk();
+        keyHandlersRef.current.handleNextChunk();
       } else if (e.key === 'F7' && e.shiftKey) {
         e.preventDefault();
-        handlePrevChunk();
+        keyHandlersRef.current.handlePrevChunk();
       } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
         e.preventDefault();
-        handleSave();
+        keyHandlersRef.current.handleSave();
       }
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [isOpen, onClose, chunksCount, viewMode, hasModified, saveStatus]);
+  }, [isOpen]);
 
   if (!isOpen) return null;
 

@@ -254,7 +254,7 @@ export const GitBranchPopup: React.FC<GitBranchPopupProps> = ({
 
   // ─── Git Actions ───
 
-  const handleCheckout = async (targetBranch: GitBranchItem) => {
+  const handleCheckout = async (targetBranch: GitBranchItem): Promise<boolean> => {
     const isRemote = targetBranch.is_remote;
     const branchToCheckout = isRemote
       ? targetBranch.short_name.replace(/^[^\/]+\//, '')
@@ -272,8 +272,10 @@ export const GitBranchPopup: React.FC<GitBranchPopupProps> = ({
       toast('Switched Branch', `Checked out branch [${branchToCheckout}]`, 'info');
       if (onRefreshGitStatus) onRefreshGitStatus();
       onClose();
+      return true;
     } catch (err: any) {
       toast('Checkout Failed', typeof err === 'string' ? err : err?.message || 'Error checking out branch', 'error');
+      return false;
     }
   };
 
@@ -726,7 +728,10 @@ export const GitBranchPopup: React.FC<GitBranchPopupProps> = ({
                           {isExpanded && (
                             <div className="space-y-0.5 pl-4">
                               {list.map((b) => {
-                                const cleanName = b.short_name.replace(new RegExp(`^${remoteName}\/`), '');
+                                const prefix = `${remoteName}/`;
+                                const cleanName = b.short_name.startsWith(prefix)
+                                  ? b.short_name.slice(prefix.length)
+                                  : b.short_name;
                                 const isFav =
                                   favorites.includes(b.short_name) ||
                                   cleanName === 'main' ||
@@ -850,13 +855,18 @@ export const GitBranchPopup: React.FC<GitBranchPopupProps> = ({
 
             {/* 3. Checkout and Rebase onto current */}
             <div
-              onClick={() => {
-                handleCheckout(selectedBranch);
-                setTimeout(() => {
-                  if (typeof window !== 'undefined' && ('__TAURI_INTERNALS__' in window || '__TAURI__' in window)) {
-                    invoke('git_rebase_branch', { projectPath, upstream: currentBranch }).catch(() => {});
+              onClick={async () => {
+                const checkedOut = await handleCheckout(selectedBranch);
+                if (!checkedOut) return;
+                if (typeof window !== 'undefined' && ('__TAURI_INTERNALS__' in window || '__TAURI__' in window)) {
+                  try {
+                    await invoke('git_rebase_branch', { projectPath, upstream: currentBranch });
+                    toast('Rebase Complete', `Rebased '${selectedBranch.short_name}' onto '${currentBranch}'`, 'success');
+                    if (onRefreshGitStatus) onRefreshGitStatus();
+                  } catch (err: any) {
+                    toast('Rebase Failed', typeof err === 'string' ? err : err?.message || 'Error rebasing branch', 'error');
                   }
-                }, 400);
+                }
               }}
               className="px-3 py-1.5 hover:bg-[#3574F0] hover:text-white cursor-pointer flex items-center gap-2"
             >

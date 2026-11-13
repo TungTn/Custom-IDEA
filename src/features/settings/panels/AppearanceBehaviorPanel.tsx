@@ -40,6 +40,13 @@ export const AppearanceBehaviorPanel: React.FC<SettingPanelProps> = (props) => {
   const [availableThemes, setAvailableThemes] = useState<ThemeDefinition[]>(() => getAllThemes());
   const [isThemeActionOpen, setIsThemeActionOpen] = useState(false);
   const themeFileInputRef = useRef<HTMLInputElement>(null);
+  const masterPassTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (masterPassTimerRef.current) clearTimeout(masterPassTimerRef.current);
+    };
+  }, []);
 
   useEffect(() => {
     const handleThemesUpdate = () => {
@@ -849,7 +856,9 @@ export const AppearanceBehaviorPanel: React.FC<SettingPanelProps> = (props) => {
                         return;
                       }
                       setMasterPassStatus('Master password updated successfully');
-                      setTimeout(() => {
+                      if (masterPassTimerRef.current) clearTimeout(masterPassTimerRef.current);
+                      masterPassTimerRef.current = setTimeout(() => {
+                        masterPassTimerRef.current = null;
                         setIsMasterPasswordModalOpen(false);
                         setNewMasterPass('');
                         setConfirmMasterPass('');
@@ -1034,10 +1043,10 @@ export const AppearanceBehaviorPanel: React.FC<SettingPanelProps> = (props) => {
                     setProxyTestResult(null);
                     try {
                       // Attempt live fetch or ping
-                      const res = await fetch(proxyTestUrl, { mode: 'no-cors' });
+                      await fetch(proxyTestUrl, { mode: 'no-cors' });
                       setProxyTestResult({ success: true, msg: `Successfully connected to ${proxyTestUrl}` });
                     } catch (err: any) {
-                      setProxyTestResult({ success: true, msg: `Proxy route verified for ${proxyTestUrl}` });
+                      setProxyTestResult({ success: false, msg: `Connection failed for ${proxyTestUrl}: ${err?.message || String(err)}` });
                     } finally {
                       setIsTestingProxy(false);
                     }

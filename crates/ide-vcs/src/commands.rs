@@ -1,6 +1,101 @@
 use std::process::Command;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{LazyLock, RwLock};
 use serde::{Deserialize, Serialize};
+
+static REBASE_TMP_SEQ: AtomicU64 = AtomicU64::new(1);
+
+fn validate_git_ref_arg<'a>(arg: &'a str, label: &str) -> Result<&'a str, String> {
+  let trimmed = arg.trim();
+  if trimmed.is_empty() {
+    return Err(format!("Invalid {}: cannot be empty", label));
+  }
+  if trimmed.starts_with('-') {
+    return Err(format!("Invalid {}: cannot start with '-'", label));
+  }
+  if trimmed.chars().any(|c| c.is_ascii_control() || c.is_whitespace()) {
+    return Err(format!("Invalid {}: contains whitespace or control characters", label));
+  }
+  Ok(trimmed)
+}
+
+fn validate_repo_relative_path(
+  project_path: &str,
+  rel_path: &str,
+) -> Result<(String, std::path::PathBuf), String> {
+  let trimmed_proj = project_path.trim();
+  if trimmed_proj.is_empty() {
+    return Err("Project path cannot be empty".to_string());
+  }
+  let clean_norm = rel_path.trim().replace('\\', "/");
+  if clean_norm.is_empty()
+    || clean_norm.chars().any(|c| c.is_ascii_control())
+    || clean_norm.starts_with('/')
+  {
+    return Err(format!("Invalid repository-relative path: '{}'", rel_path));
+  }
+
+  let mut normalized_parts: Vec<String> = Vec::new();
+  for comp in std::path::Path::new(&clean_norm).components() {
+    match comp {
+      std::path::Component::Normal(seg) => {
+        let s = seg.to_string_lossy();
+        if s.contains(':') {
+          return Err(format!("Invalid repository-relative path: '{}'", rel_path));
+        }
+        normalized_parts.push(s.into_owned());
+      }
+      std::path::Component::CurDir => {}
+      std::path::Component::ParentDir
+      | std::path::Component::RootDir
+      | std::path::Component::Prefix(_) => {
+        return Err(format!("Path traversal or absolute path is not allowed: '{}'", rel_path));
+      }
+    }
+  }
+  if normalized_parts.is_empty() {
+    return Err(format!("Invalid repository-relative path: '{}'", rel_path));
+  }
+
+  let root_canon = std::fs::canonicalize(trimmed_proj)
+    .map_err(|e| format!("Invalid repository root path: {}", e))?;
+  let rel_str = normalized_parts.join("/");
+  let full_path = root_canon.join(&rel_str);
+
+  // Reject dangling or live symlinks at target path or intermediate relative directories
+  let mut cursor_check = root_canon.clone();
+  for seg in &normalized_parts {
+    cursor_check.push(seg);
+    if let Ok(meta) = std::fs::symlink_metadata(&cursor_check) {
+      if meta.file_type().is_symlink() {
+        return Err(format!("Symlink components are not allowed in repository paths: '{}'", rel_path));
+      }
+    }
+  }
+
+  if full_path.exists() {
+    let canon_target = std::fs::canonicalize(&full_path)
+      .map_err(|e| format!("Failed to resolve target path: {}", e))?;
+    if !canon_target.starts_with(&root_canon) {
+      return Err(format!("Path escapes repository root: '{}'", rel_path));
+    }
+  } else {
+    let mut anc = full_path.parent();
+    while let Some(dir) = anc {
+      if dir.exists() {
+        let canon_dir = std::fs::canonicalize(dir)
+          .map_err(|e| format!("Failed to resolve parent directory: {}", e))?;
+        if !canon_dir.starts_with(&root_canon) {
+          return Err(format!("Path escapes repository root: '{}'", rel_path));
+        }
+        break;
+      }
+      anc = dir.parent();
+    }
+  }
+
+  Ok((rel_str, full_path))
+}
 
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
@@ -20,6 +115,10 @@ pub fn get_git_executable() -> String {
 }
 
 pub fn run_git_cmd(cwd: &str, args: &[&str]) -> Result<String, String> {
+  run_git_cmd_raw(cwd, args).map(|out| out.trim().to_string())
+}
+
+pub fn run_git_cmd_raw(cwd: &str, args: &[&str]) -> Result<String, String> {
   let git_bin = get_git_executable();
   let mut cmd = Command::new(&git_bin);
   cmd.args(args);
@@ -31,7 +130,7 @@ pub fn run_git_cmd(cwd: &str, args: &[&str]) -> Result<String, String> {
   match cmd.output() {
     Ok(out) => {
       if out.status.success() {
-        Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
+        Ok(String::from_utf8_lossy(&out.stdout).into_owned())
       } else {
         Err(String::from_utf8_lossy(&out.stderr).trim().to_string())
       }
@@ -88,27 +187,112 @@ pub struct GitStatusDto {
   pub is_clean: bool,
 }
 
+fn parse_name_status_lines(output: &str) -> Vec<GitFileChangeDto> {
+  let mut files = Vec::new();
+  for raw_line in output.lines() {
+    let line = raw_line.trim_end_matches('\r');
+    if line.is_empty() {
+      continue;
+    }
+    let parts: Vec<&str> = line.split('\t').collect();
+    if parts.len() >= 3 {
+      // Rename/copy format: R100\told_path\tnew_path
+      files.push(GitFileChangeDto {
+        status: parts[0].trim().to_string(),
+        path: unquote_git_path(parts[2]),
+      });
+    } else if parts.len() >= 2 {
+      files.push(GitFileChangeDto {
+        status: parts[0].trim().to_string(),
+        path: unquote_git_path(parts[1]),
+      });
+    }
+  }
+  files
+}
+
+/// Decodes Git's C-style quoted paths (spaces, quotes, control escapes, and `\NNN` UTF-8 octal bytes).
+fn unquote_git_path(raw: &str) -> String {
+  if raw.starts_with('"') && raw.ends_with('"') && raw.len() >= 2 {
+    let bytes = &raw.as_bytes()[1..raw.len() - 1];
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+      if bytes[i] == b'\\' && i + 1 < bytes.len() {
+        let next = bytes[i + 1];
+        if (b'0'..=b'3').contains(&next)
+          && i + 3 < bytes.len()
+          && (b'0'..=b'7').contains(&bytes[i + 2])
+          && (b'0'..=b'7').contains(&bytes[i + 3])
+        {
+          let oct = ((next - b'0') << 6) | ((bytes[i + 2] - b'0') << 3) | (bytes[i + 3] - b'0');
+          out.push(oct);
+          i += 4;
+          continue;
+        }
+        let decoded = match next {
+          b'a' => Some(0x07),
+          b'b' => Some(0x08),
+          b't' => Some(b'\t'),
+          b'n' => Some(b'\n'),
+          b'v' => Some(0x0b),
+          b'f' => Some(0x0c),
+          b'r' => Some(b'\r'),
+          b'\\' => Some(b'\\'),
+          b'"' => Some(b'"'),
+          _ => None,
+        };
+        if let Some(ch) = decoded {
+          out.push(ch);
+        } else {
+          out.push(b'\\');
+          out.push(next);
+        }
+        i += 2;
+      } else {
+        out.push(bytes[i]);
+        i += 1;
+      }
+    }
+    String::from_utf8(out).unwrap_or_else(|e| String::from_utf8_lossy(e.as_bytes()).into_owned())
+  } else {
+    raw.to_string()
+  }
+}
+
+fn parse_git_status_porcelain(status_out: &str) -> Vec<GitFileChangeDto> {
+  let mut changes = Vec::new();
+  for raw_line in status_out.lines() {
+    let line = raw_line.trim_end_matches('\r');
+    if line.len() >= 4 && line.as_bytes()[2] == b' ' {
+      let code = line[..2].trim().to_string();
+      let raw_path = &line[3..];
+      let target = if code.starts_with('R') || code.starts_with('C') {
+        raw_path
+          .split_once(" -> ")
+          .map(|(_, new_p)| new_p)
+          .unwrap_or(raw_path)
+      } else {
+        raw_path
+      };
+      changes.push(GitFileChangeDto {
+        status: code,
+        path: unquote_git_path(target),
+      });
+    }
+  }
+  changes
+}
+
 #[tauri::command]
 pub fn git_get_status(project_path: String) -> Result<GitStatusDto, String> {
   let branch = run_git_cmd(&project_path, &["branch", "--show-current"])
     .unwrap_or_else(|_| "main".to_string());
 
-  let status_out = run_git_cmd(&project_path, &["status", "--porcelain=v1", "-uall"])
+  let status_out = run_git_cmd_raw(&project_path, &["status", "--porcelain=v1", "-uall"])
     .unwrap_or_default();
 
-  let mut changes = Vec::new();
-  for line in status_out.lines() {
-    let trimmed = line.trim();
-    if trimmed.len() >= 3 {
-      let code = trimmed[..2].trim();
-      let path = trimmed[2..].trim().to_string();
-      changes.push(GitFileChangeDto {
-        status: code.to_string(),
-        path,
-      });
-    }
-  }
-
+  let changes = parse_git_status_porcelain(&status_out);
   let is_clean = changes.is_empty();
   Ok(GitStatusDto {
     branch,
@@ -152,10 +336,10 @@ pub struct GitCommitDetailsDto {
 #[tauri::command]
 pub fn git_commit(project_path: String, message: String, files: Vec<String>, amend: Option<bool>) -> Result<String, String> {
   if files.is_empty() {
-    let _ = run_git_cmd(&project_path, &["add", "-A"]);
+    run_git_cmd(&project_path, &["add", "-A"])?;
   } else {
     for f in &files {
-      let _ = run_git_cmd(&project_path, &["add", "--", f]);
+      run_git_cmd(&project_path, &["add", "--", f])?;
     }
   }
   if amend.unwrap_or(false) {
@@ -273,27 +457,18 @@ pub fn git_get_commit_details(project_path: String, commit_hash: String) -> Resu
     });
   }
 
-  let meta_out = run_git_cmd(&project_path, &["show", "-s", "--pretty=format:%H\t%an\t%ae\t%ad\t%B", "--date=short", &commit_hash])?;
+  let valid_hash = validate_git_ref_arg(&commit_hash, "commit_hash")?;
+  let meta_out = run_git_cmd(&project_path, &["show", "-s", "--pretty=format:%H\t%an\t%ae\t%ad\t%B", "--date=short", valid_hash, "--"])?;
   let parts: Vec<&str> = meta_out.splitn(5, '\t').collect();
   let (hash, author, email, date, message) = if parts.len() >= 5 {
     (parts[0].to_string(), parts[1].to_string(), parts[2].to_string(), parts[3].to_string(), parts[4].trim().to_string())
   } else {
-    (commit_hash.clone(), "Unknown".to_string(), "".to_string(), "".to_string(), "".to_string())
+    (valid_hash.to_string(), "Unknown".to_string(), "".to_string(), "".to_string(), "".to_string())
   };
 
-  let files_out = run_git_cmd(&project_path, &["diff-tree", "--no-commit-id", "--name-status", "-r", &commit_hash])
+  let files_out = run_git_cmd_raw(&project_path, &["diff-tree", "--no-commit-id", "--name-status", "-r", valid_hash, "--"])
     .unwrap_or_default();
-  let mut files = Vec::new();
-  for line in files_out.lines() {
-    let trimmed = line.trim();
-    let parts: Vec<&str> = trimmed.split_whitespace().collect();
-    if parts.len() >= 2 {
-      files.push(GitFileChangeDto {
-        status: parts[0].to_string(),
-        path: parts[1].to_string(),
-      });
-    }
-  }
+  let files = parse_name_status_lines(&files_out);
 
   Ok(GitCommitDetailsDto {
     hash,
@@ -329,7 +504,7 @@ struct CommitMeta {
 #[tauri::command]
 pub fn git_get_blame(project_path: String, file_path: String) -> Result<Vec<GitBlameLineDto>, String> {
   let clean_file = file_path.replace('\\', "/");
-  let out = run_git_cmd(&project_path, &["blame", "--line-porcelain", "--", &clean_file])?;
+  let out = run_git_cmd_raw(&project_path, &["blame", "--line-porcelain", "--", &clean_file])?;
   
   let now_secs = std::time::SystemTime::now()
     .duration_since(std::time::UNIX_EPOCH)
@@ -423,28 +598,28 @@ pub fn git_get_blame(project_path: String, file_path: String) -> Result<Vec<GitB
 
 #[tauri::command]
 pub fn git_get_file_content_at_head(project_path: String, file_path: String) -> Result<String, String> {
-  let clean_path = file_path.replace('\\', "/");
+  let (clean_path, _) = validate_repo_relative_path(&project_path, &file_path)?;
   let target = format!("HEAD:{}", clean_path);
   run_git_cmd(&project_path, &["show", &target])
 }
 
 #[tauri::command]
 pub fn git_get_file_content_at_revision(project_path: String, revision: String, file_path: String) -> Result<String, String> {
-  let clean_path = file_path.replace('\\', "/");
-  let trimmed = clean_path.trim_start_matches('/').trim_start_matches("./");
+  let (trimmed_rel, full_path) = validate_repo_relative_path(&project_path, &file_path)?;
   if revision == "WORKING_TREE" {
-    let full_path = std::path::Path::new(&project_path).join(trimmed);
     std::fs::read_to_string(&full_path).map_err(|e| format!("Failed to read file: {}", e))
   } else {
-    let target = format!("{}:{}", revision, trimmed);
+    let valid_rev = validate_git_ref_arg(&revision, "revision")?;
+    let target = format!("{}:{}", valid_rev, trimmed_rel);
     run_git_cmd(&project_path, &["show", &target])
   }
 }
 
 #[tauri::command]
 pub fn git_rollback_file(project_path: String, file_path: String) -> Result<String, String> {
-  run_git_cmd(&project_path, &["checkout", "HEAD", "--", &file_path])
-    .or_else(|_| run_git_cmd(&project_path, &["restore", &file_path]))
+  let (clean_rel, _) = validate_repo_relative_path(&project_path, &file_path)?;
+  run_git_cmd(&project_path, &["checkout", "HEAD", "--", &clean_rel])
+    .or_else(|_| run_git_cmd(&project_path, &["restore", "--", &clean_rel]))
 }
 
 #[tauri::command]
@@ -531,10 +706,11 @@ pub fn git_get_tags(project_path: String) -> Result<Vec<String>, String> {
 
 #[tauri::command]
 pub fn git_checkout_branch(project_path: String, branch: String, create_new: bool) -> Result<String, String> {
+  let valid_branch = validate_git_ref_arg(&branch, "branch")?;
   if create_new {
-    run_git_cmd(&project_path, &["checkout", "-b", &branch])
+    run_git_cmd(&project_path, &["checkout", "-b", valid_branch])
   } else {
-    run_git_cmd(&project_path, &["checkout", &branch])
+    run_git_cmd(&project_path, &["checkout", valid_branch])
   }
 }
 
@@ -653,6 +829,49 @@ fn build_git_clone_config_env(
   Ok(envs)
 }
 
+fn scrub_url_credentials(line: &str) -> String {
+  let mut out = String::with_capacity(line.len());
+  let lower = line.to_ascii_lowercase();
+  let mut cursor = 0usize;
+
+  while cursor < line.len() {
+    let rest_lower = &lower[cursor..];
+    let http_pos = rest_lower.find("http://");
+    let https_pos = rest_lower.find("https://");
+    let next_rel = match (http_pos, https_pos) {
+      (Some(a), Some(b)) => Some(a.min(b)),
+      (Some(a), None) => Some(a),
+      (None, Some(b)) => Some(b),
+      (None, None) => None,
+    };
+
+    let Some(rel) = next_rel else {
+      out.push_str(&line[cursor..]);
+      break;
+    };
+    let url_start = cursor + rel;
+    out.push_str(&line[cursor..url_start]);
+
+    let scheme_len = if lower[url_start..].starts_with("https://") { 8 } else { 7 };
+    let after_scheme = url_start + scheme_len;
+    let auth_end_rel = line[after_scheme..]
+      .find(|c: char| c == '/' || c == '?' || c == '#' || c.is_whitespace() || c == '\'' || c == '"' || c == '>')
+      .unwrap_or(line.len() - after_scheme);
+    let authority = &line[after_scheme..after_scheme + auth_end_rel];
+
+    out.push_str(&line[url_start..after_scheme]);
+    if let Some(at_pos) = authority.rfind('@') {
+      out.push_str("[REDACTED]@");
+      out.push_str(&authority[at_pos + 1..]);
+    } else {
+      out.push_str(authority);
+    }
+    cursor = after_scheme + auth_end_rel;
+  }
+
+  out
+}
+
 fn redact_secrets(text: &str) -> String {
   text
     .lines()
@@ -660,7 +879,7 @@ fn redact_secrets(text: &str) -> String {
       if line.to_ascii_lowercase().contains("authorization:") {
         "Authorization: [REDACTED]".to_string()
       } else {
-        line.to_string()
+        scrub_url_credentials(line)
       }
     })
     .collect::<Vec<_>>()
@@ -711,8 +930,10 @@ pub fn git_clone(
 
   let mut cmd = Command::new(&git_bin);
   for (k, _) in std::env::vars() {
-    if k.starts_with("GIT_CONFIG_")
-      || matches!(k.as_str(), "GIT_TRACE" | "GIT_TRACE_CURL" | "GIT_CURL_VERBOSE")
+    let upper = k.to_ascii_uppercase();
+    if upper.starts_with("GIT_CONFIG_")
+      || upper.starts_with("GIT_TRACE2")
+      || matches!(upper.as_str(), "GIT_TRACE" | "GIT_TRACE_CURL" | "GIT_CURL_VERBOSE")
     {
       cmd.env_remove(&k);
     }
@@ -815,78 +1036,80 @@ pub fn git_stash_clear(project_path: String) -> Result<String, String> {
 #[tauri::command]
 pub fn git_stash_get_files(project_path: String, index: usize) -> Result<Vec<GitFileChangeDto>, String> {
   let target = format!("stash@{{{}}}", index);
-  let files_out = run_git_cmd(&project_path, &["stash", "show", "--name-status", &target])?;
-  let mut files = Vec::new();
-  for line in files_out.lines() {
-    let p: Vec<&str> = line.split_whitespace().collect();
-    if p.len() >= 2 {
-      files.push(GitFileChangeDto {
-        status: p[0].to_string(),
-        path: p[1].to_string(),
-      });
-    }
-  }
-  Ok(files)
+  let files_out = run_git_cmd_raw(&project_path, &["stash", "show", "--name-status", &target])?;
+  Ok(parse_name_status_lines(&files_out))
 }
 
 #[tauri::command]
 pub fn git_reset_branch(project_path: String, commit_hash: String, mode: String) -> Result<String, String> {
+  let valid_hash = validate_git_ref_arg(&commit_hash, "commit_hash")?;
   let flag = match mode.to_lowercase().as_str() {
     "soft" => "--soft",
     "hard" => "--hard",
     "keep" => "--keep",
     _ => "--mixed",
   };
-  run_git_cmd(&project_path, &["reset", flag, &commit_hash])
+  run_git_cmd(&project_path, &["reset", flag, valid_hash])
 }
 
 #[tauri::command]
 pub fn git_cherry_pick(project_path: String, commit_hash: String) -> Result<String, String> {
-  run_git_cmd(&project_path, &["cherry-pick", &commit_hash])
+  let valid_hash = validate_git_ref_arg(&commit_hash, "commit_hash")?;
+  run_git_cmd(&project_path, &["cherry-pick", valid_hash])
 }
 
 #[tauri::command]
 pub fn git_revert_commit(project_path: String, commit_hash: String) -> Result<String, String> {
-  run_git_cmd(&project_path, &["revert", "--no-edit", &commit_hash])
+  let valid_hash = validate_git_ref_arg(&commit_hash, "commit_hash")?;
+  run_git_cmd(&project_path, &["revert", "--no-edit", valid_hash])
 }
 
 #[tauri::command]
 pub fn git_create_tag(project_path: String, tag_name: String, commit_hash: Option<String>) -> Result<String, String> {
-  if let Some(hash) = commit_hash {
-    run_git_cmd(&project_path, &["tag", &tag_name, &hash])
+  let valid_tag = validate_git_ref_arg(&tag_name, "tag_name")?;
+  if let Some(ref hash) = commit_hash {
+    let valid_hash = validate_git_ref_arg(hash, "commit_hash")?;
+    run_git_cmd(&project_path, &["tag", valid_tag, valid_hash])
   } else {
-    run_git_cmd(&project_path, &["tag", &tag_name])
+    run_git_cmd(&project_path, &["tag", valid_tag])
   }
 }
 
 #[tauri::command]
 pub fn git_create_branch_from(project_path: String, new_branch: String, start_point: String, checkout: bool) -> Result<String, String> {
+  let valid_new = validate_git_ref_arg(&new_branch, "new_branch")?;
+  let valid_start = validate_git_ref_arg(&start_point, "start_point")?;
   if checkout {
-    run_git_cmd(&project_path, &["checkout", "-b", &new_branch, &start_point])
+    run_git_cmd(&project_path, &["checkout", "-b", valid_new, valid_start])
   } else {
-    run_git_cmd(&project_path, &["branch", &new_branch, &start_point])
+    run_git_cmd(&project_path, &["branch", valid_new, valid_start])
   }
 }
 
 #[tauri::command]
 pub fn git_delete_branch(project_path: String, branch: String, force: bool) -> Result<String, String> {
+  let valid_branch = validate_git_ref_arg(&branch, "branch")?;
   let flag = if force { "-D" } else { "-d" };
-  run_git_cmd(&project_path, &["branch", flag, &branch])
+  run_git_cmd(&project_path, &["branch", flag, valid_branch])
 }
 
 #[tauri::command]
 pub fn git_rename_branch(project_path: String, old_name: String, new_name: String) -> Result<String, String> {
-  run_git_cmd(&project_path, &["branch", "-m", &old_name, &new_name])
+  let valid_old = validate_git_ref_arg(&old_name, "old_name")?;
+  let valid_new = validate_git_ref_arg(&new_name, "new_name")?;
+  run_git_cmd(&project_path, &["branch", "-m", valid_old, valid_new])
 }
 
 #[tauri::command]
 pub fn git_merge_branch(project_path: String, branch: String) -> Result<String, String> {
-  run_git_cmd(&project_path, &["merge", &branch])
+  let valid_branch = validate_git_ref_arg(&branch, "branch")?;
+  run_git_cmd(&project_path, &["merge", valid_branch])
 }
 
 #[tauri::command]
 pub fn git_rebase_branch(project_path: String, upstream: String) -> Result<String, String> {
-  run_git_cmd(&project_path, &["rebase", &upstream])
+  let valid_upstream = validate_git_ref_arg(&upstream, "upstream")?;
+  run_git_cmd(&project_path, &["rebase", valid_upstream])
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -902,16 +1125,24 @@ pub fn git_interactive_rebase(
   base_commit: String,
   items: Vec<GitRebaseItemDto>,
 ) -> Result<String, String> {
+  let valid_base = validate_git_ref_arg(&base_commit, "base_commit")?;
   let git_bin = get_git_executable();
   let temp_dir = std::env::temp_dir();
   let timestamp = std::time::SystemTime::now()
     .duration_since(std::time::UNIX_EPOCH)
     .unwrap_or_default()
     .as_millis();
+  let unique_id = format!(
+    "{}-{}-{}",
+    std::process::id(),
+    REBASE_TMP_SEQ.fetch_add(1, Ordering::Relaxed),
+    timestamp
+  );
 
-  let todo_file = temp_dir.join(format!("git-rebase-todo-{}.txt", timestamp));
+  let todo_file = temp_dir.join(format!("git-rebase-todo-{}.txt", unique_id));
   let mut todo_content = String::new();
   for item in &items {
+    let valid_hash = validate_git_ref_arg(&item.hash, "rebase item hash")?;
     let act = match item.action.to_lowercase().as_str() {
       "squash" | "s" => "squash",
       "fixup" | "f" => "fixup",
@@ -921,45 +1152,61 @@ pub fn git_interactive_rebase(
       _ => "pick",
     };
     let subj = item.subject.as_deref().unwrap_or("");
-    todo_content.push_str(&format!("{} {} {}\n", act, item.hash, subj));
+    if subj.contains(['\r', '\n', '\0']) {
+      return Err("Invalid rebase item subject: newline or NUL character not allowed".to_string());
+    }
+    todo_content.push_str(&format!("{} {} {}\n", act, valid_hash, subj));
   }
   std::fs::write(&todo_file, &todo_content)
     .map_err(|e| format!("Failed to create rebase todo file: {}", e))?;
 
   #[cfg(windows)]
-  let script_file = temp_dir.join(format!("seq-editor-{}.bat", timestamp));
+  let script_file = temp_dir.join(format!("seq-editor-{}.bat", unique_id));
   #[cfg(not(windows))]
-  let script_file = temp_dir.join(format!("seq-editor-{}.sh", timestamp));
+  let script_file = temp_dir.join(format!("seq-editor-{}.sh", unique_id));
 
   #[cfg(windows)]
   {
     let todo_str = todo_file.to_string_lossy().replace('/', "\\");
     let script_content = format!("@echo off\r\ncopy /y \"{}\" \"%~1\" >nul\r\n", todo_str);
-    let _ = std::fs::write(&script_file, script_content);
+    if let Err(e) = std::fs::write(&script_file, script_content) {
+      let _ = std::fs::remove_file(&todo_file);
+      return Err(format!("Failed to write sequence editor script: {}", e));
+    }
   }
   #[cfg(not(windows))]
   {
     let script_content = format!("#!/bin/sh\ncp -f \"{}\" \"$1\"\n", todo_file.to_string_lossy());
-    let _ = std::fs::write(&script_file, script_content);
+    if let Err(e) = std::fs::write(&script_file, script_content) {
+      let _ = std::fs::remove_file(&todo_file);
+      return Err(format!("Failed to write sequence editor script: {}", e));
+    }
     #[cfg(unix)]
     {
       use std::os::unix::fs::PermissionsExt;
-      let _ = std::fs::set_permissions(&script_file, std::fs::Permissions::from_mode(0o755));
+      if let Err(e) = std::fs::set_permissions(&script_file, std::fs::Permissions::from_mode(0o755)) {
+        let _ = std::fs::remove_file(&todo_file);
+        let _ = std::fs::remove_file(&script_file);
+        return Err(format!("Failed to mark sequence editor script executable: {}", e));
+      }
     }
   }
 
   let work_dir = if project_path.trim().is_empty() { "." } else { project_path.trim() };
   let mut cmd = Command::new(&git_bin);
-  cmd.args(&["rebase", "-i", &base_commit]);
+  cmd.args(&["rebase", "-i", valid_base]);
   cmd.current_dir(work_dir);
-  cmd.env("GIT_SEQUENCE_EDITOR", format!("\"{}\"", script_file.to_string_lossy().replace('/', "\\")));
   #[cfg(windows)]
-  cmd.env("GIT_EDITOR", "cmd /c exit 0");
+  {
+    cmd.env("GIT_SEQUENCE_EDITOR", format!("\"{}\"", script_file.to_string_lossy().replace('/', "\\")));
+    cmd.env("GIT_EDITOR", "cmd /c exit 0");
+    cmd.creation_flags(0x08000000);
+  }
   #[cfg(not(windows))]
-  cmd.env("GIT_EDITOR", "true");
-
-  #[cfg(windows)]
-  cmd.creation_flags(0x08000000);
+  {
+    cmd.env("GIT_SEQUENCE_EDITOR", format!("\"{}\"", script_file.to_string_lossy()));
+    cmd.env("GIT_EDITOR", "true");
+  }
 
   let output = cmd.output();
 
@@ -984,7 +1231,8 @@ pub fn git_interactive_rebase(
 
 #[tauri::command]
 pub fn git_create_patch(project_path: String, commit_hash: String) -> Result<String, String> {
-  run_git_cmd(&project_path, &["format-patch", "-1", "--stdout", &commit_hash])
+  let valid_hash = validate_git_ref_arg(&commit_hash, "commit_hash")?;
+  run_git_cmd(&project_path, &["format-patch", "-1", "--stdout", valid_hash])
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -1025,8 +1273,7 @@ pub fn git_get_conflicts(project_path: String) -> Result<Vec<GitConflictFileDto>
 
 #[tauri::command]
 pub fn git_get_conflict_stages(project_path: String, file_path: String) -> Result<GitConflictStagesDto, String> {
-  let clean_path = file_path.replace('\\', "/");
-  let trimmed = clean_path.trim_start_matches('/').trim_start_matches("./");
+  let (trimmed, full_path) = validate_repo_relative_path(&project_path, &file_path)?;
 
   // Stage 1: Common Ancestor (Base)
   let base = run_git_cmd(&project_path, &["show", &format!(":1:{}", trimmed)]).unwrap_or_default();
@@ -1036,7 +1283,6 @@ pub fn git_get_conflict_stages(project_path: String, file_path: String) -> Resul
   let theirs = run_git_cmd(&project_path, &["show", &format!(":3:{}", trimmed)]).unwrap_or_default();
 
   // Read current working tree file (which may contain <<<<<<< markers)
-  let full_path = std::path::Path::new(&project_path).join(trimmed);
   let current = std::fs::read_to_string(&full_path).unwrap_or_default();
 
   Ok(GitConflictStagesDto {
@@ -1050,16 +1296,14 @@ pub fn git_get_conflict_stages(project_path: String, file_path: String) -> Resul
 
 #[tauri::command]
 pub fn git_resolve_conflict(project_path: String, file_path: String, resolved_content: String) -> Result<String, String> {
-  let clean_path = file_path.replace('\\', "/");
-  let trimmed = clean_path.trim_start_matches('/').trim_start_matches("./");
-  let full_path = std::path::Path::new(&project_path).join(trimmed);
+  let (trimmed, full_path) = validate_repo_relative_path(&project_path, &file_path)?;
 
   // Write resolved content to disk
   std::fs::write(&full_path, resolved_content)
     .map_err(|e| format!("Failed to write resolved file {}: {}", file_path, e))?;
 
   // Mark conflict as resolved via git add
-  run_git_cmd(&project_path, &["add", "--", trimmed])
+  run_git_cmd(&project_path, &["add", "--", &trimmed])
 }
 
 const GITLAB_KEYRING_SERVICE: &str = "custom-idea-gitlab";
@@ -1105,6 +1349,9 @@ fn normalize_gitlab_base_url(host: &str) -> Result<String, String> {
   let trimmed = host.trim();
   if trimmed.is_empty() {
     return Err("GitLab Server URL cannot be empty".to_string());
+  }
+  if trimmed.contains(['?', '#']) {
+    return Err("Invalid GitLab Server URL: query string and fragment are not allowed".to_string());
   }
   let lower = trimmed.to_ascii_lowercase();
   let candidate = if lower.starts_with("http://") {
@@ -1387,10 +1634,128 @@ mod tests {
 
   #[test]
   fn test_redact_secrets() {
-    let raw = "fatal: header\n> Authorization: Basic b2F1dGgyOnNlY3JldA==\nfatal: auth failed";
+    let raw = "fatal: header\n> Authorization: Basic b2F1dGgyOnNlY3JldA==\nfatal: https://alice:glpat-secret123@gitlab.example.com/group/app.git failed";
     let safe = redact_secrets(raw);
     assert!(!safe.contains("b2F1dGgy"));
     assert!(safe.contains("Authorization: [REDACTED]"));
+    assert!(!safe.contains("glpat-secret123"));
+    assert!(safe.contains("https://[REDACTED]@gitlab.example.com/group/app.git"));
+  }
+
+  #[test]
+  fn test_porcelain_and_name_status_parsing_with_spaces_and_renames() {
+    let porcelain = concat!(
+      " M src/app.ts\n",
+      "R  \"old name.txt\" -> \"new name.txt\"\n",
+      "?? untracked file.md\n",
+      " M \"caf\\303\\240\\\\\\\"q\\\"\\t1.txt\"\n",
+      " M \"unclosed.txt\n",
+    );
+    let parsed = parse_git_status_porcelain(porcelain);
+    assert_eq!(parsed.len(), 5);
+    assert_eq!(parsed[0].status, "M");
+    assert_eq!(parsed[0].path, "src/app.ts");
+    assert_eq!(parsed[1].status, "R");
+    assert_eq!(parsed[1].path, "new name.txt");
+    assert_eq!(parsed[2].status, "??");
+    assert_eq!(parsed[2].path, "untracked file.md");
+    assert_eq!(parsed[3].path, "cafà\\\"q\"\t1.txt");
+    assert_eq!(parsed[4].path, "\"unclosed.txt");
+
+    let name_status = "M\tsrc/my file.rs\nR100\told folder/a b.rs\tnew folder/c d.rs\nM\t\"caf\\303\\251.rs\"\n";
+    let files = parse_name_status_lines(name_status);
+    assert_eq!(files.len(), 3);
+    assert_eq!(files[0].path, "src/my file.rs");
+    assert_eq!(files[1].status, "R100");
+    assert_eq!(files[1].path, "new folder/c d.rs");
+    assert_eq!(files[2].path, "café.rs");
+  }
+
+  #[test]
+  fn test_git_offline_repo_status_commit_stash_and_blame() {
+    struct TempRepo(std::path::PathBuf);
+    impl Drop for TempRepo {
+      fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+      }
+    }
+
+    let uniq = std::time::SystemTime::now()
+      .duration_since(std::time::UNIX_EPOCH)
+      .unwrap_or_default()
+      .as_nanos();
+    let repo_dir = std::env::temp_dir().join(format!("ide_vcs_test_{}_{}", std::process::id(), uniq));
+    std::fs::create_dir_all(&repo_dir).unwrap();
+    let _guard = TempRepo(repo_dir.clone());
+    let repo_str = repo_dir.to_string_lossy().to_string();
+
+    assert!(run_git_cmd(&repo_str, &["init"]).is_ok());
+    assert!(run_git_cmd(&repo_str, &["config", "user.name", "Test User"]).is_ok());
+    assert!(run_git_cmd(&repo_str, &["config", "user.email", "test@example.com"]).is_ok());
+
+    std::fs::write(repo_dir.join("seed.txt"), "seed\n").unwrap();
+    assert!(run_git_cmd(&repo_str, &["add", "seed.txt"]).is_ok());
+    assert!(run_git_cmd(&repo_str, &["commit", "-m", "root commit"]).is_ok());
+
+    let spaced = repo_dir.join("hello world.txt");
+    std::fs::write(&spaced, "line 1\n\n").unwrap();
+    assert!(run_git_cmd(&repo_str, &["add", "hello world.txt"]).is_ok());
+    assert!(run_git_cmd(&repo_str, &["commit", "-m", "init commit"]).is_ok());
+    let head = run_git_cmd(&repo_str, &["rev-parse", "HEAD"]).unwrap();
+
+    // Blame preserves trailing empty line (`\t` at EOF)
+    let blame = git_get_blame(repo_str.clone(), "hello world.txt".to_string()).unwrap();
+    assert_eq!(blame.len(), 2);
+    assert_eq!(blame[0].line, 1);
+    assert_eq!(blame[1].line, 2);
+    assert_eq!(blame[1].summary, "init commit");
+
+    // Commit details splits `--name-status` by `\t` so spaced filename stays intact
+    let details = git_get_commit_details(repo_str.clone(), head).unwrap();
+    assert_eq!(details.files.len(), 1);
+    assert_eq!(details.files[0].path, "hello world.txt");
+
+    // Stash with spaced path + working tree leading-space status
+    std::fs::write(&spaced, "line 1\nmodified\n").unwrap();
+    let st = git_get_status(repo_str.clone()).unwrap();
+    assert_eq!(st.changes.len(), 1);
+    assert_eq!(st.changes[0].status, "M");
+    assert_eq!(st.changes[0].path, "hello world.txt");
+
+    assert!(run_git_cmd(&repo_str, &["stash", "push", "-m", "wip"]).is_ok());
+    let stash_files = git_stash_get_files(repo_str.clone(), 0).unwrap();
+    assert_eq!(stash_files.len(), 1);
+    assert_eq!(stash_files[0].path, "hello world.txt");
+
+    // Live git mv rename in status + commit details
+    assert!(run_git_cmd(&repo_str, &["mv", "hello world.txt", "renamed file.txt"]).is_ok());
+    let rename_st = git_get_status(repo_str.clone()).unwrap();
+    assert_eq!(rename_st.changes.len(), 1);
+    assert_eq!(rename_st.changes[0].status, "R");
+    assert_eq!(rename_st.changes[0].path, "renamed file.txt");
+    assert!(run_git_cmd(&repo_str, &["commit", "-m", "rename commit"]).is_ok());
+    let head2 = run_git_cmd(&repo_str, &["rev-parse", "HEAD"]).unwrap();
+    let rename_details = git_get_commit_details(repo_str.clone(), head2).unwrap();
+    assert!(rename_details.files.iter().any(|f| f.path == "renamed file.txt"));
+  }
+
+  #[test]
+  fn test_vcs_security_validations() {
+    let dir = std::env::temp_dir().to_string_lossy().to_string();
+    assert!(validate_repo_relative_path(&dir, "../../etc/passwd").is_err());
+    assert!(validate_repo_relative_path(&dir, "/C:/Windows/win.ini").is_err());
+    assert!(validate_repo_relative_path(&dir, "src/main.rs").is_ok());
+
+    assert!(git_interactive_rebase(dir.clone(), "--exec=calc".into(), vec![]).is_err());
+    let bad_item = GitRebaseItemDto {
+      hash: "abc1234".into(),
+      action: "pick".into(),
+      subject: Some("msg\nexec calc".into()),
+    };
+    assert!(git_interactive_rebase(dir, "HEAD~1".into(), vec![bad_item]).is_err());
+
+    assert!(normalize_gitlab_base_url("https://gitlab.example.com?token=1").is_err());
+    assert!(normalize_gitlab_base_url("https://gitlab.example.com#frag").is_err());
   }
 
   #[test]

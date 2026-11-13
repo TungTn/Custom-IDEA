@@ -24,7 +24,8 @@ async function loadRealUpdaterService(tempDir) {
             namespace: 'stub',
           }));
           b.onLoad({ filter: /.*/, namespace: 'stub' }, () => ({
-            contents: 'export async function invoke() { return null; }',
+            contents:
+              'export async function invoke(cmd, args) { (globalThis.__MOCK_TAURI_INVOKES__ ??= []).push({ cmd, args }); return null; }',
             loader: 'js',
           }));
         },
@@ -95,6 +96,18 @@ test('E2E Auto-Update flow exercises real updaterService.ts against mock-update-
     assert.equal(buf.byteLength, meta.size);
     assert.equal(lastPercent, 100);
     assert.equal(await updater.verifySha256(buf, meta.sha256), true);
+
+    globalThis.__MOCK_TAURI_INVOKES__ = [];
+    await updater.applyUpdateAndRestart(buf, meta.sha256);
+    assert.equal(globalThis.__MOCK_TAURI_INVOKES__.length, 1);
+    assert.equal(globalThis.__MOCK_TAURI_INVOKES__[0].cmd, 'apply_update_and_restart');
+    assert.equal(globalThis.__MOCK_TAURI_INVOKES__[0].args.expectedSha256, meta.sha256);
+    assert.equal(globalThis.__MOCK_TAURI_INVOKES__[0].args.newExeBytes.length, meta.size);
+
+    await assert.rejects(
+      () => updater.applyUpdateAndRestart(buf, '   '),
+      /Missing expected SHA-256/
+    );
 
     // 4. Force update metadata flag
     forceFlag = true;

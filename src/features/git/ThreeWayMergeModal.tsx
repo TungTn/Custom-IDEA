@@ -17,17 +17,6 @@ import {
   CheckCheck,
 } from 'lucide-react';
 
-export interface ConflictChunk {
-  id: number;
-  oursStart: number;
-  oursEnd: number;
-  theirsStart: number;
-  theirsEnd: number;
-  oursLines: string[];
-  theirsLines: string[];
-  status: 'unresolved' | 'accepted-ours' | 'accepted-theirs' | 'accepted-both';
-}
-
 interface ThreeWayMergeModalProps {
   isOpen: boolean;
   onClose: () => void;

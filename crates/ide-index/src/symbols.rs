@@ -80,7 +80,7 @@ pub fn extract_symbols_from_content(
         .unwrap_or("")
         .to_lowercase();
 
-    let is_c_family = matches!(ext.as_str(), "rs" | "ts" | "tsx" | "js" | "jsx" | "java" | "go" | "cs");
+    let is_c_family = matches!(ext.as_str(), "rs" | "ts" | "tsx" | "js" | "jsx" | "vue" | "java" | "kt" | "cs" | "go");
     let mut in_block_comment = false;
 
     for (idx, line) in content.lines().enumerate() {

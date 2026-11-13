@@ -2,7 +2,7 @@ import { create } from 'zustand';
 import { FileNode } from '../types';
 import { RecentProjectItem } from '../workbench/TopBar';
 
-const getInitialProjectPath = (): string => {
+export const getInitialProjectPath = (): string => {
   try {
     if (typeof window !== 'undefined') {
       const params = new URLSearchParams(window.location.search);

@@ -12,4 +12,6 @@ tauri.workspace = true
 ts-rs.workspace = true
 reqwest.workspace = true
 zip.workspace = true
+
+[dev-dependencies]
 tokio.workspace = true

@@ -1,4 +1,34 @@
 use serde::Serialize;
+use sha2::{Digest, Sha256};
+
+/// Verifies update executable integrity (64-hex SHA-256 match and Windows MZ header).
+pub fn verify_update_payload(bytes: &[u8], expected_sha256: &str) -> Result<(), String> {
+    if bytes.is_empty() {
+        return Err("Update payload cannot be empty".to_string());
+    }
+    let trimmed_sha = expected_sha256.trim();
+    if trimmed_sha.len() != 64 || !trimmed_sha.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return Err("Invalid expected SHA-256 digest format".to_string());
+    }
+    #[cfg(target_os = "windows")]
+    if !bytes.starts_with(b"MZ") {
+        return Err("Invalid Windows executable payload (missing MZ header)".to_string());
+    }
+    let digest = Sha256::digest(bytes);
+    let mut actual_hex = String::with_capacity(64);
+    for byte in digest {
+        use std::fmt::Write;
+        let _ = write!(&mut actual_hex, "{:02x}", byte);
+    }
+    if actual_hex != trimmed_sha.to_ascii_lowercase() {
+        return Err(format!(
+            "Update SHA-256 checksum mismatch: expected {}, got {}",
+            trimmed_sha.to_ascii_lowercase(),
+            actual_hex
+        ));
+    }
+    Ok(())
+}
 
 #[derive(Debug, Serialize, Clone)]
 pub struct AppVersionInfo {
@@ -34,7 +64,12 @@ fn chrono_like_now() -> String {
 }
 
 #[tauri::command]
-pub async fn apply_update_and_restart(new_exe_bytes: Vec<u8>) -> Result<(), String> {
+pub async fn apply_update_and_restart(
+    new_exe_bytes: Vec<u8>,
+    expected_sha256: String,
+) -> Result<(), String> {
+    verify_update_payload(&new_exe_bytes, &expected_sha256)?;
+
     let current_exe = std::env::current_exe()
         .map_err(|e| format!("Failed to get current executable path: {}", e))?;
 
@@ -42,19 +77,19 @@ pub async fn apply_update_and_restart(new_exe_bytes: Vec<u8>) -> Result<(), Stri
     std::fs::create_dir_all(&temp_dir)
         .map_err(|e| format!("Failed to create temp update dir: {}", e))?;
 
-    let temp_exe = temp_dir.join("custom-idea-latest.exe");
+    let current_pid = std::process::id();
+    let temp_exe = temp_dir.join(format!("custom-idea-latest-{}.exe", current_pid));
     std::fs::write(&temp_exe, new_exe_bytes)
         .map_err(|e| format!("Failed to write downloaded executable to temp: {}", e))?;
 
-    let current_pid = std::process::id();
     let timestamp = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0);
 
-    let bat_path = temp_dir.join(format!("update_{}.bat", timestamp));
+    let bat_path = temp_dir.join(format!("update_{}_{}.bat", current_pid, timestamp));
 
-    // Kịch bản Batch tự hủy trên Windows theo chuẩn MIC Studio
+    // Pass target & temp paths via environment variables instead of raw format! interpolation
     let bat_content = format!(
         r#"@echo off
 chcp 65001 > nul
@@ -65,13 +100,11 @@ if not errorlevel 1 (
     timeout /t 1 /nobreak > nul
     goto wait_exit
 )
-move /y "{temp_exe}" "{target_exe}" > nul
-start "" "{target_exe}"
+move /y "%TEMP_EXE%" "%TARGET_EXE%" > nul
+start "" "%TARGET_EXE%"
 del /f /q "%~f0" > nul 2>&1
 "#,
-        pid = current_pid,
-        temp_exe = temp_exe.to_string_lossy(),
-        target_exe = current_exe.to_string_lossy()
+        pid = current_pid
     );
 
     std::fs::write(&bat_path, bat_content)
@@ -86,6 +119,8 @@ del /f /q "%~f0" > nul 2>&1
 
         let _ = std::process::Command::new("cmd.exe")
             .args(&["/c", &bat_path.to_string_lossy()])
+            .env("TEMP_EXE", &temp_exe)
+            .env("TARGET_EXE", &current_exe)
             .creation_flags(CREATE_NO_WINDOW)
             .spawn()
             .map_err(|e| format!("Failed to execute update batch script: {}", e))?;
@@ -101,4 +136,50 @@ del /f /q "%~f0" > nul 2>&1
 
     // Thoát tiến trình ngay lập tức để script batch không bị khóa file
     std::process::exit(0);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sha256_hex(data: &[u8]) -> String {
+        let digest = Sha256::digest(data);
+        let mut s = String::with_capacity(64);
+        for b in digest {
+            use std::fmt::Write;
+            let _ = write!(&mut s, "{:02x}", b);
+        }
+        s
+    }
+
+    #[test]
+    fn test_verify_update_payload_validation() {
+        let payload = b"MZ\x90\x00dummy-pe-payload".to_vec();
+        let valid_sha = sha256_hex(&payload);
+        assert!(verify_update_payload(&payload, &valid_sha).is_ok());
+
+        // Uppercase with surrounding whitespace also accepted
+        assert!(verify_update_payload(&payload, &format!("  {}  ", valid_sha.to_uppercase())).is_ok());
+
+        // Mismatch rejected
+        let wrong_sha = "0".repeat(64);
+        let err_mismatch = verify_update_payload(&payload, &wrong_sha).unwrap_err();
+        assert!(err_mismatch.contains("checksum mismatch"));
+
+        // Invalid hex rejected
+        assert!(verify_update_payload(&payload, &"z".repeat(64)).unwrap_err().contains("Invalid expected SHA-256"));
+        assert!(verify_update_payload(&payload, "abcd").unwrap_err().contains("Invalid expected SHA-256"));
+
+        // Empty payload rejected
+        assert!(verify_update_payload(&[], &valid_sha).is_err());
+
+        // Missing MZ header rejected on Windows
+        #[cfg(target_os = "windows")]
+        {
+            let non_mz = b"NOT_AN_EXE_PAYLOAD";
+            let non_mz_sha = sha256_hex(non_mz);
+            let err_mz = verify_update_payload(non_mz, &non_mz_sha).unwrap_err();
+            assert!(err_mz.contains("MZ header"));
+        }
+    }
 }

@@ -16,7 +16,12 @@ pub mod updater;
 pub mod profiler;
 pub mod secrets;
 
+static CLEANUP_DONE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
 pub fn cleanup_ide_subsystems() {
+  if CLEANUP_DONE.swap(true, std::sync::atomic::Ordering::SeqCst) {
+    return;
+  }
   let _ = process::stop_all_processes();
   pty::kill_all_pty_sessions();
   lsp::stop_all_lsp_servers();
@@ -26,17 +31,26 @@ pub fn cleanup_ide_subsystems() {
 pub fn run() {
   tauri::Builder::default()
     .on_window_event(|window, event| {
-      if let tauri::WindowEvent::CloseRequested { .. } = event {
-        let log_path = std::env::temp_dir().join("ide_exit_reason.log");
-        let _ = std::fs::write(log_path, format!("CloseRequested event received on window: {}\n", window.label()));
-        log::info!("CloseRequested event received on window: {}", window.label());
-        use tauri::Manager;
-        let app = window.app_handle();
-        let windows = app.webview_windows();
-        if windows.len() <= 1 {
-          cleanup_ide_subsystems();
-          std::process::exit(0);
+      match event {
+        tauri::WindowEvent::CloseRequested { .. } => {
+          log::info!("CloseRequested event received on window: {}", window.label());
+          if let Ok(mut map) = window::PENDING_WINDOW_PROJECTS.lock() {
+            map.remove(window.label());
+          }
+          use tauri::Manager;
+          let app = window.app_handle();
+          let windows = app.webview_windows();
+          if windows.len() <= 1 {
+            cleanup_ide_subsystems();
+            app.exit(0);
+          }
         }
+        tauri::WindowEvent::Destroyed => {
+          if let Ok(mut map) = window::PENDING_WINDOW_PROJECTS.lock() {
+            map.remove(window.label());
+          }
+        }
+        _ => {}
       }
     })
     .invoke_handler(commands::get_ipc_handler())

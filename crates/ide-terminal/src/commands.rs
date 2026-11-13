@@ -29,6 +29,20 @@ pub fn kill_all_pty_sessions() {
   }
 }
 
+/// Removes `session_id` only if the current map entry still belongs to `instance_id`
+/// (prevents a closing reader thread from deleting a newer replacement session).
+fn remove_session_if_owned(
+  map: &mut HashMap<String, PtySession>,
+  session_id: &str,
+  instance_id: u64,
+) -> Option<PtySession> {
+  if map.get(session_id).is_some_and(|s| s.instance_id == instance_id) {
+    map.remove(session_id)
+  } else {
+    None
+  }
+}
+
 fn executable_exists_in_path(exe: &str) -> bool {
   let p = std::path::Path::new(exe);
   #[cfg(windows)]
@@ -148,6 +162,44 @@ pub fn terminal_kill(session_id: String) -> Result<(), String> {
   Ok(())
 }
 
+fn drain_utf8_chunks(pending_buf: &mut Vec<u8>, flush_incomplete_lossy: bool) -> Vec<String> {
+  let mut out = Vec::new();
+  loop {
+    match std::str::from_utf8(pending_buf) {
+      Ok(valid) => {
+        if !valid.is_empty() {
+          out.push(valid.to_string());
+        }
+        pending_buf.clear();
+        break;
+      }
+      Err(err) => {
+        let valid_up_to = err.valid_up_to();
+        if valid_up_to > 0 {
+          if let Ok(valid) = std::str::from_utf8(&pending_buf[..valid_up_to]) {
+            out.push(valid.to_string());
+          }
+          pending_buf.drain(..valid_up_to);
+        }
+        if let Some(error_len) = err.error_len() {
+          out.push(String::from_utf8_lossy(&pending_buf[..error_len]).to_string());
+          pending_buf.drain(..error_len);
+        } else if flush_incomplete_lossy {
+          if !pending_buf.is_empty() {
+            out.push(String::from_utf8_lossy(pending_buf).to_string());
+            pending_buf.clear();
+          }
+          break;
+        } else {
+          // Incomplete multi-byte UTF-8 sequence at read boundary; wait for next chunk
+          break;
+        }
+      }
+    }
+  }
+  out
+}
+
 #[tauri::command]
 pub fn terminal_spawn(
   app: tauri::AppHandle,
@@ -235,33 +287,51 @@ pub fn terminal_spawn(
   let master = Arc::new(Mutex::new(pair.master));
   let instance_id = PTY_INSTANCE_COUNTER.fetch_add(1, Ordering::SeqCst);
 
-  {
+  let replaced = {
     match PTY_SESSIONS.lock() {
-      Ok(mut map) => {
-        map.insert(session_id.clone(), PtySession {
-          instance_id,
-          writer,
-          master,
-          child,
-        });
-      }
+      Ok(mut map) => map.insert(session_id.clone(), PtySession {
+        instance_id,
+        writer,
+        master,
+        child,
+      }),
       Err(e) => {
         let _ = child.kill();
         let _ = child.wait();
         return Err(e.to_string());
       }
     }
+  };
+  if let Some(mut old_session) = replaced {
+    let _ = old_session.child.kill();
+    let _ = old_session.child.wait();
   }
+
+  let (tx, rx) = std::sync::mpsc::sync_channel::<Vec<u8>>(64);
+  std::thread::spawn(move || {
+    let mut buf = [0u8; 4096];
+    loop {
+      match reader.read(&mut buf) {
+        Ok(0) | Err(_) => break,
+        Ok(n) => {
+          if tx.send(buf[..n].to_vec()).is_err() {
+            break;
+          }
+        }
+      }
+    }
+  });
 
   let app_clone = app.clone();
   let s_id = session_id.clone();
   std::thread::spawn(move || {
-    let mut buf = [0u8; 4096];
-    let mut pending: Vec<u8> = Vec::with_capacity(8);
+    const COALESCE_WINDOW: std::time::Duration = std::time::Duration::from_millis(16);
+    const MAX_BATCH_BYTES: usize = 32 * 1024;
 
-    let emit_utf8_chunk = |data: &[u8]| {
-      if !data.is_empty() {
-        let text = String::from_utf8_lossy(data).to_string();
+    let mut pending: Vec<u8> = Vec::with_capacity(8192);
+
+    let emit_utf8_text = |text: String| {
+      if !text.is_empty() {
         let _ = app_clone.emit("terminal-data", serde_json::json!({
           "session_id": s_id,
           "data": text
@@ -270,58 +340,42 @@ pub fn terminal_spawn(
     };
 
     loop {
-      match reader.read(&mut buf) {
-        Ok(0) => break,
-        Ok(n) => {
-          pending.extend_from_slice(&buf[..n]);
-          loop {
-            match std::str::from_utf8(&pending) {
-              Ok(valid) => {
-                if !valid.is_empty() {
-                  let _ = app_clone.emit("terminal-data", serde_json::json!({
-                    "session_id": s_id,
-                    "data": valid
-                  }));
-                }
-                pending.clear();
+      match rx.recv() {
+        Ok(first_chunk) => {
+          pending.extend_from_slice(&first_chunk);
+          let deadline = std::time::Instant::now() + COALESCE_WINDOW;
+          let mut disconnected = false;
+          while pending.len() < MAX_BATCH_BYTES {
+            let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+            if remaining.is_zero() {
+              break;
+            }
+            match rx.recv_timeout(remaining) {
+              Ok(more) => pending.extend_from_slice(&more),
+              Err(std::sync::mpsc::RecvTimeoutError::Timeout) => break,
+              Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                disconnected = true;
                 break;
               }
-              Err(err) => {
-                let valid_up_to = err.valid_up_to();
-                if valid_up_to > 0 {
-                  if let Ok(valid) = std::str::from_utf8(&pending[..valid_up_to]) {
-                    let _ = app_clone.emit("terminal-data", serde_json::json!({
-                      "session_id": s_id,
-                      "data": valid
-                    }));
-                  }
-                  pending.drain(..valid_up_to);
-                }
-                if let Some(error_len) = err.error_len() {
-                  emit_utf8_chunk(&pending[..error_len]);
-                  pending.drain(..error_len);
-                } else {
-                  // Incomplete multi-byte UTF-8 sequence at read boundary; wait for next chunk
-                  break;
-                }
-              }
             }
+          }
+          for text in drain_utf8_chunks(&mut pending, false) {
+            emit_utf8_text(text);
+          }
+          if disconnected {
+            break;
           }
         }
         Err(_) => break,
       }
     }
 
-    if !pending.is_empty() {
-      emit_utf8_chunk(&pending);
+    for text in drain_utf8_chunks(&mut pending, true) {
+      emit_utf8_text(text);
     }
 
     let removed_own = if let Ok(mut map) = PTY_SESSIONS.lock() {
-      if map.get(&s_id).is_some_and(|s| s.instance_id == instance_id) {
-        map.remove(&s_id)
-      } else {
-        None
-      }
+      remove_session_if_owned(&mut map, &s_id, instance_id)
     } else {
       None
     };
@@ -370,4 +424,119 @@ pub fn terminal_resize(session_id: String, cols: u16, rows: u16) -> Result<(), S
   })
   .map_err(|e| e.to_string())?;
   Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  #[test]
+  fn test_drain_utf8_chunks_preserves_multibyte_boundaries() {
+    let text = "xin chào 🚀";
+    let bytes = text.as_bytes();
+    let split = "xin ch".len() + 1; // inside 'à'
+
+    let mut pending = Vec::new();
+    pending.extend_from_slice(&bytes[..split]);
+    let first = drain_utf8_chunks(&mut pending, false);
+    assert_eq!(first.concat(), "xin ch");
+    assert_eq!(pending.len(), 1);
+
+    pending.extend_from_slice(&bytes[split..bytes.len() - 2]); // inside '🚀'
+    let second = drain_utf8_chunks(&mut pending, false);
+    assert_eq!(second.concat(), "ào ");
+    assert_eq!(pending.len(), 2);
+
+    pending.extend_from_slice(&bytes[bytes.len() - 2..]);
+    let third = drain_utf8_chunks(&mut pending, false);
+    assert_eq!(third.concat(), "🚀");
+    assert!(pending.is_empty());
+
+    // Invalid trailing byte flushed lossily at EOF
+    pending.extend_from_slice(b"abc\xF0\x9F");
+    let eof = drain_utf8_chunks(&mut pending, true);
+    assert_eq!(eof[0], "abc");
+    assert!(eof[1].contains('\u{FFFD}'));
+    assert!(pending.is_empty());
+  }
+
+  #[test]
+  fn test_executable_exists_in_path_and_session_replacement() {
+    assert!(!executable_exists_in_path("definitely_nonexistent_shell_binary_9999"));
+    #[cfg(windows)]
+    assert!(executable_exists_in_path("cmd.exe"));
+
+    struct PtyCleanupGuard;
+    impl Drop for PtyCleanupGuard {
+      fn drop(&mut self) {
+        kill_all_pty_sessions();
+      }
+    }
+    let _guard = PtyCleanupGuard;
+
+    fn spawn_dummy_pty(instance_id: u64) -> PtySession {
+      let pty_system = NativePtySystem::default();
+      let pair = pty_system
+        .openpty(PtySize {
+          rows: 24,
+          cols: 80,
+          pixel_width: 0,
+          pixel_height: 0,
+        })
+        .expect("openpty");
+      #[cfg(windows)]
+      let cmd = {
+        let mut c = CommandBuilder::new("cmd.exe");
+        c.args(["/c", "exit 0"]);
+        c
+      };
+      #[cfg(not(windows))]
+      let cmd = {
+        let mut c = CommandBuilder::new("sh");
+        c.args(["-c", "true"]);
+        c
+      };
+      let child = pair.slave.spawn_command(cmd).expect("spawn dummy child");
+      drop(pair.slave);
+      let writer = pair.master.take_writer().expect("take_writer");
+      PtySession {
+        instance_id,
+        writer: Arc::new(Mutex::new(writer)),
+        master: Arc::new(Mutex::new(pair.master)),
+        child,
+      }
+    }
+
+    let id1 = PTY_INSTANCE_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let id2 = PTY_INSTANCE_COUNTER.fetch_add(1, Ordering::Relaxed);
+    assert!(id2 > id1);
+
+    let session_key = "test_race_session".to_string();
+    {
+      let mut map = PTY_SESSIONS.lock().unwrap();
+      let _replaced = map.insert(session_key.clone(), spawn_dummy_pty(id1));
+      if let Some(mut old) = map.insert(session_key.clone(), spawn_dummy_pty(id2)) {
+        let _ = old.child.kill();
+        let _ = old.child.wait();
+      }
+
+      // Stale reader thread for `id1` must NOT remove replacement session `id2`
+      assert!(remove_session_if_owned(&mut map, &session_key, id1).is_none());
+      assert_eq!(map.get(&session_key).map(|s| s.instance_id), Some(id2));
+
+      // Active owner `id2` DOES remove the session
+      let mut owned = remove_session_if_owned(&mut map, &session_key, id2).expect("active owner removed");
+      let _ = owned.child.kill();
+      let _ = owned.child.wait();
+      assert!(!map.contains_key(&session_key));
+
+      // Non-empty map is drained and killed by kill_all_pty_sessions()
+      let id3 = PTY_INSTANCE_COUNTER.fetch_add(1, Ordering::Relaxed);
+      map.insert("test_kill_all_session".to_string(), spawn_dummy_pty(id3));
+    }
+
+    assert_eq!(PTY_SESSIONS.lock().unwrap().len(), 1);
+    kill_all_pty_sessions();
+    assert!(PTY_SESSIONS.lock().unwrap().is_empty());
+  }
 }

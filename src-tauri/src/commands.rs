@@ -21,11 +21,8 @@ pub fn get_ipc_handler() -> impl Fn(tauri::ipc::Invoke<tauri::Wry>) -> bool + Se
     vfs::open_project_by_path,
     vfs::read_file_content,
     vfs::save_file_content,
-    vfs::vfs_read_file,
     vfs::vfs_write_file,
-    vfs::write_file_content,
     vfs::file_exists,
-    vfs::vfs_get_line_count,
     vfs::search_project_files,
     vfs::search_project_text,
     vfs::watch_project_directory,
@@ -46,7 +43,6 @@ pub fn get_ipc_handler() -> impl Fn(tauri::ipc::Invoke<tauri::Wry>) -> bool + Se
     // ─── 3. Docker Commands (ide-docker) ───
     docker::docker_get_daemon_status,
     docker::docker_list_containers,
-    docker::docker_list_images,
     docker::docker_start_container,
     docker::docker_stop_container,
     docker::docker_restart_container,
@@ -149,8 +145,6 @@ pub fn get_ipc_handler() -> impl Fn(tauri::ipc::Invoke<tauri::Wry>) -> bool + Se
     lsp::lsp_set_server_path,
     lsp::lsp_send_request,
     lsp::lsp_send_notification,
-    lsp::lsp_stop_server,
-    lsp::lsp_get_active_servers,
 
     // ─── 10. DAP Debugger Commands (ide-dap) ───
     dap::dap_start_session,

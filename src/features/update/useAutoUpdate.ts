@@ -272,14 +272,19 @@ export function useAutoUpdate(
 
   const applyRestart = useCallback(async () => {
     if (!downloadedBufferRef.current) return;
+    if (!metadata?.sha256) {
+      setStatus('error');
+      setErrorMessage('Thiếu mã kiểm tra toàn vẹn SHA-256 cho bản cập nhật.');
+      return;
+    }
     try {
-      await applyUpdateAndRestart(downloadedBufferRef.current);
+      await applyUpdateAndRestart(downloadedBufferRef.current, metadata.sha256);
     } catch (err: any) {
       console.error('[useAutoUpdate] Restart failed:', err);
       setStatus('error');
       setErrorMessage(err?.message || 'Không thể khởi động kịch bản tự cập nhật.');
     }
-  }, []);
+  }, [metadata]);
 
   // Kiểm tra tự động ngầm khi khởi động IDE (chỉ chạy đúng 1 lần)
   useEffect(() => {

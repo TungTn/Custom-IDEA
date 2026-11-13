@@ -2,6 +2,7 @@ use std::path::Path;
 use std::sync::Once;
 use std::time::{Duration, Instant};
 
+use futures_util::StreamExt;
 use serde_json::{json, Value};
 use sqlx::any::{AnyPoolOptions, AnyRow};
 use sqlx::{Any, Column, Pool, Row, TypeInfo, ValueRef};
@@ -26,32 +27,44 @@ pub fn ensure_drivers_installed() {
 /// For example: "D:\IDE\data\test.sqlite" -> "sqlite://D:/IDE/data/test.sqlite?mode=rwc"
 pub fn normalize_connection_url(raw: &str) -> String {
     let trimmed = raw.trim();
-    if trimmed == "sqlite::memory:" || trimmed == "sqlite::memory" || trimmed == ":memory:" {
+    let lower = trimmed.to_ascii_lowercase();
+    if lower == "sqlite::memory:" || lower == "sqlite::memory" || lower == ":memory:" {
         return "sqlite::memory:".to_string();
     }
-    if trimmed.starts_with("sqlite:") {
-        let path_part = trimmed.trim_start_matches("sqlite://").trim_start_matches("sqlite:");
-        if path_part == ":memory:" || path_part == ":memory" {
+    let append_sqlite_mode = |norm_path: &str| -> String {
+        if let Some((_, query)) = norm_path.split_once('?') {
+            let has_mode = query
+                .split('&')
+                .any(|kv| kv == "mode" || kv.starts_with("mode="));
+            if has_mode {
+                format!("sqlite://{}", norm_path)
+            } else if query.is_empty() {
+                format!("sqlite://{}mode=rwc", norm_path)
+            } else {
+                format!("sqlite://{}&mode=rwc", norm_path)
+            }
+        } else {
+            format!("sqlite://{}?mode=rwc", norm_path)
+        }
+    };
+    if lower.starts_with("sqlite:") {
+        let path_part = if lower.starts_with("sqlite://") {
+            &trimmed[9..]
+        } else {
+            &trimmed[7..]
+        };
+        let path_without_query = path_part.split('?').next().unwrap_or(path_part);
+        if path_without_query == ":memory:" || path_without_query == ":memory" {
             return "sqlite::memory:".to_string();
         }
-        let norm_path = path_part.replace('\\', "/");
-
-
-        if !norm_path.contains("?mode=") {
-            format!("sqlite://{}?mode=rwc", norm_path)
-        } else {
-            format!("sqlite://{}", norm_path)
-        }
-    } else if trimmed.starts_with("postgres://") 
-
-        || trimmed.starts_with("postgresql://") 
-        || trimmed.starts_with("mysql://") 
+        append_sqlite_mode(&path_part.replace('\\', "/"))
+    } else if lower.starts_with("postgres://")
+        || lower.starts_with("postgresql://")
+        || lower.starts_with("mysql://")
     {
         trimmed.to_string()
-    } else if trimmed.ends_with(".sqlite") || trimmed.ends_with(".db") || trimmed.contains('\\') || trimmed.contains('/') {
-        // Bare file path, assume SQLite
-        let norm_path = trimmed.replace('\\', "/");
-        format!("sqlite://{}?mode=rwc", norm_path)
+    } else if lower.ends_with(".sqlite") || lower.ends_with(".db") || trimmed.contains('\\') || trimmed.contains('/') {
+        append_sqlite_mode(&trimmed.replace('\\', "/"))
     } else {
         trimmed.to_string()
     }
@@ -76,11 +89,24 @@ async fn get_connection_pool(url: &str) -> Result<AnyPool, String> {
     }
     
     // If it's a sqlite file URL, ensure parent directory exists
-    if norm_url.starts_with("sqlite://") {
+    if norm_url.starts_with("sqlite://") && norm_url != "sqlite::memory:" {
         let clean_path = norm_url.trim_start_matches("sqlite://");
         let path_without_query = clean_path.split('?').next().unwrap_or(clean_path);
-        if let Some(parent) = Path::new(path_without_query).parent() {
-            let _ = std::fs::create_dir_all(parent);
+        let bytes = path_without_query.as_bytes();
+        // Handle Windows `/D:/...` path from `sqlite:///D:/...`
+        let fs_path = if bytes.len() >= 3
+            && bytes[0] == b'/'
+            && bytes[1].is_ascii_alphabetic()
+            && bytes[2] == b':'
+        {
+            &path_without_query[1..]
+        } else {
+            path_without_query
+        };
+        if let Some(parent) = Path::new(fs_path).parent() {
+            if !parent.as_os_str().is_empty() {
+                let _ = std::fs::create_dir_all(parent);
+            }
         }
     }
 
@@ -180,9 +206,10 @@ fn extract_any_value(row: &AnyRow, col_idx: usize) -> Value {
     // Check floats
     if type_name.contains("FLOAT") || type_name.contains("DOUBLE") || type_name.contains("REAL") || type_name.contains("NUMERIC") || type_name.contains("DECIMAL") {
         if let Ok(f) = row.try_get::<f64, _>(col_idx) {
-            if let Some(n) = serde_json::Number::from_f64(f) {
-                return Value::Number(n);
-            }
+            return match serde_json::Number::from_f64(f) {
+                Some(n) => Value::Number(n),
+                None => Value::String(f.to_string()),
+            };
         }
     }
 
@@ -199,17 +226,441 @@ fn extract_any_value(row: &AnyRow, col_idx: usize) -> Value {
         return Value::Number(i.into());
     }
     if let Ok(f) = row.try_get::<f64, _>(col_idx) {
-        if let Some(n) = serde_json::Number::from_f64(f) {
-            return Value::Number(n);
-        }
+        return match serde_json::Number::from_f64(f) {
+            Some(n) => Value::Number(n),
+            None => Value::String(f.to_string()),
+        };
     }
     if let Ok(bytes) = row.try_get::<Vec<u8>, _>(col_idx) {
-        if let Ok(s) = String::from_utf8(bytes) {
-            return Value::String(s);
-        }
+        return match String::from_utf8(bytes) {
+            Ok(s) => Value::String(s),
+            Err(e) => Value::String(format!("<BLOB {} bytes>", e.into_bytes().len())),
+        };
     }
 
     Value::Null
+}
+
+/// Top-level keyword & paren classification to distinguish row-returning queries
+/// (`SELECT`, `(SELECT ...)`, `VALUES`, `WITH ... SELECT`, `INSERT ... RETURNING`) from DML.
+pub fn sql_returns_rows(sql: &str) -> bool {
+    #[derive(Clone, Debug, PartialEq, Eq)]
+    enum Tok {
+        LParen,
+        RParen,
+        Word(String),
+        Other,
+    }
+
+    let bytes = sql.as_bytes();
+    let mut i = 0usize;
+    let mut toks: Vec<Tok> = Vec::new();
+    while i < bytes.len() {
+        let b = bytes[i];
+        if b.is_ascii_whitespace() {
+            i += 1;
+            continue;
+        }
+        // Comments
+        if b == b'-' && bytes.get(i + 1) == Some(&b'-') {
+            i += 2;
+            while i < bytes.len() && bytes[i] != b'\n' {
+                i += 1;
+            }
+            continue;
+        }
+        if b == b'/' && bytes.get(i + 1) == Some(&b'*') {
+            i += 2;
+            while i + 1 < bytes.len() && !(bytes[i] == b'*' && bytes[i + 1] == b'/') {
+                i += 1;
+            }
+            i = (i + 2).min(bytes.len());
+            continue;
+        }
+        // Quoted literals/identifiers
+        if b == b'\'' || b == b'"' || b == b'`' {
+            let quote = b;
+            i += 1;
+            while i < bytes.len() {
+                if b == b'\'' && bytes[i] == b'\\' {
+                    i = (i + 2).min(bytes.len());
+                    continue;
+                }
+                if bytes[i] == quote {
+                    if bytes.get(i + 1) == Some(&quote) {
+                        i += 2;
+                        continue;
+                    }
+                    i += 1;
+                    break;
+                }
+                i += 1;
+            }
+            toks.push(Tok::Other);
+            continue;
+        }
+        if b == b'(' {
+            toks.push(Tok::LParen);
+            i += 1;
+            continue;
+        }
+        if b == b')' {
+            toks.push(Tok::RParen);
+            i += 1;
+            continue;
+        }
+        if b.is_ascii_alphabetic() || b == b'_' {
+            let start = i;
+            i += 1;
+            while i < bytes.len() && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_') {
+                i += 1;
+            }
+            toks.push(Tok::Word(sql[start..i].to_ascii_uppercase()));
+            continue;
+        }
+        toks.push(Tok::Other);
+        i += 1;
+    }
+
+    let first_non_paren = toks.iter().position(|t| *t != Tok::LParen);
+    let Some(idx) = first_non_paren else {
+        return false;
+    };
+
+    let has_top_level_returning = |slice: &[Tok]| -> bool {
+        let mut depth = 0i32;
+        for t in slice {
+            match t {
+                Tok::LParen => depth += 1,
+                Tok::RParen => depth = (depth - 1).max(0),
+                Tok::Word(w) if depth == 0 && w == "RETURNING" => return true,
+                _ => {}
+            }
+        }
+        false
+    };
+
+    match &toks[idx] {
+        Tok::Word(w) => match w.as_str() {
+            "SELECT" | "PRAGMA" | "EXPLAIN" | "SHOW" | "DESCRIBE" | "VALUES" => true,
+            "INSERT" | "UPDATE" | "DELETE" | "REPLACE" => has_top_level_returning(&toks[idx + 1..]),
+            "WITH" => {
+                // Find the main top-level verb after CTE definitions
+                let mut depth = 0i32;
+                let mut main_verb: Option<&str> = None;
+                let mut verb_pos = idx + 1;
+                for (offset, t) in toks[idx + 1..].iter().enumerate() {
+                    match t {
+                        Tok::LParen => depth += 1,
+                        Tok::RParen => depth = (depth - 1).max(0),
+                        Tok::Word(kw) if depth == 0 => {
+                            if matches!(
+                                kw.as_str(),
+                                "SELECT" | "VALUES" | "INSERT" | "UPDATE" | "DELETE" | "REPLACE"
+                            ) {
+                                main_verb = Some(kw.as_str());
+                                verb_pos = idx + 1 + offset;
+                                break;
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                match main_verb {
+                    Some("SELECT") | Some("VALUES") => true,
+                    Some("INSERT") | Some("UPDATE") | Some("DELETE") | Some("REPLACE") => {
+                        has_top_level_returning(&toks[verb_pos + 1..])
+                    }
+                    _ => false,
+                }
+            }
+            _ => false,
+        },
+        _ => false,
+    }
+}
+
+fn validate_sql_col_ident(ident: &str) -> Result<&str, String> {
+    let trimmed = ident.trim();
+    if trimmed.is_empty() {
+        return Err("Column identifier cannot be empty".into());
+    }
+    let mut chars = trimmed.chars();
+    let Some(first) = chars.next() else {
+        return Err("Column identifier cannot be empty".into());
+    };
+    if !(first.is_ascii_alphabetic() || first == '_')
+        || !chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
+    {
+        return Err(format!("Invalid SQL column identifier: '{}'", trimmed));
+    }
+    let upper = trimmed.to_ascii_uppercase();
+    if matches!(
+        upper.as_str(),
+        "SELECT" | "UNION" | "DROP" | "DELETE" | "INSERT" | "UPDATE" | "WHERE" | "FROM" | "AND" | "OR"
+    ) {
+        return Err(format!("Reserved keyword cannot be used as unquoted column identifier: '{}'", trimmed));
+    }
+    Ok(trimmed)
+}
+
+/// Validates and re-serializes an ORDER BY clause strictly as `col [ASC|DESC], ...`.
+pub fn sanitize_order_by(raw: &str, is_mysql: bool) -> Result<String, String> {
+    let mut out = Vec::new();
+    for part in raw.split(',') {
+        let trimmed = part.trim();
+        if trimmed.is_empty() {
+            return Err("Invalid empty clause in ORDER BY".into());
+        }
+        let tokens: Vec<&str> = trimmed.split_whitespace().collect();
+        if tokens.is_empty() || tokens.len() > 2 {
+            return Err(format!("Invalid ORDER BY clause: '{}'", trimmed));
+        }
+        let col = validate_sql_col_ident(tokens[0])?;
+        let escaped_col = escape_sql_identifier(col, is_mysql);
+        if tokens.len() == 2 {
+            let dir = tokens[1].to_ascii_uppercase();
+            if dir != "ASC" && dir != "DESC" {
+                return Err(format!("Invalid sort direction '{}' in ORDER BY", tokens[1]));
+            }
+            out.push(format!("{} {}", escaped_col, dir));
+        } else {
+            out.push(escaped_col);
+        }
+    }
+    if out.is_empty() {
+        return Err("ORDER BY cannot be empty".into());
+    }
+    Ok(out.join(", "))
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum WhereTok {
+    Ident(String),
+    Keyword(String),
+    StrLit(String),
+    NumLit(String),
+    Op(String),
+}
+
+fn tokenize_where_clause(raw: &str) -> Result<Vec<WhereTok>, String> {
+    let bytes = raw.as_bytes();
+    let mut i = 0usize;
+    let mut toks = Vec::new();
+
+    while i < bytes.len() {
+        let b = bytes[i];
+        if b.is_ascii_whitespace() {
+            i += 1;
+            continue;
+        }
+        if b == b'\0'
+            || b == b';'
+            || b == b'('
+            || b == b')'
+            || b == b'"'
+            || b == b'`'
+            || b == b','
+            || (b == b'-' && bytes.get(i + 1) == Some(&b'-'))
+            || (b == b'/' && bytes.get(i + 1) == Some(&b'*'))
+        {
+            return Err("Unsafe or unsupported syntax in WHERE filter".into());
+        }
+        // Single-quoted string literal
+        if b == b'\'' {
+            i += 1;
+            let mut val = String::new();
+            let mut closed = false;
+            while i < bytes.len() {
+                if bytes[i] == b'\0' {
+                    return Err("NUL byte not allowed in WHERE string literal".into());
+                }
+                if bytes[i] == b'\'' {
+                    if bytes.get(i + 1) == Some(&b'\'') {
+                        val.push('\'');
+                        i += 2;
+                        continue;
+                    }
+                    i += 1;
+                    closed = true;
+                    break;
+                }
+                let ch = raw[i..].chars().next().ok_or_else(|| "Invalid UTF-8 in WHERE".to_string())?;
+                val.push(ch);
+                i += ch.len_utf8();
+            }
+            if !closed {
+                return Err("Unterminated string literal in WHERE filter".into());
+            }
+            toks.push(WhereTok::StrLit(val));
+            continue;
+        }
+        // Comparison operators
+        if (b == b'!' && bytes.get(i + 1) == Some(&b'='))
+            || (b == b'<' && bytes.get(i + 1) == Some(&b'>'))
+            || (b == b'<' && bytes.get(i + 1) == Some(&b'='))
+            || (b == b'>' && bytes.get(i + 1) == Some(&b'='))
+        {
+            toks.push(WhereTok::Op(raw[i..i + 2].to_string()));
+            i += 2;
+            continue;
+        }
+        if b == b'=' || b == b'<' || b == b'>' {
+            toks.push(WhereTok::Op(raw[i..i + 1].to_string()));
+            i += 1;
+            continue;
+        }
+        // Numeric literal: optional '-' + digits + optional '.' + digits
+        if b.is_ascii_digit()
+            || (b == b'-' && bytes.get(i + 1).map_or(false, |d| d.is_ascii_digit()))
+        {
+            let start = i;
+            if b == b'-' {
+                i += 1;
+            }
+            while i < bytes.len() && bytes[i].is_ascii_digit() {
+                i += 1;
+            }
+            if bytes.get(i) == Some(&b'.') {
+                i += 1;
+                if i >= bytes.len() || !bytes[i].is_ascii_digit() {
+                    return Err("Invalid numeric literal in WHERE filter".into());
+                }
+                while i < bytes.len() && bytes[i].is_ascii_digit() {
+                    i += 1;
+                }
+            }
+            if i < bytes.len() && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_' || bytes[i] == b'.') {
+                return Err("Invalid numeric literal in WHERE filter".into());
+            }
+            toks.push(WhereTok::NumLit(raw[start..i].to_string()));
+            continue;
+        }
+        // Word token
+        if b.is_ascii_alphabetic() || b == b'_' {
+            let start = i;
+            i += 1;
+            while i < bytes.len() && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_') {
+                i += 1;
+            }
+            let word = &raw[start..i];
+            let upper = word.to_ascii_uppercase();
+            if matches!(
+                upper.as_str(),
+                "AND" | "OR" | "IS" | "NOT" | "NULL" | "LIKE" | "TRUE" | "FALSE"
+            ) {
+                toks.push(WhereTok::Keyword(upper));
+            } else {
+                toks.push(WhereTok::Ident(word.to_string()));
+            }
+            continue;
+        }
+        return Err(format!("Unsupported character '{}' in WHERE filter", b as char));
+    }
+
+    Ok(toks)
+}
+
+fn format_sql_string_literal(s: &str, is_mysql: bool) -> String {
+    let escaped = if is_mysql {
+        s.replace('\\', "\\\\").replace('\'', "''")
+    } else {
+        s.replace('\'', "''")
+    };
+    format!("'{}'", escaped)
+}
+
+/// Strictly validates and re-serializes simple `col OP literal [AND|OR ...]` filters.
+pub fn sanitize_where_clause(raw: &str, is_mysql: bool) -> Result<String, String> {
+    let toks = tokenize_where_clause(raw)?;
+    if toks.is_empty() {
+        return Err("WHERE clause cannot be empty".into());
+    }
+
+    let mut idx = 0usize;
+    let mut parts = Vec::new();
+
+    loop {
+        let Some(WhereTok::Ident(col)) = toks.get(idx) else {
+            return Err("Expected column name in WHERE predicate".into());
+        };
+        let valid_col = validate_sql_col_ident(col)?;
+        let escaped_col = escape_sql_identifier(valid_col, is_mysql);
+        idx += 1;
+
+        match toks.get(idx) {
+            Some(WhereTok::Keyword(kw)) if kw == "IS" => {
+                idx += 1;
+                if let Some(WhereTok::Keyword(not_kw)) = toks.get(idx) {
+                    if not_kw == "NOT" {
+                        idx += 1;
+                        let Some(WhereTok::Keyword(null_kw)) = toks.get(idx) else {
+                            return Err("Expected NULL after IS NOT in WHERE".into());
+                        };
+                        if null_kw != "NULL" {
+                            return Err("Expected NULL after IS NOT in WHERE".into());
+                        }
+                        idx += 1;
+                        parts.push(format!("{} IS NOT NULL", escaped_col));
+                    } else if not_kw == "NULL" {
+                        idx += 1;
+                        parts.push(format!("{} IS NULL", escaped_col));
+                    } else {
+                        return Err("Expected NULL or NOT NULL after IS in WHERE".into());
+                    }
+                } else {
+                    return Err("Expected NULL or NOT NULL after IS in WHERE".into());
+                }
+            }
+            Some(WhereTok::Keyword(kw)) if kw == "LIKE" => {
+                idx += 1;
+                let Some(WhereTok::StrLit(s)) = toks.get(idx) else {
+                    return Err("LIKE requires a string literal in WHERE".into());
+                };
+                idx += 1;
+                parts.push(format!("{} LIKE {}", escaped_col, format_sql_string_literal(s, is_mysql)));
+            }
+            Some(WhereTok::Keyword(kw)) if kw == "NOT" => {
+                idx += 1;
+                let Some(WhereTok::Keyword(like_kw)) = toks.get(idx) else {
+                    return Err("Expected LIKE after NOT in WHERE".into());
+                };
+                if like_kw != "LIKE" {
+                    return Err("Expected LIKE after NOT in WHERE".into());
+                }
+                idx += 1;
+                let Some(WhereTok::StrLit(s)) = toks.get(idx) else {
+                    return Err("NOT LIKE requires a string literal in WHERE".into());
+                };
+                idx += 1;
+                parts.push(format!("{} NOT LIKE {}", escaped_col, format_sql_string_literal(s, is_mysql)));
+            }
+            Some(WhereTok::Op(op)) => {
+                let op_str = op.clone();
+                idx += 1;
+                let rhs = match toks.get(idx) {
+                    Some(WhereTok::StrLit(s)) => format_sql_string_literal(s, is_mysql),
+                    Some(WhereTok::NumLit(n)) => n.clone(),
+                    Some(WhereTok::Keyword(b)) if b == "TRUE" || b == "FALSE" => b.clone(),
+                    _ => return Err("Comparison operator in WHERE requires a string, number, or boolean literal".into()),
+                };
+                idx += 1;
+                parts.push(format!("{} {} {}", escaped_col, op_str, rhs));
+            }
+            _ => return Err("Expected comparison operator, LIKE, or IS [NOT] NULL in WHERE predicate".into()),
+        }
+
+        match toks.get(idx) {
+            None => break,
+            Some(WhereTok::Keyword(conj)) if conj == "AND" || conj == "OR" => {
+                parts.push(conj.clone());
+                idx += 1;
+            }
+            _ => return Err("Expected AND or OR between WHERE predicates".into()),
+        }
+    }
+
+    Ok(parts.join(" "))
 }
 
 fn any_row_to_json(row: &AnyRow) -> Value {
@@ -287,52 +738,48 @@ pub async fn db_execute_query(
     };
 
     let trimmed = query.trim();
-    let cleaned = strip_leading_sql_comments_and_whitespace(trimmed);
-    let upper = cleaned.to_uppercase();
-    let is_select = upper.starts_with("SELECT")
-        || upper.starts_with("WITH")
-        || upper.starts_with("PRAGMA")
-        || upper.starts_with("EXPLAIN")
-        || upper.starts_with("SHOW")
-        || upper.starts_with("DESCRIBE")
-        || upper.starts_with("VALUES");
+    let is_select = sql_returns_rows(trimmed);
 
     if is_select {
-        match sqlx::query(trimmed).fetch_all(&pool).await {
-            Ok(rows) => {
-                let limit = max_rows.unwrap_or(500);
-                let columns: Vec<String> = if let Some(first) = rows.first() {
-                    first.columns().iter().map(|c| c.name().to_string()).collect()
-                } else {
-                    vec![]
-                };
+        let limit = max_rows.unwrap_or(500);
+        let mut columns: Vec<String> = Vec::new();
+        let mut json_rows: Vec<Value> = Vec::new();
+        let mut stream = sqlx::query(trimmed).fetch(&pool);
 
-                let json_rows: Vec<Value> = rows
-                    .iter()
-                    .take(limit)
-                    .map(any_row_to_json)
-                    .collect();
-
-                let execution_time_ms = start.elapsed().as_millis() as u64;
-                Ok(DbQueryResultDto {
-                    columns,
-                    rows: json_rows,
-                    execution_time_ms,
-                    affected_rows: 0,
-                    error: None,
-                })
-            }
-            Err(e) => {
-                let execution_time_ms = start.elapsed().as_millis() as u64;
-                Ok(DbQueryResultDto {
-                    columns: vec!["error".into()],
-                    rows: vec![],
-                    execution_time_ms,
-                    affected_rows: 0,
-                    error: Some(e.to_string()),
-                })
+        while let Some(item) = stream.next().await {
+            match item {
+                Ok(row) => {
+                    if columns.is_empty() {
+                        columns = row.columns().iter().map(|c| c.name().to_string()).collect();
+                    }
+                    if json_rows.len() < limit {
+                        json_rows.push(any_row_to_json(&row));
+                    }
+                    if json_rows.len() >= limit {
+                        break;
+                    }
+                }
+                Err(e) => {
+                    let execution_time_ms = start.elapsed().as_millis() as u64;
+                    return Ok(DbQueryResultDto {
+                        columns: vec!["error".into()],
+                        rows: vec![],
+                        execution_time_ms,
+                        affected_rows: 0,
+                        error: Some(e.to_string()),
+                    });
+                }
             }
         }
+
+        let execution_time_ms = start.elapsed().as_millis() as u64;
+        Ok(DbQueryResultDto {
+            columns,
+            rows: json_rows,
+            execution_time_ms,
+            affected_rows: 0,
+            error: None,
+        })
     } else {
         match sqlx::query(trimmed).execute(&pool).await {
             Ok(res) => {
@@ -644,12 +1091,19 @@ pub async fn db_get_table_data(
     order_by: Option<String>,
     where_clause: Option<String>,
 ) -> Result<DbQueryResultDto, String> {
-    let limit_val = limit.unwrap_or(25);
+    if table.trim().is_empty() || table.contains('\0') {
+        return Err("Invalid table name".into());
+    }
+    let limit_val = limit.unwrap_or(25).min(10_000);
     let offset_val = offset.unwrap_or(0);
 
-    let is_mysql = url.to_lowercase().starts_with("mysql");
+    let norm_url = normalize_connection_url(&url);
+    let is_mysql = norm_url.to_lowercase().starts_with("mysql");
     let safe_table = escape_sql_identifier(&table, is_mysql);
     let qualified_name = if let Some(ref s) = schema {
+        if s.contains('\0') {
+            return Err("Invalid schema name".into());
+        }
         if s.is_empty() || s == "main" || s == "public" || s == "default" {
             safe_table
         } else {
@@ -665,20 +1119,22 @@ pub async fn db_get_table_data(
     if let Some(w) = where_clause {
         let trimmed_w = w.trim();
         if !trimmed_w.is_empty() {
-            query.push_str(&format!(" WHERE {}", trimmed_w));
+            let safe_where = sanitize_where_clause(trimmed_w, is_mysql)?;
+            query.push_str(&format!(" WHERE {}", safe_where));
         }
     }
 
     if let Some(o) = order_by {
         let trimmed_o = o.trim();
         if !trimmed_o.is_empty() {
-            query.push_str(&format!(" ORDER BY {}", trimmed_o));
+            let safe_order = sanitize_order_by(trimmed_o, is_mysql)?;
+            query.push_str(&format!(" ORDER BY {}", safe_order));
         }
     }
 
     query.push_str(&format!(" LIMIT {} OFFSET {}", limit_val, offset_val));
 
-    db_execute_query(url, query, Some(limit_val)).await
+    db_execute_query(norm_url, query, Some(limit_val)).await
 }
 
 #[tauri::command]

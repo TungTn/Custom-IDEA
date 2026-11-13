@@ -3,6 +3,8 @@ import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { FileNode, RunConfiguration, RunLog } from '../types';
 import { useSettingsStore } from '../stores/settingsStore';
+import { getSecret } from '../services/secretService';
+import { getSavedSonarBinding } from '../features/sonar/sonarService';
 
 function parseCommandLineArgs(cmdStr: string): string[] {
   const args: string[] = [];
@@ -464,7 +466,7 @@ export function useProcessRunner({
       ]);
       addToast('Run Error', String(err), 'error');
     }
-  }, [isRunning, runConfigurations, activeConfigId, currentProjectDirectory, setBottomTab, setIsBottomOpen, addToast]);
+  }, [isRunning, runConfigurations, activeConfigId, currentProjectDirectory, files, setBottomTab, setIsBottomOpen, addToast]);
 
   // ─── 6. Stop Action (Ctrl+F2 / Toolbar Stop) ───
   const handleStop = useCallback(async () => {
@@ -625,7 +627,7 @@ export function useProcessRunner({
 
   // ─── 8. Execute Custom Build Task ───
   const handleExecuteBuildTask = useCallback(
-    (tool: string, taskName: string, command: string) => {
+    async (tool: string, taskName: string, command: string) => {
       setBottomTab('run');
       setIsBottomOpen(true);
       setIsRunning(true);
@@ -683,68 +685,69 @@ export function useProcessRunner({
         const envVars = isMaven ? getMavenRunnerEnv() : {};
         if (command.includes('sonar') || args.some(a => a.includes('sonar'))) {
           try {
-            const sonarToken = sessionStorage.getItem('SONAR_TOKEN');
+            const binding = getSavedSonarBinding();
+            const sonarToken =
+              (binding.connectionId ? await getSecret('sonar', binding.connectionId) : null) ||
+              (await getSecret('sonar', 'default'));
             if (sonarToken) {
               envVars['SONAR_TOKEN'] = sonarToken;
-              sessionStorage.removeItem('SONAR_TOKEN');
             }
           } catch {}
         }
 
-        invoke<{ stdout: string; stderr: string; exit_code: number }>('execute_build_command', {
-          command: cmd,
-          args,
-          cwd: projectDir,
-          envVars: envVars && Object.keys(envVars).length > 0 ? envVars : null,
-        })
-          .then(res => {
-            setIsRunning(false);
-            if (res.stdout) {
-              setRunLogs(prev => [
-                ...prev,
-                {
-                  id: `log-${Date.now()}-out`,
-                  text: res.stdout,
-                  type: 'info',
-                  timestamp: new Date().toLocaleTimeString(),
-                },
-              ]);
-            }
-            if (res.stderr) {
-              setRunLogs(prev => [
-                ...prev,
-                {
-                  id: `log-${Date.now()}-err`,
-                  text: res.stderr,
-                  type: res.exit_code === 0 ? 'warning' : 'error',
-                  timestamp: new Date().toLocaleTimeString(),
-                },
-              ]);
-            }
+        try {
+          const res = await invoke<{ stdout: string; stderr: string; exit_code: number }>('execute_build_command', {
+            command: cmd,
+            args,
+            cwd: projectDir,
+            envVars: envVars && Object.keys(envVars).length > 0 ? envVars : null,
+          });
+          setIsRunning(false);
+          if (res.stdout) {
             setRunLogs(prev => [
               ...prev,
               {
-                id: `log-${Date.now()}-done`,
-                text: `Process finished with exit code ${res.exit_code}`,
-                type: res.exit_code === 0 ? 'success' : 'error',
+                id: `log-${Date.now()}-out`,
+                text: res.stdout,
+                type: 'info',
                 timestamp: new Date().toLocaleTimeString(),
               },
             ]);
-            addToast('Build Task Finished', `${command} exited with code ${res.exit_code}`, res.exit_code === 0 ? 'success' : 'error');
-          })
-          .catch(err => {
-            setIsRunning(false);
+          }
+          if (res.stderr) {
             setRunLogs(prev => [
               ...prev,
               {
                 id: `log-${Date.now()}-err`,
-                text: `Build execution error: ${String(err)}`,
-                type: 'error',
+                text: res.stderr,
+                type: res.exit_code === 0 ? 'warning' : 'error',
                 timestamp: new Date().toLocaleTimeString(),
               },
             ]);
-            addToast('Build Task Failed', String(err), 'error');
-          });
+          }
+          setRunLogs(prev => [
+            ...prev,
+            {
+              id: `log-${Date.now()}-done`,
+              text: `Process finished with exit code ${res.exit_code}`,
+              type: res.exit_code === 0 ? 'success' : 'error',
+              timestamp: new Date().toLocaleTimeString(),
+            },
+          ]);
+          addToast('Build Task Finished', `${command} exited with code ${res.exit_code}`, res.exit_code === 0 ? 'success' : 'error');
+        } catch (err) {
+          setIsRunning(false);
+          setRunLogs(prev => [
+            ...prev,
+            {
+              id: `log-${Date.now()}-err`,
+              text: `Build execution error: ${String(err)}`,
+              type: 'error',
+              timestamp: new Date().toLocaleTimeString(),
+            },
+          ]);
+          addToast('Build Task Failed', String(err), 'error');
+        }
       } else {
         setTimeout(() => {
           setIsRunning(false);
@@ -761,7 +764,7 @@ export function useProcessRunner({
         }, 700);
       }
     },
-    [setBottomTab, setIsBottomOpen, addToast, currentProjectDirectory]
+    [files, setBottomTab, setIsBottomOpen, addToast, currentProjectDirectory]
   );
 
   return {

@@ -22,6 +22,7 @@ import {
 import { languages } from '@codemirror/language-data';
 import { darculaTheme } from '../../editor/cm/darculaTheme';
 import { invoke } from '@tauri-apps/api/core';
+import { resolveProjectPath } from '../../utils/pathUtils';
 
 export interface DiffEditorTabProps {
   diffData: {
@@ -322,10 +323,11 @@ export const DiffEditorTab: React.FC<DiffEditorTabProps> = ({
     setSaveStatus('saving');
     try {
       if (typeof window !== 'undefined' && ('__TAURI_INTERNALS__' in window || '__TAURI__' in window)) {
-        const normProj = (projectPath || 'D:\\IDE').replace(/\\/g, '/');
-        const normFile = filePath.replace(/\\/g, '/');
-        const fullPath = filePath.startsWith('/') || /^[a-zA-Z]:/.test(filePath) ? filePath : `${normProj}/${normFile}`;
-        await invoke('write_file_content', { path: fullPath, content: currentLocalRef.current });
+        const fullPath = resolveProjectPath(filePath, projectPath);
+        if (!fullPath) {
+          throw new Error('Cannot resolve file path without an active projectPath');
+        }
+        await invoke('save_file_content', { path: fullPath, content: currentLocalRef.current });
       }
       setHasModified(false);
       setSaveStatus('saved');
@@ -336,23 +338,26 @@ export const DiffEditorTab: React.FC<DiffEditorTabProps> = ({
     }
   };
 
+  const keyHandlersRef = useRef({ handleNextChunk, handlePrevChunk, handleSave });
+  keyHandlersRef.current = { handleNextChunk, handlePrevChunk, handleSave };
+
   // Keyboard shortcuts (F7, Shift+F7, Ctrl+S)
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'F7' && !e.shiftKey) {
         e.preventDefault();
-        handleNextChunk();
+        keyHandlersRef.current.handleNextChunk();
       } else if (e.key === 'F7' && e.shiftKey) {
         e.preventDefault();
-        handlePrevChunk();
-      } else if ((e.ctrlKey || e.metaKey) && e.key === 's') {
+        keyHandlersRef.current.handlePrevChunk();
+      } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
         e.preventDefault();
-        handleSave();
+        keyHandlersRef.current.handleSave();
       }
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [chunksCount]);
+  }, []);
 
   const displayHash = baseHash || '3b5775c8';
   const displayLocalTitle = localTitle || 'Current version';

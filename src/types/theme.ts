@@ -47,13 +47,3 @@ export interface ThemeDefinition {
   colors: ThemeColors;
   syntaxColors: SyntaxTokenColors;
 }
-
-export interface CustomColorScheme {
-  id: string;
-  name: string;
-  baseTheme: IdeThemeId;
-  tokens: Partial<SyntaxTokenColors>;
-  fontFamily: string;
-  fontSize: number;
-  lineHeight: number;
-}

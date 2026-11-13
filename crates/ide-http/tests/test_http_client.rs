@@ -238,3 +238,67 @@ async fn test_http_execute_rejects_oversized_response() {
     );
     let _ = server.join();
 }
+
+#[test]
+fn test_parse_http_file_unknown_method_and_markdown_body_edge_cases() {
+    let content = "\
+### Invalid Block Should Be Ignored
+FOOBAR https://example.com/ignored
+
+### Markdown Heading Inside Body
+POST https://example.com/docs
+Content-Type: text/markdown
+
+Hello
+### not a block split because previous line is not blank
+World
+
+### Second Request
+GET https://example.com/second
+";
+    let blocks = parse_http_file(content);
+    assert_eq!(blocks.len(), 2);
+    assert_eq!(blocks[0].method, "POST");
+    let body = blocks[0].body.as_deref().unwrap();
+    assert!(body.contains("### not a block split"));
+    assert_eq!(blocks[1].method, "GET");
+    assert_eq!(blocks[1].url, "https://example.com/second");
+}
+
+#[tokio::test]
+async fn test_http_execute_binary_and_multi_header_response() {
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+
+    let server = std::thread::spawn(move || {
+        if let Ok((mut stream, _)) = listener.accept() {
+            let mut req_buf = [0u8; 1024];
+            let _ = stream.read(&mut req_buf);
+            let mut resp = Vec::new();
+            resp.extend_from_slice(
+                b"HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nSet-Cookie: a=1\r\nSet-Cookie: b=2\r\nContent-Length: 4\r\nConnection: close\r\n\r\n",
+            );
+            resp.extend_from_slice(&[0xFF, 0x00, 0xFE, 0x41]);
+            let _ = stream.write_all(&resp);
+        }
+    });
+
+    let req = HttpRequestDto {
+        id: Some("test_binary_multi_hdr".into()),
+        method: "GET".into(),
+        url: format!("http://{}/bin", addr),
+        headers: HashMap::new(),
+        body: None,
+    };
+
+    let res = http_execute_request(req).await.expect("binary response should succeed");
+    assert_eq!(res.status, 200);
+    assert_eq!(res.size_bytes, 4);
+    let cookies = res.headers.get("set-cookie").map(String::as_str).unwrap_or("");
+    assert!(cookies.contains("a=1") && cookies.contains("b=2"), "cookies={}", cookies);
+    assert!(res.body.contains('\u{FFFD}') && res.body.ends_with('A'));
+    let _ = server.join();
+}

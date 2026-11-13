@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { invoke } from '@tauri-apps/api/core';
+import { resolveProjectPath } from '../../utils/pathUtils';
 import { 
   GitCommit, 
   X, 
@@ -123,7 +124,10 @@ export const GitCommitModal: React.FC<GitCommitModalProps> = ({
     try {
       if (typeof window !== 'undefined' && ('__TAURI_INTERNALS__' in window || '__TAURI__' in window)) {
         const base = await invoke<string>('git_get_file_content_at_head', { projectPath, filePath: activeFileForDiff }).catch(() => '');
-        const local = await invoke<string>('read_file_content', { filePath: `${projectPath}/${activeFileForDiff}` }).catch(() => '');
+        const resolvedLocalPath = resolveProjectPath(activeFileForDiff, projectPath);
+        const local = resolvedLocalPath
+          ? await invoke<string>('read_file_content', { path: resolvedLocalPath }).catch(() => '')
+          : '';
         setFullDiffBase(base);
         setFullDiffLocal(local);
         setIsFullDiffOpen(true);
@@ -284,10 +288,10 @@ export const GitCommitModal: React.FC<GitCommitModalProps> = ({
                   value={message}
                   onChange={(e) => setMessage(e.target.value)}
                   onKeyDown={(e) => {
-                    if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
-                      handleCommitOnly();
-                    } else if (e.key === 'Enter' && (e.ctrlKey || e.metaKey) && e.shiftKey) {
+                    if (e.key === 'Enter' && (e.ctrlKey || e.metaKey) && e.shiftKey) {
                       handleCommitAndPush();
+                    } else if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+                      handleCommitOnly();
                     }
                   }}
                   placeholder="Commit message (Ctrl+Enter to commit)..."

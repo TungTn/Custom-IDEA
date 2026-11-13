@@ -1,16 +1,23 @@
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{LazyLock, Mutex};
 
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
 
 pub static PENDING_WINDOW_PROJECTS: LazyLock<Mutex<HashMap<String, String>>> = LazyLock::new(|| Mutex::new(HashMap::new()));
+static WINDOW_COUNTER: AtomicU64 = AtomicU64::new(1);
 
 #[tauri::command]
 pub async fn open_in_new_window(app: tauri::AppHandle, project_name: String, project_path: Option<String>) -> Result<(), String> {
   use tauri::Manager;
-  let label = format!("win-{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis());
-  
+  let seq = WINDOW_COUNTER.fetch_add(1, Ordering::Relaxed);
+  let millis = std::time::SystemTime::now()
+    .duration_since(std::time::UNIX_EPOCH)
+    .map(|d| d.as_millis())
+    .unwrap_or(0);
+  let label = format!("win-{}-{}", millis, seq);
+
   if let Some(ref p) = project_path {
     if let Ok(mut map) = PENDING_WINDOW_PROJECTS.lock() {
       map.insert(label.clone(), p.clone());
@@ -31,7 +38,7 @@ pub async fn open_in_new_window(app: tauri::AppHandle, project_name: String, pro
     tauri::WebviewUrl::App("index.html".into())
   };
 
-  tauri::WebviewWindowBuilder::new(&app, &label, target_url)
+  if let Err(e) = tauri::WebviewWindowBuilder::new(&app, &label, target_url)
     .title(format!("IntelliJ IDEA – {}", project_name))
     .inner_size(1280.0, 800.0)
     .min_inner_size(900.0, 600.0)
@@ -40,7 +47,12 @@ pub async fn open_in_new_window(app: tauri::AppHandle, project_name: String, pro
     .maximized(true)
     .theme(Some(tauri::Theme::Dark))
     .build()
-    .map_err(|e| format!("Failed to create new window: {}", e))?;
+  {
+    if let Ok(mut map) = PENDING_WINDOW_PROJECTS.lock() {
+      map.remove(&label);
+    }
+    return Err(format!("Failed to create new window: {}", e));
+  }
   Ok(())
 }
 
@@ -70,15 +82,17 @@ pub fn app_toggle_maximize_window(window: tauri::Window) -> Result<bool, String>
 
 #[tauri::command]
 pub fn app_close_window(app: tauri::AppHandle, window: tauri::Window) -> Result<(), String> {
-  let log_path = std::env::temp_dir().join("ide_exit_reason.log");
-  let _ = std::fs::write(log_path, format!("app_close_window called by {}\n", window.label()));
   log::info!("app_close_window called by {}", window.label());
+  if let Ok(mut map) = PENDING_WINDOW_PROJECTS.lock() {
+    map.remove(window.label());
+  }
   use tauri::Manager;
   let windows = app.webview_windows();
   if windows.len() <= 1 {
     crate::cleanup_ide_subsystems();
     let _ = window.close();
-    std::process::exit(0);
+    app.exit(0);
+    Ok(())
   } else {
     window.close().map_err(|e| e.to_string())
   }
@@ -180,8 +194,6 @@ pub async fn download_and_install_plugin(plugin_id: usize, plugin_name: String) 
     std::env::temp_dir().join("custom-idea-plugins")
   };
 
-  std::fs::create_dir_all(&plugins_dir).map_err(|e| format!("Failed to create plugins dir: {}", e))?;
-
   let clean_name = plugin_name.replace(|c: char| !c.is_alphanumeric(), "_");
   let target_archive = plugins_dir.join(format!("{}_{}.zip", plugin_id, clean_name));
   let part_archive = plugins_dir.join(format!("{}_{}.zip.part", plugin_id, clean_name));
@@ -206,26 +218,47 @@ pub async fn download_and_install_plugin(plugin_id: usize, plugin_name: String) 
 
   let mut total_written: u64 = 0;
   const MAX_PLUGIN_BYTES: u64 = 256 * 1024 * 1024;
-  {
-    use std::io::Write;
-    let mut file = std::fs::File::create(&part_archive)
+  let dir_for_create = plugins_dir.clone();
+  let part_for_create = part_archive.clone();
+  let mut writer = tauri::async_runtime::spawn_blocking(move || -> Result<std::io::BufWriter<std::fs::File>, String> {
+    std::fs::create_dir_all(&dir_for_create).map_err(|e| format!("Failed to create plugins dir: {}", e))?;
+    let file = std::fs::File::create(&part_for_create)
       .map_err(|e| format!("Failed to create plugin temp file: {}", e))?;
-    while let Some(chunk) = res.chunk().await.map_err(|e| format!("Failed downloading plugin chunk: {}", e))? {
-      total_written += chunk.len() as u64;
-      if total_written > MAX_PLUGIN_BYTES {
-        return Err("Plugin archive exceeded 256 MiB limit".to_string());
-      }
-      file.write_all(&chunk).map_err(|e| format!("Failed writing plugin archive: {}", e))?;
+    Ok(std::io::BufWriter::new(file))
+  })
+  .await
+  .map_err(|e| format!("Plugin file creation task panicked: {}", e))??;
+
+  while let Some(chunk) = res.chunk().await.map_err(|e| format!("Failed downloading plugin chunk: {}", e))? {
+    total_written += chunk.len() as u64;
+    if total_written > MAX_PLUGIN_BYTES {
+      return Err("Plugin archive exceeded 256 MiB limit".to_string());
     }
+    writer = tauri::async_runtime::spawn_blocking(move || -> Result<std::io::BufWriter<std::fs::File>, String> {
+      use std::io::Write;
+      writer.write_all(&chunk).map_err(|e| format!("Failed writing plugin archive: {}", e))?;
+      Ok(writer)
+    })
+    .await
+    .map_err(|e| format!("Plugin write task panicked: {}", e))??;
   }
+
+  tauri::async_runtime::spawn_blocking(move || -> Result<(), String> {
+    use std::io::Write;
+    writer.flush().map_err(|e| format!("Failed flushing plugin archive: {}", e))
+  })
+  .await
+  .map_err(|e| format!("Plugin flush task panicked: {}", e))??;
 
   if total_written < 100 {
     return Err("Downloaded archive is empty or invalid (network error).".to_string());
   }
 
-  // Validate ZIP structure and inspect actual META-INF/plugin.xml presence
-  let has_plugin_xml = {
-    let f = std::fs::File::open(&part_archive)
+  // Validate ZIP structure, inspect actual META-INF/plugin.xml presence, and finalize on a blocking thread
+  let part_for_blocking = part_archive.clone();
+  let target_for_blocking = target_archive.clone();
+  let has_plugin_xml = tauri::async_runtime::spawn_blocking(move || -> Result<bool, String> {
+    let f = std::fs::File::open(&part_for_blocking)
       .map_err(|e| format!("Failed to reopen downloaded plugin archive: {}", e))?;
     let archive = zip::ZipArchive::new(f)
       .map_err(|e| format!("Downloaded plugin is not a valid ZIP archive: {}", e))?;
@@ -233,11 +266,14 @@ pub async fn download_and_install_plugin(plugin_id: usize, plugin_name: String) 
       .file_names()
       .any(|name| name.replace('\\', "/").eq_ignore_ascii_case("META-INF/plugin.xml")
         || name.replace('\\', "/").to_ascii_lowercase().ends_with("/meta-inf/plugin.xml"));
-    found
-  };
+    drop(archive);
 
-  std::fs::rename(&part_archive, &target_archive)
-    .map_err(|e| format!("Failed to finalize plugin archive: {}", e))?;
+    std::fs::rename(&part_for_blocking, &target_for_blocking)
+      .map_err(|e| format!("Failed to finalize plugin archive: {}", e))?;
+    Ok(found)
+  })
+  .await
+  .map_err(|e| format!("Plugin verification task panicked: {}", e))??;
 
   let is_theme = plugin_name.to_lowercase().contains("theme");
   let p_str = target_archive.to_string_lossy().to_string();

@@ -1,5 +1,5 @@
 use crate::client;
-use crate::types::{DockerContainerDto, DockerDaemonStatusDto, DockerImageDto};
+use crate::types::{DockerContainerDto, DockerDaemonStatusDto};
 
 #[tauri::command]
 pub async fn docker_get_daemon_status() -> Result<DockerDaemonStatusDto, String> {
@@ -9,11 +9,6 @@ pub async fn docker_get_daemon_status() -> Result<DockerDaemonStatusDto, String>
 #[tauri::command]
 pub async fn docker_list_containers(all: Option<bool>) -> Result<Vec<DockerContainerDto>, String> {
     client::list_containers(all.unwrap_or(true)).await
-}
-
-#[tauri::command]
-pub async fn docker_list_images() -> Result<Vec<DockerImageDto>, String> {
-    client::list_images().await
 }
 
 #[tauri::command]

@@ -6,7 +6,6 @@ use ts_rs::TS;
 pub enum CoverageStatus {
     Covered,
     Uncovered,
-    PartiallyCovered,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]

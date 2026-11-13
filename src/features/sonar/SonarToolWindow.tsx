@@ -558,6 +558,14 @@ export const SonarToolWindow: React.FC<SonarToolWindowProps> = ({
 }) => {
   const [analyzing, setAnalyzing] = useState(false);
   const cancelRequestedRef = React.useRef(false);
+  const analyzeTimersRef = React.useRef<ReturnType<typeof setTimeout>[]>([]);
+
+  useEffect(() => {
+    return () => {
+      analyzeTimersRef.current.forEach(clearTimeout);
+      analyzeTimersRef.current = [];
+    };
+  }, []);
   const [issues, setIssues] = useState<SonarIssue[]>([]);
   const [selectedIssue, setSelectedIssue] = useState<SonarIssue | null>(null);
   const [severityFilter, setSeverityFilter] = useState<'ALL' | 'BLOCKER' | 'CRITICAL' | 'MAJOR' | 'MINOR' | 'INFO'>('ALL');
@@ -593,25 +601,31 @@ export const SonarToolWindow: React.FC<SonarToolWindowProps> = ({
     });
   }, []);
 
-  // Auto-analyze active file on the fly
+  // Auto-analyze active file on the fly (single debounced effect to avoid double analysis per keystroke)
   useEffect(() => {
-    if (activeTab?.content) {
+    if (!activeTab?.content) {
+      setIssues([]);
+      setSelectedIssue(null);
+      return;
+    }
+    const timer = setTimeout(() => {
       const detected = analyzeCodeForSonarIssues(activeTab.content, activeTab.path || activeTab.title);
       setIssues(detected);
       setSelectedIssue(detected[0] || null);
       setSonarLogs((prev) => [
-        ...prev,
+        ...prev.slice(-199),
         {
           time: new Date().toLocaleTimeString(),
           msg: `Analyzed ${activeTab.title}: ${detected.length} findings detected.`,
           level: detected.length > 0 ? 'warn' : 'info',
         },
       ]);
-    } else {
-      setIssues([]);
-      setSelectedIssue(null);
-    }
-  }, [activeTab?.path, activeTab?.content]);
+      if (activeTabMode === 'findings') {
+        setTelemetryMessage(`Analyzed ${activeTab.title} (${activeTab.content.split('\n').length} LOC): ${detected.length} issues`);
+      }
+    }, 400);
+    return () => clearTimeout(timer);
+  }, [activeTab?.path, activeTab?.content, activeTabMode]);
 
   // Initial check of SonarQube Server status
   useEffect(() => {
@@ -659,8 +673,10 @@ export const SonarToolWindow: React.FC<SonarToolWindowProps> = ({
       progressPercent: 30,
     });
     const startTime = performance.now();
+    analyzeTimersRef.current.forEach(clearTimeout);
+    analyzeTimersRef.current = [];
 
-    setTimeout(() => {
+    const outerTimer = setTimeout(() => {
       if (cancelRequestedRef.current) {
         setAnalyzing(false);
         onAnalysisStateChange?.(null);
@@ -678,7 +694,7 @@ export const SonarToolWindow: React.FC<SonarToolWindowProps> = ({
       const detected = analyzeCodeForSonarIssues(activeTab.content || '', activeTab.path || activeTab.title);
       const elapsed = Math.round(performance.now() - startTime);
 
-      setTimeout(() => {
+      const innerTimer = setTimeout(() => {
         if (cancelRequestedRef.current) {
           setAnalyzing(false);
           onAnalysisStateChange?.(null);
@@ -692,7 +708,7 @@ export const SonarToolWindow: React.FC<SonarToolWindowProps> = ({
         const loc = (activeTab.content || '').split('\n').length;
         setTelemetryMessage(`Analyzed ${activeTab.title} (${loc} LOC) in ${elapsed}ms: ${detected.length} issue(s)`);
         setSonarLogs((prev) => [
-          ...prev,
+          ...prev.slice(-199),
           {
             time: new Date().toLocaleTimeString(),
             msg: `Analyzed ${activeTab.title} (${loc} LOC): found ${detected.length} issue(s).`,
@@ -705,7 +721,9 @@ export const SonarToolWindow: React.FC<SonarToolWindowProps> = ({
           detected.length > 0 ? 'warning' : 'success'
         );
       }, 150);
+      analyzeTimersRef.current.push(innerTimer);
     }, 250);
+    analyzeTimersRef.current.push(outerTimer);
   };
 
   // Scan specific path or folder (from Context Menu or Keybinding)
@@ -749,7 +767,7 @@ export const SonarToolWindow: React.FC<SonarToolWindowProps> = ({
         onAnalysisStateChange?.(null);
         setTelemetryMessage(`Analyzed ${displayName} in ${elapsed}ms: ${detected.length} issue(s)`);
         setSonarLogs((prev) => [
-          ...prev,
+          ...prev.slice(-199),
           {
             time: new Date().toLocaleTimeString(),
             msg: `Analyzed ${displayName}: found ${detected.length} issue(s).`,
@@ -800,34 +818,42 @@ export const SonarToolWindow: React.FC<SonarToolWindowProps> = ({
         const allIssues: SonarIssue[] = [];
         let totalLoc = 0;
 
-        for (let i = 0; i < supportedFiles.length; i++) {
+        const BATCH_SIZE = 8;
+        for (let i = 0; i < supportedFiles.length; i += BATCH_SIZE) {
           if (cancelRequestedRef.current) {
             setTelemetryMessage(`Analysis canceled by user (${i}/${supportedFiles.length} files scanned).`);
             break;
           }
 
-          const file = supportedFiles[i];
-          const percent = Math.round(((i + 1) / supportedFiles.length) * 100);
+          const batch = supportedFiles.slice(i, i + BATCH_SIZE);
+          const processedCount = Math.min(i + batch.length, supportedFiles.length);
+          const percent = Math.round((processedCount / supportedFiles.length) * 100);
           onAnalysisStateChange?.({
             isAnalyzing: true,
-            message: `SonarQube: Analyzing ${i + 1} of ${supportedFiles.length} files`,
+            message: `SonarQube: Analyzing ${processedCount} of ${supportedFiles.length} files`,
             filesCount: supportedFiles.length,
-            currentFileName: file.name,
+            currentFileName: batch[batch.length - 1]?.name || '',
             progressPercent: percent,
           });
 
-          try {
-            const content = await invoke<string>('read_file_content', { path: file.path });
-            totalLoc += content.split('\n').length;
-            const detected = analyzeCodeForSonarIssues(content, file.path);
-            allIssues.push(...detected);
-          } catch (e) {
-            console.warn('Failed to read file for Sonar analysis:', file.path, e);
-          }
+          const batchResults = await Promise.all(
+            batch.map(async (file) => {
+              try {
+                const content = await invoke<string>('read_file_content', { path: file.path });
+                return {
+                  loc: content.split('\n').length,
+                  issues: analyzeCodeForSonarIssues(content, file.path),
+                };
+              } catch (e) {
+                console.warn('Failed to read file for Sonar analysis:', file.path, e);
+                return { loc: 0, issues: [] as SonarIssue[] };
+              }
+            })
+          );
 
-          // Small yield to let UI re-render progress
-          if (i % 3 === 0) {
-            await new Promise(r => setTimeout(r, 10));
+          for (const res of batchResults) {
+            totalLoc += res.loc;
+            allIssues.push(...res.issues);
           }
         }
 
@@ -888,14 +914,26 @@ export const SonarToolWindow: React.FC<SonarToolWindowProps> = ({
       let totalLoc = 0;
       const allIssues: SonarIssue[] = [];
 
-      for (const jf of javaFiles) {
-        try {
-          const content = await invoke<string>('read_file_content', { path: jf.path });
-          totalLoc += content.split('\n').length;
-          const detected = analyzeCodeForSonarIssues(content, jf.path);
-          allIssues.push(...detected);
-        } catch (e) {
-          console.warn(`Failed to read file ${jf.path}:`, e);
+      const BATCH_SIZE = 8;
+      for (let i = 0; i < javaFiles.length; i += BATCH_SIZE) {
+        const batch = javaFiles.slice(i, i + BATCH_SIZE);
+        const results = await Promise.all(
+          batch.map(async (jf) => {
+            try {
+              const content = await invoke<string>('read_file_content', { path: jf.path });
+              return {
+                loc: content.split('\n').length,
+                issues: analyzeCodeForSonarIssues(content, jf.path),
+              };
+            } catch (e) {
+              console.warn(`Failed to read file ${jf.path}:`, e);
+              return { loc: 0, issues: [] as SonarIssue[] };
+            }
+          })
+        );
+        for (const r of results) {
+          totalLoc += r.loc;
+          allIssues.push(...r.issues);
         }
       }
 
@@ -962,16 +1000,6 @@ export const SonarToolWindow: React.FC<SonarToolWindowProps> = ({
       onShowToast?.('SonarQube Fetch Failed', String(err), 'error');
     }
   };
-
-  // Auto-analyze active file on open/tab change if in findings mode
-  useEffect(() => {
-    if (activeTabMode === 'findings' && activeTab?.content) {
-      const detected = analyzeCodeForSonarIssues(activeTab.content, activeTab.path || activeTab.title);
-      setIssues(detected);
-      setSelectedIssue(detected[0] || null);
-      setTelemetryMessage(`Analyzed ${activeTab.title} (${activeTab.content.split('\n').length} LOC): ${detected.length} issues`);
-    }
-  }, [activeTab?.path, activeTab?.content, activeTabMode]);
 
   const counts = useMemo(() => {
     return {
@@ -1151,9 +1179,6 @@ export const SonarToolWindow: React.FC<SonarToolWindowProps> = ({
           {onExecuteMavenGoal && (
             <button
               onClick={() => {
-                if (sonarConfig.token) {
-                  try { sessionStorage.setItem('SONAR_TOKEN', sonarConfig.token); } catch {}
-                }
                 onExecuteMavenGoal(buildMavenSonarCommand(sonarConfig));
               }}
               className="px-2 py-0.5 rounded bg-[#4B9FD5]/15 hover:bg-[#4B9FD5]/25 text-[#4B9FD5] text-[10px] font-medium flex items-center gap-1 transition-colors cursor-pointer ml-1"

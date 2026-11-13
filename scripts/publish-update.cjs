@@ -65,7 +65,7 @@ function getGitLabPackages(config, httpClient = https) {
     const req = httpClient.request({
       hostname: config.host,
       port: 443,
-      path: `/api/v4/projects/${config.projectId}/packages?package_name=${encodeURIComponent(config.packageName)}&per_page=100`,
+      path: `/api/v4/projects/${encodeURIComponent(config.projectId)}/packages?package_name=${encodeURIComponent(config.packageName)}&per_page=100`,
       method: 'GET',
       headers: { 'PRIVATE-TOKEN': config.token },
       rejectUnauthorized: !config.allowSelfSignedTls
@@ -96,7 +96,7 @@ function deletePackage(config, packageId, version, httpClient = https) {
     const req = httpClient.request({
       hostname: config.host,
       port: 443,
-      path: `/api/v4/projects/${config.projectId}/packages/${packageId}`,
+      path: `/api/v4/projects/${encodeURIComponent(config.projectId)}/packages/${encodeURIComponent(String(packageId))}`,
       method: 'DELETE',
       headers: { 'PRIVATE-TOKEN': config.token },
       rejectUnauthorized: !config.allowSelfSignedTls
@@ -161,7 +161,7 @@ async function purgeOldReleases(config, httpClient = https) {
 function uploadFileToGitLab(config, filePath, remoteFileName) {
   return new Promise((resolve) => {
     const stat = fs.statSync(filePath);
-    const apiPath = `/api/v4/projects/${config.projectId}/packages/generic/${encodeURIComponent(config.packageName)}/latest/${encodeURIComponent(remoteFileName)}`;
+    const apiPath = `/api/v4/projects/${encodeURIComponent(config.projectId)}/packages/generic/${encodeURIComponent(config.packageName)}/latest/${encodeURIComponent(remoteFileName)}`;
 
     console.log(`[*] Đang tải lên: ${remoteFileName} (${(stat.size / 1024 / 1024).toFixed(2)} MB)...`);
 
@@ -395,18 +395,14 @@ async function main() {
 
   // BƯỚC 3: TẠO METADATA version.json MỚI NHẤT
   console.log('\n[2/3] Đang tạo metadata version.json...');
-  const downloadUrl = `https://${config.host}/api/v4/projects/${config.projectId}/packages/generic/${config.packageName}/latest/${latestExeFileName}`;
-
-  const versionMetadata = {
-    version: version,
-    releaseDate: new Date().toISOString(),
-    notes: changelog,
-    sha256: sha256,
-    downloadUrl: downloadUrl,
+  const { downloadUrl, metadata: versionMetadata } = buildVersionMetadata(config, {
+    version,
+    changelog,
+    sha256,
     size: exeStat.size,
     forceUpdate: isForceUpdate,
-    requireSetup: false
-  };
+    fileName: latestExeFileName,
+  });
 
   const tempVersionPath = path.join(releaseDir, 'version.json');
   fs.writeFileSync(tempVersionPath, JSON.stringify(versionMetadata, null, 2), 'utf8');
@@ -445,7 +441,7 @@ async function main() {
     console.log('\n===============================================================================');
     console.log(` [THÀNH CÔNG] ĐÃ PHÁT HÀNH BẢN CẬP NHẬT LÊN ${config.host.toUpperCase()}!`);
     console.log(` - Mục Package : ${config.packageName}`);
-    console.log(` - Metadata URL: https://${config.host}/api/v4/projects/${config.projectId}/packages/generic/${config.packageName}/latest/version.json`);
+    console.log(` - Metadata URL: ${buildDownloadUrl(config, 'version.json')}`);
     console.log(` - Download URL: ${downloadUrl}`);
     console.log('===============================================================================');
   } else {
@@ -461,8 +457,29 @@ if (require.main === module) {
   });
 }
 
+function buildDownloadUrl(config, fileName) {
+  return `https://${config.host}/api/v4/projects/${encodeURIComponent(config.projectId)}/packages/generic/${encodeURIComponent(config.packageName)}/latest/${encodeURIComponent(fileName)}`;
+}
+
+function buildVersionMetadata(config, { version, changelog, sha256, size, forceUpdate, fileName }) {
+  const downloadUrl = buildDownloadUrl(config, fileName);
+  const metadata = {
+    version,
+    releaseDate: new Date().toISOString(),
+    notes: changelog,
+    sha256,
+    downloadUrl,
+    size,
+    forceUpdate: Boolean(forceUpdate),
+    requireSetup: false,
+  };
+  return { downloadUrl, metadata };
+}
+
 module.exports = {
   getGitLabPackages,
   deletePackage,
   purgeOldReleases,
+  buildDownloadUrl,
+  buildVersionMetadata,
 };

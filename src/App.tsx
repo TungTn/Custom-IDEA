@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
+import { resolveProjectPath } from './utils/pathUtils';
 // ─── 1. Workbench Shell Layer ───
 import {
   TopBar,
@@ -61,21 +62,6 @@ import { Terminal, PlaySquare, Play, Bug, AlertCircle, Search, GitBranch, Maximi
 import { detectLanguage } from './utils/languageDetector';
 export { detectLanguage } from './utils/languageDetector';
 import { useIdeKeybindings, useMenuDispatcher, useProcessRunner, useIdeDebugger, useProjectWorkspace } from './hooks';
-
-const getInitialProjectPath = (): string => {
-  try {
-    if (typeof window !== 'undefined') {
-      const params = new URLSearchParams(window.location.search);
-      const allPaths = params.getAll('openPath');
-      if (allPaths.length > 0 && allPaths[allPaths.length - 1]) {
-        return allPaths[allPaths.length - 1];
-      }
-      const savedPath = localStorage.getItem('ij_current_project_path');
-      if (savedPath) return savedPath;
-    }
-  } catch (e) {}
-  return '';
-};
 
 export const App: React.FC = () => {
   // ─── Domain Zustand Stores ───
@@ -338,25 +324,40 @@ export const App: React.FC = () => {
       const dirtyTabs = tabs.filter(t => t.isDirty);
       if (dirtyTabs.length === 0) return;
 
-      if (typeof window !== 'undefined' && ('__TAURI_INTERNALS__' in window || '__TAURI__' in window)) {
-        for (const tab of dirtyTabs) {
-          if (tab.path && (tab.path.includes('/') || tab.path.includes('\\'))) {
-            try {
-              await invoke('save_file_content', { path: tab.path, content: tab.content });
-              localHistoryService.recordSnapshot(tab.path, tab.content, isManual ? 'Manual Save (Ctrl+S)' : 'Auto-save');
-            } catch (e) {
-              console.error(`Failed to save ${tab.path} to disk:`, e);
-              if (isManual) {
-                addToast('Save Failed', `Could not save ${tab.title}: ${e}`, 'error');
-              }
-            }
+      const isTauriEnv =
+        typeof window !== 'undefined' &&
+        ('__TAURI_INTERNALS__' in window || '__TAURI__' in window);
+      const savedIds = new Set<string>();
+
+      for (const tab of dirtyTabs) {
+        if (!isTauriEnv) {
+          savedIds.add(tab.id);
+          continue;
+        }
+        const resolvedPath = tab.path ? resolveProjectPath(tab.path, currentProjectDirectory) : '';
+        if (!resolvedPath) {
+          if (isManual) {
+            addToast('Save Failed', `Could not resolve workspace path for ${tab.title}.`, 'error');
+          }
+          continue;
+        }
+        try {
+          await invoke('save_file_content', { path: resolvedPath, content: tab.content });
+          localHistoryService.recordSnapshot(resolvedPath, tab.content, isManual ? 'Manual Save (Ctrl+S)' : 'Auto-save');
+          savedIds.add(tab.id);
+        } catch (e) {
+          console.error(`Failed to save ${resolvedPath} to disk:`, e);
+          if (isManual) {
+            addToast('Save Failed', `Could not save ${tab.title}: ${e}`, 'error');
           }
         }
       }
 
-      setTabs(prev => prev.map(t => ({ ...t, isDirty: false })));
-      refreshGitStatus();
-    }, [tabs, settings.autoFormatOnSave, addToast, refreshGitStatus]);
+      if (savedIds.size > 0) {
+        setTabs(prev => prev.map(t => (savedIds.has(t.id) ? { ...t, isDirty: false } : t)));
+        refreshGitStatus();
+      }
+    }, [tabs, settings.autoFormatOnSave, currentProjectDirectory, addToast, refreshGitStatus]);
 
   // Handle Save (Ctrl+S or Save All action) - Silent in IntelliJ IDEA
   const handleSaveActive = useCallback(async () => {
@@ -648,11 +649,12 @@ export const App: React.FC = () => {
           : `// Test suite for ${baseName}\n`;
 
       try {
-        await invoke('write_file_content', { path: candidateTestPath, content: boilerplate });
-      } catch (_) {}
-
-      handleOpenFileAtLocation(candidateTestPath, 1, 1);
-      addToast('Created Test', testFileName, 'success');
+        await invoke('save_file_content', { path: candidateTestPath, content: boilerplate });
+        handleOpenFileAtLocation(candidateTestPath, 1, 1);
+        addToast('Created Test', testFileName, 'success');
+      } catch (e) {
+        addToast('Create Test Failed', `Could not write ${testFileName}: ${e}`, 'error');
+      }
     }
   }, [activeTab, handleOpenFileAtLocation, addToast]);
 
@@ -1605,12 +1607,30 @@ export const App: React.FC = () => {
   });
 
       // Create New File logic
-      const handleCreateNewFile = (fileName: string) => {
+      const handleCreateNewFile = async (fileName: string) => {
         const language = detectLanguage(fileName);
 
         const newId = `file-${Date.now()}`;
-        const newPath = `src/${fileName}`;
+        const relPath = `src/${fileName}`;
+        const resolvedPath = resolveProjectPath(relPath, currentProjectDirectory);
+        const newPath = resolvedPath || relPath;
         const newContent = `// ${fileName}\n\n`;
+        const isTauriEnv =
+          typeof window !== 'undefined' &&
+          ('__TAURI_INTERNALS__' in window || '__TAURI__' in window);
+
+        let savedToDisk = !isTauriEnv;
+        if (isTauriEnv && resolvedPath) {
+          try {
+            await invoke('save_file_content', { path: resolvedPath, content: newContent });
+            savedToDisk = true;
+            syncProjectFilesFromDisk();
+          } catch (e) {
+            addToast('File Save Failed', `Created buffer for ${fileName}, but disk save failed: ${e}`, 'warning');
+          }
+        } else if (isTauriEnv) {
+          addToast('Unsaved Buffer', `Opened ${fileName} without an active workspace path; save manually when ready.`, 'info');
+        }
 
         const newFileNode: FileNode = {
           id: newId,
@@ -1636,12 +1656,14 @@ export const App: React.FC = () => {
           path: newPath,
           content: newContent,
           language,
-          isDirty: false
+          isDirty: !savedToDisk
         };
 
         setTabs(prev => [...prev, newTab]);
         setActiveTabId(newId);
-        addToast('File Created', `Created ${fileName} and opened in editor`, 'success');
+        if (savedToDisk) {
+          addToast('File Created', `Created ${fileName} and opened in editor`, 'success');
+        }
       };
 
       const handleFileSelect = async (file: FileNode) => {

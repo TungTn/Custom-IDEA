@@ -34,10 +34,8 @@ export const InteractiveRebaseModal: React.FC<InteractiveRebaseModalProps> = ({
 
   // Sync when initialCommits changes
   React.useEffect(() => {
-    if (initialCommits.length > 0) {
-      setCommits(initialCommits);
-      setSelectedIndex(0);
-    }
+    setCommits(initialCommits);
+    setSelectedIndex(0);
   }, [initialCommits]);
 
   if (!isOpen) return null;

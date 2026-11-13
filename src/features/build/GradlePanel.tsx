@@ -19,14 +19,6 @@ import {
 } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
 
-export interface GradleTask {
-  id: string;
-  name: string;
-  command: string;
-  group: 'build' | 'application' | 'verification' | 'help' | 'other';
-  description?: string;
-}
-
 export interface GradleDependency {
   name: string;
   configuration: string;

@@ -8,7 +8,6 @@ pub fn parse_http_file(content: &str) -> Vec<HttpBlockDto> {
         return blocks;
     }
 
-    let mut current_start = 0;
     let mut current_name: Option<String> = None;
     let mut current_lines: Vec<(usize, &str)> = Vec::new();
 
@@ -52,14 +51,14 @@ pub fn parse_http_file(content: &str) -> Vec<HttpBlockDto> {
             } else if parts[0].starts_with("http://") || parts[0].starts_with("https://") {
                 ("GET".to_string(), parts[0].to_string())
             } else {
-                ("GET".to_string(), parts[0].to_string())
+                return;
             }
         } else {
             let p = parts[0];
             if p.starts_with("http://") || p.starts_with("https://") {
                 ("GET".to_string(), p.to_string())
             } else {
-                ("GET".to_string(), p.to_string())
+                return;
             }
         };
 
@@ -85,7 +84,13 @@ pub fn parse_http_file(content: &str) -> Vec<HttpBlockDto> {
                 let key = line[..colon_pos].trim().to_string();
                 let value = line[colon_pos + 1..].trim().to_string();
                 if !key.is_empty() {
-                    headers.insert(key, value);
+                    headers
+                        .entry(key)
+                        .and_modify(|existing: &mut String| {
+                            existing.push_str(", ");
+                            existing.push_str(&value);
+                        })
+                        .or_insert(value);
                 }
             }
         }
@@ -122,25 +127,39 @@ pub fn parse_http_file(content: &str) -> Vec<HttpBlockDto> {
     };
 
     let mut block_idx = 0;
+    let mut saw_req_line = false;
+    let mut in_body = false;
+    let mut prev_line_blank = true;
+
     for (i, line) in lines.iter().enumerate() {
         let line_num = i + 1;
         let trimmed = line.trim();
 
-        if trimmed.starts_with("###") {
+        if trimmed.starts_with("###") && (!in_body || prev_line_blank) {
             // Flush existing block
             flush_block(&mut blocks, current_name.take(), &current_lines, block_idx);
             current_lines.clear();
             block_idx += 1;
+            saw_req_line = false;
+            in_body = false;
+            prev_line_blank = true;
 
             // Optional title after ###
             let rest = trimmed.trim_start_matches('#').trim();
             if !rest.is_empty() {
                 current_name = Some(rest.to_string());
             }
-            current_start = line_num;
         } else {
-            if current_lines.is_empty() && current_start == 0 {
-                current_start = line_num;
+            if trimmed.is_empty() {
+                if saw_req_line {
+                    in_body = true;
+                }
+                prev_line_blank = true;
+            } else {
+                if !trimmed.starts_with('#') && !trimmed.starts_with("//") {
+                    saw_req_line = true;
+                }
+                prev_line_blank = false;
             }
             current_lines.push((line_num, line));
         }

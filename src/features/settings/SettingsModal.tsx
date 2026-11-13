@@ -18,6 +18,7 @@ import {
 } from 'lucide-react';
 import { IdeThemeId } from '../../types/theme';
 import { applyIdeTheme } from '../../themes/themeManager';
+import { usePluginStore } from '../../stores/pluginStore';
 import { loadLiveTemplates, saveLiveTemplates, LiveTemplate } from '../../editor/cm/snippetEngine';
 import {
   SettingPanelProps,
@@ -292,8 +293,6 @@ export function getAllDescendants(node: TreeItem): TreeItem[] {
   }
   return result;
 }
-
-export const getAllDescendantLeaves = getAllDescendants;
 
 export function nodeMatchesSearch(node: TreeItem, query: string): boolean {
   if (!query) return true;
@@ -719,22 +718,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     return (settings.keymapProfile || (localStorage.getItem('intellij_keymap_profile') as any) || 'windows');
   });
 
-  // Installed Plugins List (persisted in localStorage)
-  const [installedPlugins, setInstalledPlugins] = useState<InstalledPluginItem[]>(() => {
-    try {
-      const saved = localStorage.getItem('intellij_installed_plugins');
-      if (saved) return JSON.parse(saved);
-    } catch (e) {
-      console.error(e);
-    }
-    return [
-      { id: 'p_rust', name: 'Rust', author: 'JetBrains', version: '0.4.200', desc: 'Rust language support: type inference, smart completion, and Cargo test runner', installed: true, enabled: true, rating: 4.9, downloads: 15400000 },
-      { id: 'p_toml', name: 'Toml', author: 'JetBrains', version: '0.2.160', desc: 'TOML language support and Cargo.toml completions', installed: true, enabled: true, rating: 4.8, downloads: 8200000 },
-      { id: 'p_gitbox', name: 'GitToolBox', author: 'Tomasz S.', version: '213.0.12', desc: 'Status bar inline blame, ahead/behind indicators, and branch cleanup', installed: true, enabled: true, rating: 4.7, downloads: 9800000 },
-      { id: 'p_tailwind', name: 'Tailwind CSS', author: 'JetBrains', version: '241.14494', desc: 'Intelligent Tailwind CSS class sorting and live preview', installed: true, enabled: true, rating: 4.8, downloads: 6400000 },
-      { id: 'p_icons', name: 'Atom Material Icons', author: 'Elior Boukhobza', version: '86.0', desc: 'File and folder icon theme for JetBrains IDEs', installed: true, enabled: true, rating: 4.9, downloads: 12100000 },
-    ];
-  });
+  // Installed Plugins from shared store
+  const storePlugins = usePluginStore(s => s.installedPlugins);
 
   // Live Templates state
   const [liveTemplates, setLiveTemplates] = useState<LiveTemplate[]>(() => loadLiveTemplates());
@@ -811,7 +796,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   const activeBreadcrumbs = findNodePath(SETTINGS_TREE, selectedId) || [activeNode];
   const isCategoryOverview = ['appearance-behavior', 'editor', 'version-control', 'build-exec', 'languages', 'tools'].includes(selectedId);
 
-  const installedPluginCount = installedPlugins.filter(p => p.enabled).length;
+  const installedPluginCount = storePlugins.filter(p => p.enabled).length;
 
   const renderTreeNode = (item: TreeItem, depth: number = 0): React.ReactNode => {
     const hasChildren = Boolean(item.children && item.children.length > 0);

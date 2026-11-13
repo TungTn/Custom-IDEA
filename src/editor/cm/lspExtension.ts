@@ -1,10 +1,12 @@
 import { invoke } from '@tauri-apps/api/core';
 import { Extension, StateEffect, StateField } from '@codemirror/state';
-import { EditorView, hoverTooltip, showTooltip, Tooltip, keymap, Decoration, DecorationSet } from '@codemirror/view';
+import { EditorView, ViewPlugin, hoverTooltip, showTooltip, Tooltip, keymap, Decoration, DecorationSet } from '@codemirror/view';
 import { autocompletion, CompletionContext, CompletionResult, Completion } from '@codemirror/autocomplete';
 import { setDiagnostics, Diagnostic, lintGutter } from '@codemirror/lint';
 import { lspService, pathToUri, uriToPath, LspCompletionItem, LspCodeAction, LspRange, LspSignatureHelp } from '../../services/lspService';
 import { extractStringLiteralAtPos, isLikelyPathString, resolveImportPath } from './pathResolver';
+
+const sigHelpTimers = new WeakMap<EditorView, ReturnType<typeof setTimeout>>();
 
 // Map LSP CompletionItemKind to CodeMirror completion type
 function mapLspKindToCmType(kind?: number): string {
@@ -331,14 +333,27 @@ export function createLspSignatureHelp(filePath: string): Extension {
           tr.changes.iterChanges((_fromA, _toA, _fromB, _toB, inserted) => {
             const text = inserted.toString();
             if (text.includes('(') || text.includes(',')) {
-              setTimeout(() => {
+              const prevTimer = sigHelpTimers.get(update.view);
+              if (prevTimer) clearTimeout(prevTimer);
+              const timer = setTimeout(() => {
+                sigHelpTimers.delete(update.view);
                 triggerSignatureHelp(filePath, update.view);
               }, 50);
+              sigHelpTimers.set(update.view, timer);
             }
           });
         }
       }
     }),
+    ViewPlugin.define((view) => ({
+      destroy() {
+        const timer = sigHelpTimers.get(view);
+        if (timer) {
+          clearTimeout(timer);
+          sigHelpTimers.delete(view);
+        }
+      },
+    })),
   ];
 }
 

@@ -1,7 +1,7 @@
 use tokio::process::Command;
 use std::sync::{LazyLock, RwLock};
 use std::time::Duration;
-use crate::types::{DockerContainerDto, DockerDaemonStatusDto, DockerImageDto};
+use crate::types::{DockerContainerDto, DockerDaemonStatusDto};
 
 static CUSTOM_DOCKER_CLI: LazyLock<RwLock<Option<String>>> = LazyLock::new(|| RwLock::new(None));
 static CUSTOM_DOCKER_SOCKET: LazyLock<RwLock<Option<String>>> = LazyLock::new(|| RwLock::new(None));
@@ -202,31 +202,6 @@ pub async fn list_containers(all: bool) -> Result<Vec<DockerContainerDto>, Strin
         }
     }
     Ok(containers)
-}
-
-pub async fn list_images() -> Result<Vec<DockerImageDto>, String> {
-    let mut cmd = create_docker_command();
-    let format = r#"{"id":{{json .ID}},"repository":{{json .Repository}},"tag":{{json .Tag}},"size":{{json .Size}},"created_since":{{json .CreatedSince}}}"#;
-    cmd.args(["images", "--format", format]);
-
-    let output = run_docker_output(cmd, "docker images").await?;
-    if !output.status.success() {
-        let err = String::from_utf8_lossy(&output.stderr);
-        return Err(format!("Docker error: {}", err));
-    }
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let mut images = Vec::new();
-    for line in stdout.lines() {
-        let trimmed = line.trim();
-        if trimmed.is_empty() {
-            continue;
-        }
-        if let Ok(dto) = serde_json::from_str::<DockerImageDto>(trimmed) {
-            images.push(dto);
-        }
-    }
-    Ok(images)
 }
 
 pub async fn run_container_action(action: &str, container_id: &str) -> Result<(), String> {

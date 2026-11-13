@@ -31,6 +31,7 @@ import {
 import { useModalStore } from '../../stores/modalStore';
 import { useNotificationStore } from '../../stores/notificationStore';
 import { useEditorStore } from '../../stores/editorStore';
+import { resolveProjectPath } from '../../utils/pathUtils';
 
 export interface CommitPanelProps {
   projectPath?: string;
@@ -1323,10 +1324,15 @@ export const CommitPanel: React.FC<CommitPanelProps> = ({
             onClick={async () => {
               if (confirm(`Delete ${contextMenu.filePath} from disk?`)) {
                 try {
-                  await invoke('delete_file', { path: contextMenu.filePath });
-                  fetchStatus();
+                  const targetPath = resolveProjectPath(contextMenu.filePath, projectPath);
+                  if (!targetPath) {
+                    addToast('Delete Failed', 'Project root path is unavailable', 'error');
+                  } else {
+                    await invoke('vfs_delete_path', { path: targetPath });
+                    fetchStatus();
+                  }
                 } catch (e) {
-                  console.warn(e);
+                  addToast('Delete Failed', String(e), 'error');
                 }
               }
               setContextMenu(null);

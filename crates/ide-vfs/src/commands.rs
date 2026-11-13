@@ -3,13 +3,11 @@ use std::path::Path;
 use std::sync::{LazyLock, Mutex};
 use std::time::Duration;
 use notify_debouncer_mini::{new_debouncer, DebouncedEvent, Debouncer};
-use ropey::Rope;
 use tauri::Emitter;
 
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
 
-pub static VFS_BUFFERS: LazyLock<Mutex<HashMap<String, Rope>>> = LazyLock::new(|| Mutex::new(HashMap::new()));
 pub static FS_DEBOUNCER: LazyLock<Mutex<Option<Debouncer<notify::RecommendedWatcher>>>> = LazyLock::new(|| Mutex::new(None));
 
 use ts_rs::TS;
@@ -107,23 +105,40 @@ pub fn sanitize_relative_path(rel: &str) -> Result<std::path::PathBuf, String> {
   Ok(path.to_path_buf())
 }
 
+fn strip_verbatim_prefix(p: &Path) -> std::borrow::Cow<'_, Path> {
+  let s = p.to_string_lossy();
+  if let Some(rest) = s.strip_prefix(r"\\?\UNC\").or_else(|| s.strip_prefix("//?/UNC/")) {
+    return std::borrow::Cow::Owned(std::path::PathBuf::from(format!(r"\\{}", rest)));
+  }
+  if let Some(rest) = s.strip_prefix(r"\\?\").or_else(|| s.strip_prefix("//?/")) {
+    return std::borrow::Cow::Owned(std::path::PathBuf::from(rest.to_string()));
+  }
+  std::borrow::Cow::Borrowed(p)
+}
+
 pub fn is_ignored_relative_path(root: &Path, path: &Path) -> bool {
-  let root_str = root.to_string_lossy().replace('\\', "/");
-  let root_clean = root_str.strip_prefix("//?/").or_else(|| root_str.strip_prefix(r"\\?\")).unwrap_or(&root_str);
-  let path_str = path.to_string_lossy().replace('\\', "/");
-  let path_clean = path_str.strip_prefix("//?/").or_else(|| path_str.strip_prefix(r"\\?\")).unwrap_or(&path_str);
+  let root_norm = strip_verbatim_prefix(root);
+  let path_norm = strip_verbatim_prefix(path);
 
-  let rel_str = if !root_clean.is_empty() && path_clean.to_lowercase().starts_with(&root_clean.to_lowercase()) {
-    let rem = &path_clean[root_clean.len()..];
-    rem.trim_start_matches('/')
-  } else {
-    match path.strip_prefix(root) {
-      Ok(p) => return check_components(p),
-      Err(_) => path_clean,
+  let root_comps: Vec<std::path::Component<'_>> = root_norm.components().collect();
+  let path_comps: Vec<std::path::Component<'_>> = path_norm.components().collect();
+
+  if !root_comps.is_empty() && path_comps.len() >= root_comps.len() {
+    let prefix_matches = root_comps.iter().zip(path_comps.iter()).all(|(rc, pc)| {
+      std::mem::discriminant(rc) == std::mem::discriminant(pc)
+        && rc.as_os_str().to_string_lossy().to_lowercase()
+          == pc.as_os_str().to_string_lossy().to_lowercase()
+    });
+    if prefix_matches {
+      let mut rel = std::path::PathBuf::new();
+      for comp in &path_comps[root_comps.len()..] {
+        rel.push(comp.as_os_str());
+      }
+      return check_components(&rel);
     }
-  };
+  }
 
-  check_components(Path::new(rel_str))
+  check_components(&path_norm)
 }
 
 fn check_components(rel: &Path) -> bool {
@@ -300,20 +315,11 @@ pub fn open_project_by_path(project_path: String) -> Result<FileNodeDto, String>
 
 #[tauri::command]
 pub fn read_file_content(path: String) -> Result<String, String> {
-  let content = std::fs::read_to_string(&path).map_err(|e| format!("Failed to read file: {}", e))?;
-  if let Ok(mut buffers) = VFS_BUFFERS.lock() {
-    buffers.insert(path, Rope::from_str(&content));
-  }
-  Ok(content)
+  std::fs::read_to_string(&path).map_err(|e| format!("Failed to read file: {}", e))
 }
 
 #[tauri::command]
 pub fn save_file_content(path: String, content: String) -> Result<(), String> {
-  {
-    let mut buffers = VFS_BUFFERS.lock().map_err(|e| e.to_string())?;
-    let rope = Rope::from_str(&content);
-    buffers.insert(path.clone(), rope);
-  }
   let p = std::path::Path::new(&path);
   if let Some(parent) = p.parent() {
     let _ = std::fs::create_dir_all(parent);
@@ -322,43 +328,13 @@ pub fn save_file_content(path: String, content: String) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub fn vfs_read_file(path: String) -> Result<String, String> {
-  read_file_content(path)
-}
-
-#[tauri::command]
 pub fn vfs_write_file(path: String, content: String) -> Result<(), String> {
-  save_file_content(path, content)
-}
-
-#[tauri::command]
-pub fn write_file_content(path: String, content: String) -> Result<(), String> {
   save_file_content(path, content)
 }
 
 #[tauri::command]
 pub fn file_exists(path: String) -> bool {
   std::path::Path::new(&path).is_file()
-}
-
-#[tauri::command]
-pub fn vfs_get_line_count(path: String) -> Result<usize, String> {
-  {
-    let buffers = VFS_BUFFERS.lock().map_err(|e| e.to_string())?;
-    if let Some(rope) = buffers.get(&path) {
-      return Ok(rope.len_lines());
-    }
-  }
-  if let Ok(content) = std::fs::read_to_string(&path) {
-    let rope = Rope::from_str(&content);
-    let count = rope.len_lines();
-    if let Ok(mut buffers) = VFS_BUFFERS.lock() {
-      buffers.insert(path, rope);
-    }
-    Ok(count)
-  } else {
-    Err(format!("File not found in VFS: {}", path))
-  }
 }
 
 #[tauri::command]
@@ -630,6 +606,10 @@ pub fn read_settings_from_zip_or_folder(source_path: String) -> Result<HashMap<S
       }
     }
   } else if path.is_dir() {
+    const MAX_ENTRY_BYTES: u64 = 10 * 1024 * 1024; // 10 MiB
+    const MAX_TOTAL_BYTES: usize = 50 * 1024 * 1024; // 50 MiB
+    let mut total_bytes = 0usize;
+
     let folder_name = path.file_name().unwrap_or_default().to_string_lossy().to_lowercase();
     let is_direct_options = folder_name == "options";
 
@@ -640,11 +620,23 @@ pub fn read_settings_from_zip_or_folder(source_path: String) -> Result<HashMap<S
         let mut rel_str = rel.to_string_lossy().replace('\\', "/");
 
         if rel_str.ends_with(".xml") || rel_str == "IntelliJ IDEA Global Settings" || rel_str.ends_with(".json") {
+          if let Ok(meta) = entry.metadata() {
+            if meta.len() > MAX_ENTRY_BYTES {
+              return Err(format!("Settings entry '{}' exceeds 10 MiB limit", rel_str));
+            }
+          }
           // If user picked "options" directory directly, ensure paths start with options/
           if is_direct_options && !rel_str.starts_with("options/") {
             rel_str = format!("options/{}", rel_str);
           }
           if let Ok(content) = std::fs::read_to_string(entry_path) {
+            if content.len() as u64 > MAX_ENTRY_BYTES {
+              return Err(format!("Settings entry '{}' exceeds 10 MiB limit", rel_str));
+            }
+            total_bytes += content.len();
+            if total_bytes > MAX_TOTAL_BYTES {
+              return Err("Settings directory exceeds 50 MiB uncompressed limit".to_string());
+            }
             result_map.insert(rel_str, content);
           }
         }
@@ -709,15 +701,6 @@ fn is_subpath(parent: &Path, child: &Path) -> bool {
   }
 }
 
-fn is_same_or_child_path(prefix: &str, target: &str) -> bool {
-  let p_norm = prefix.replace('\\', "/").trim_end_matches('/').to_lowercase();
-  let t_norm = target.replace('\\', "/").to_lowercase();
-  if t_norm == p_norm {
-    return true;
-  }
-  t_norm.starts_with(&format!("{}/", p_norm))
-}
-
 fn copy_dir_all(src: &Path, dst: &Path) -> std::io::Result<()> {
   std::fs::create_dir_all(dst)?;
   for entry in std::fs::read_dir(src)? {
@@ -780,22 +763,22 @@ pub fn vfs_move_path(source_path: String, dest_path: String) -> Result<(), Strin
       std::fs::remove_file(src).map_err(|e| format!("Failed to remove source file: {}", e))?;
     }
   }
-  if let Ok(mut buffers) = VFS_BUFFERS.lock() {
-    buffers.retain(|k, _| !is_same_or_child_path(&source_path, k));
-  }
   Ok(())
 }
 
 #[tauri::command]
 pub fn vfs_delete_path(path: String) -> Result<(), String> {
   let p = Path::new(&path);
-  if !p.exists() {
-    return Ok(());
-  }
-  if let Ok(mut buffers) = VFS_BUFFERS.lock() {
-    buffers.retain(|k, _| !is_same_or_child_path(&path, k));
-  }
-  if p.is_dir() {
+  let meta = match p.symlink_metadata() {
+    Ok(m) => m,
+    Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+    Err(e) => return Err(format!("Failed to inspect path '{}': {}", path, e)),
+  };
+  if meta.file_type().is_symlink() {
+    std::fs::remove_file(p)
+      .or_else(|_| std::fs::remove_dir(p))
+      .map_err(|e| format!("Failed to delete symlink: {}", e))?;
+  } else if meta.is_dir() {
     std::fs::remove_dir_all(p).map_err(|e| format!("Failed to delete directory: {}", e))?;
   } else {
     std::fs::remove_file(p).map_err(|e| format!("Failed to delete file: {}", e))?;
@@ -845,14 +828,6 @@ mod tests {
     let verbatim_root = Path::new(r"\\?\D:\build\app");
     let verbatim_file = Path::new(r"\\?\D:\build\app\src\lib.rs");
     assert!(!is_ignored_relative_path(verbatim_root, verbatim_file));
-  }
-
-  #[test]
-  fn test_is_same_or_child_path() {
-    assert!(is_same_or_child_path("D:/project/src/main", "D:/project/src/main"));
-    assert!(is_same_or_child_path("D:/project/src/main", "D:/project/src/main/foo.rs"));
-    assert!(!is_same_or_child_path("D:/project/src/main", "D:/project/src/main.rs"));
-    assert!(!is_same_or_child_path("D:/project/src/main", "D:/project/src/main_test.go"));
   }
 
   struct TempTestDir(std::path::PathBuf);
@@ -1016,6 +991,61 @@ mod tests {
     let d1_f = &d0_f.children.as_ref().unwrap()[0];
     let d2_f = &d1_f.children.as_ref().unwrap()[0];
     assert_eq!(d2_f.children.as_ref().unwrap()[0].name, "leaf.txt");
+  }
+
+  #[test]
+  fn test_unicode_ignored_paths_and_dangling_symlink_delete() {
+    let root = Path::new("D:/app.git");
+    // Root path `.git` lookalike must NOT ignore files underneath it
+    assert!(!is_ignored_relative_path(root, Path::new("D:/app.git/src/İndex.rs")));
+    assert!(!is_ignored_relative_path(root, Path::new("D:/app.git/Kelvin/TargetFile.rs")));
+    assert!(is_ignored_relative_path(root, Path::new("D:/app.git/target/out.bin")));
+
+    // Unicode case-folding (byte-length expansion `'İ'` -> `"i\u{0307}"`, contraction `'K'` -> `"k"`) inside `root` itself
+    let unicode_root = Path::new("D:/İndex/Kelvin.git");
+    assert!(!is_ignored_relative_path(
+      unicode_root,
+      Path::new("D:/i\u{0307}ndex/kelvin.git/src/main.rs")
+    ));
+    assert!(is_ignored_relative_path(
+      unicode_root,
+      Path::new("D:/i\u{0307}ndex/kelvin.git/target/out.bin")
+    ));
+
+    // Dangling symlink / junction deletion must NOT silently skip on Windows without Developer Mode
+    let dir = TempTestDir::new("vfs_dangling_symlink");
+    let link_path = dir.0.join("dangling_link");
+    #[cfg(unix)]
+    {
+      let missing_target = dir.0.join("missing.txt");
+      std::os::unix::fs::symlink(&missing_target, &link_path).expect("create unix dangling symlink");
+    }
+    #[cfg(windows)]
+    {
+      let missing_target = dir.0.join("missing.txt");
+      if std::os::windows::fs::symlink_file(&missing_target, &link_path).is_err() {
+        // Non-elevated Windows falls back to an NTFS junction whose target directory is removed
+        let temp_target = dir.0.join("junction_target");
+        std::fs::create_dir_all(&temp_target).unwrap();
+        let status = std::process::Command::new("cmd")
+          .args([
+            "/C",
+            "mklink",
+            "/J",
+            &link_path.to_string_lossy(),
+            &temp_target.to_string_lossy(),
+          ])
+          .status()
+          .expect("run mklink /J");
+        assert!(status.success(), "mklink /J must succeed without elevation");
+        std::fs::remove_dir(&temp_target).unwrap();
+      }
+    }
+
+    let meta = link_path.symlink_metadata().expect("dangling link exists before delete");
+    assert!(meta.file_type().is_symlink(), "link must be detected as a symlink/reparse point");
+    vfs_delete_path(link_path.to_string_lossy().to_string()).expect("vfs_delete_path deletes dangling link");
+    assert!(link_path.symlink_metadata().is_err(), "dangling link must be gone after delete");
   }
 }
 

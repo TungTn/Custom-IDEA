@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::io::{BufRead, BufReader};
+use std::io::BufReader;
 use std::process::{Child, Command, Stdio};
 use std::sync::{LazyLock, Mutex};
 use std::time::Duration;
@@ -155,10 +155,19 @@ fn resolve_windows_command_on_path(cmd_name: &str) -> Option<String> {
   None
 }
 
+fn parse_jdk_version_tuple(version: &str) -> Vec<u32> {
+  version
+    .split(|c: char| !c.is_ascii_digit())
+    .filter(|part| !part.is_empty())
+    .filter_map(|part| part.parse::<u32>().ok())
+    .collect()
+}
+
 fn resolve_executable_path(command: &str, work_dir: &str) -> String {
   let expanded = expand_home_path(command);
-  let clean = if (expanded.starts_with('"') && expanded.ends_with('"'))
-    || (expanded.starts_with('\'') && expanded.ends_with('\''))
+  let clean = if expanded.len() >= 2
+    && ((expanded.starts_with('"') && expanded.ends_with('"'))
+      || (expanded.starts_with('\'') && expanded.ends_with('\'')))
   {
     &expanded[1..expanded.len() - 1]
   } else {
@@ -281,9 +290,9 @@ fn ensure_valid_jvm_environment(
       }
     }
     if !current_jh_valid {
-      // Fallback: detect working JDKs and prefer latest (e.g. 25 over 11)
+      // Fallback: detect working JDKs and prefer latest numerically (e.g. 25 over 8/11)
       let mut detected = detect_installed_jdks();
-      detected.sort_by(|a, b| b.version.cmp(&a.version));
+      detected.sort_by(|a, b| parse_jdk_version_tuple(&b.version).cmp(&parse_jdk_version_tuple(&a.version)));
       if let Some(chosen) = detected.first() {
         let clean_path = if chosen.path.starts_with(r"\\?\") {
           chosen.path[4..].to_string()
@@ -291,9 +300,20 @@ fn ensure_valid_jvm_environment(
           chosen.path.clone()
         };
         cmd.env("JAVA_HOME", &clean_path);
-        if let Ok(path_var) = std::env::var("PATH") {
-          let bin_path = std::path::PathBuf::from(&clean_path).join("bin");
-          cmd.env("PATH", format!("{};{}", bin_path.to_string_lossy(), path_var));
+        let bin_path = std::path::PathBuf::from(&clean_path).join("bin");
+        let base_path = env_vars
+          .and_then(|e| {
+            e.iter()
+              .find(|(k, _)| k.eq_ignore_ascii_case("PATH"))
+              .map(|(_, v)| std::ffi::OsString::from(v))
+          })
+          .or_else(|| std::env::var_os("PATH"));
+        let mut paths = vec![bin_path];
+        if let Some(ref existing) = base_path {
+          paths.extend(std::env::split_paths(existing));
+        }
+        if let Ok(joined) = std::env::join_paths(paths) {
+          cmd.env("PATH", joined);
         }
       }
     }
@@ -356,6 +376,60 @@ pub fn execute_build_command(
   })
 }
 
+const MAX_PROCESS_OUTPUT_LINE_BYTES: usize = 256 * 1024;
+
+fn spawn_process_output_reader<R: std::io::Read + Send + 'static>(
+  app: tauri::AppHandle,
+  run_id: String,
+  stream_name: &'static str,
+  pipe: R,
+) {
+  std::thread::spawn(move || {
+    let mut reader = BufReader::new(pipe);
+    let mut buf: Vec<u8> = Vec::with_capacity(4096);
+    let mut batch: Vec<String> = Vec::with_capacity(32);
+    let mut last_emit = std::time::Instant::now();
+
+    loop {
+      buf.clear();
+      match std::io::BufRead::read_until(&mut reader, b'\n', &mut buf) {
+        Ok(0) => break,
+        Ok(_) => {
+          if buf.len() > MAX_PROCESS_OUTPUT_LINE_BYTES {
+            buf.truncate(MAX_PROCESS_OUTPUT_LINE_BYTES);
+          }
+          while matches!(buf.last(), Some(b'\n' | b'\r')) {
+            buf.pop();
+          }
+          let line = String::from_utf8_lossy(&buf).into_owned();
+          batch.push(line);
+          if batch.len() >= 25 || last_emit.elapsed().as_millis() >= 40 {
+            let combined = batch.join("\n");
+            let _ = app.emit("process-output", ProcessOutputPayload {
+              run_id: run_id.clone(),
+              text: combined,
+              stream: stream_name.into(),
+              lines: Some(std::mem::take(&mut batch)),
+            });
+            last_emit = std::time::Instant::now();
+          }
+        }
+        Err(_) => break,
+      }
+    }
+
+    if !batch.is_empty() {
+      let combined = batch.join("\n");
+      let _ = app.emit("process-output", ProcessOutputPayload {
+        run_id,
+        text: combined,
+        stream: stream_name.into(),
+        lines: Some(batch),
+      });
+    }
+  });
+}
+
 #[tauri::command]
 pub fn start_process(
   app: tauri::AppHandle,
@@ -376,79 +450,21 @@ pub fn start_process(
   let stdout = child.stdout.take();
   let stderr = child.stderr.take();
 
-  {
+  let replaced = {
     let mut map = RUNNING_PROCESSES.lock().map_err(|e| e.to_string())?;
-    map.insert(run_id.clone(), child);
+    map.insert(run_id.clone(), child)
+  };
+  if let Some(mut old_child) = replaced {
+    let _ = old_child.kill();
+    let _ = old_child.wait();
   }
 
-  // Stream stdout with 40ms / 25-line batching to prevent IPC saturation
+  // Stream stdout & stderr with 40ms / 25-line batching to prevent IPC saturation
   if let Some(out) = stdout {
-    let app_clone = app.clone();
-    let r_id = run_id.clone();
-    std::thread::spawn(move || {
-      let reader = BufReader::new(out);
-      let mut batch: Vec<String> = Vec::with_capacity(32);
-      let mut last_emit = std::time::Instant::now();
-      for line in reader.lines() {
-        if let Ok(l) = line {
-          batch.push(l);
-          if batch.len() >= 25 || last_emit.elapsed().as_millis() >= 40 {
-            let combined = batch.join("\n");
-            let _ = app_clone.emit("process-output", ProcessOutputPayload {
-              run_id: r_id.clone(),
-              text: combined,
-              stream: "stdout".into(),
-              lines: Some(std::mem::take(&mut batch)),
-            });
-            last_emit = std::time::Instant::now();
-          }
-        }
-      }
-      if !batch.is_empty() {
-        let combined = batch.join("\n");
-        let _ = app_clone.emit("process-output", ProcessOutputPayload {
-          run_id: r_id.clone(),
-          text: combined,
-          stream: "stdout".into(),
-          lines: Some(batch),
-        });
-      }
-    });
+    spawn_process_output_reader(app.clone(), run_id.clone(), "stdout", out);
   }
-
-  // Stream stderr with 40ms / 25-line batching to prevent IPC saturation
   if let Some(err) = stderr {
-    let app_clone = app.clone();
-    let r_id = run_id.clone();
-    std::thread::spawn(move || {
-      let reader = BufReader::new(err);
-      let mut batch: Vec<String> = Vec::with_capacity(32);
-      let mut last_emit = std::time::Instant::now();
-      for line in reader.lines() {
-        if let Ok(l) = line {
-          batch.push(l);
-          if batch.len() >= 25 || last_emit.elapsed().as_millis() >= 40 {
-            let combined = batch.join("\n");
-            let _ = app_clone.emit("process-output", ProcessOutputPayload {
-              run_id: r_id.clone(),
-              text: combined,
-              stream: "stderr".into(),
-              lines: Some(std::mem::take(&mut batch)),
-            });
-            last_emit = std::time::Instant::now();
-          }
-        }
-      }
-      if !batch.is_empty() {
-        let combined = batch.join("\n");
-        let _ = app_clone.emit("process-output", ProcessOutputPayload {
-          run_id: r_id.clone(),
-          text: combined,
-          stream: "stderr".into(),
-          lines: Some(batch),
-        });
-      }
-    });
+    spawn_process_output_reader(app.clone(), run_id.clone(), "stderr", err);
   }
 
   // Background monitor for completion
@@ -636,6 +652,7 @@ pub fn detect_installed_jdks() -> Vec<JdkItemDto> {
     }
   }
 
+  jdks.sort_by(|a, b| parse_jdk_version_tuple(&b.version).cmp(&parse_jdk_version_tuple(&a.version)));
   jdks
 }
 
@@ -688,7 +705,7 @@ pub fn create_downloaded_jdk_placeholder(target_dir: String, vendor: String, ver
   let dir = std::path::PathBuf::from(&target_dir);
   std::fs::create_dir_all(dir.join("bin")).map_err(|e| format!("Failed to create JDK folder: {}", e))?;
   
-  let release_content = format!("IMPLEMENTOR=\"{}\";\nJAVA_VERSION=\"{}\";\nJAVA_RUNTIME_VERSION=\"{}+0\";\nLIBC=\"default\";\n", vendor, version, version);
+  let release_content = format!("IMPLEMENTOR=\"{}\"\nJAVA_VERSION=\"{}\"\nJAVA_RUNTIME_VERSION=\"{}+0\"\nLIBC=\"default\"\n", vendor, version, version);
 
   std::fs::write(dir.join("release"), release_content).map_err(|e| format!("Failed to write release: {}", e))?;
 
@@ -731,9 +748,6 @@ pub async fn download_real_jdk(
     std::path::PathBuf::from(&target_dir)
   };
 
-  std::fs::create_dir_all(&resolved_target)
-    .map_err(|e| format!("Failed to create destination folder: {}", e))?;
-
   // Resolve official vendor binary URL
   let v_slug = vendor_slug.to_lowercase();
   let download_url = if v_slug.contains("corretto") {
@@ -765,6 +779,13 @@ pub async fn download_real_jdk(
     return Err(format!("JDK download returned HTTP error: {}", res.status()));
   }
 
+  const MAX_JDK_DOWNLOAD_BYTES: u64 = 512 * 1024 * 1024;
+  if let Some(len) = res.content_length() {
+    if len > MAX_JDK_DOWNLOAD_BYTES {
+      return Err(format!("JDK archive exceeded {} MiB download limit", MAX_JDK_DOWNLOAD_BYTES / (1024 * 1024)));
+    }
+  }
+
   struct TempFileGuard(std::path::PathBuf);
   impl Drop for TempFileGuard {
     fn drop(&mut self) {
@@ -775,16 +796,34 @@ pub async fn download_real_jdk(
   let total_size = res.content_length().unwrap_or(180 * 1024 * 1024);
   let temp_zip = resolved_target.join("download_temp.zip");
   let _zip_cleanup = TempFileGuard(temp_zip.clone());
-  let mut file = std::fs::File::create(&temp_zip)
-    .map_err(|e| format!("Failed to create temp archive file: {}", e))?;
+
+  let dir_for_create = resolved_target.clone();
+  let zip_for_create = temp_zip.clone();
+  let mut writer = tauri::async_runtime::spawn_blocking(move || -> Result<std::io::BufWriter<std::fs::File>, String> {
+    std::fs::create_dir_all(&dir_for_create)
+      .map_err(|e| format!("Failed to create destination folder: {}", e))?;
+    let file = std::fs::File::create(&zip_for_create)
+      .map_err(|e| format!("Failed to create temp archive file: {}", e))?;
+    Ok(std::io::BufWriter::new(file))
+  })
+  .await
+  .map_err(|e| format!("JDK file creation task panicked: {}", e))??;
 
   let mut downloaded: u64 = 0;
   let mut last_emit = std::time::Instant::now();
 
   while let Some(chunk) = res.chunk().await.map_err(|e| format!("Error downloading chunk: {}", e))? {
-    std::io::Write::write_all(&mut file, &chunk)
-      .map_err(|e| format!("Error writing chunk to disk: {}", e))?;
-    downloaded += chunk.len() as u64;
+    downloaded = downloaded.saturating_add(chunk.len() as u64);
+    if downloaded > MAX_JDK_DOWNLOAD_BYTES {
+      return Err(format!("JDK archive exceeded {} MiB download limit", MAX_JDK_DOWNLOAD_BYTES / (1024 * 1024)));
+    }
+    writer = tauri::async_runtime::spawn_blocking(move || -> Result<std::io::BufWriter<std::fs::File>, String> {
+      std::io::Write::write_all(&mut writer, &chunk)
+        .map_err(|e| format!("Error writing chunk to disk: {}", e))?;
+      Ok(writer)
+    })
+    .await
+    .map_err(|e| format!("JDK write task panicked: {}", e))??;
 
     if last_emit.elapsed().as_millis() > 150 || downloaded == total_size {
       let pct = ((downloaded as f64 / total_size as f64) * 80.0) as f32 + 5.0;
@@ -798,7 +837,12 @@ pub async fn download_real_jdk(
     }
   }
 
-  drop(file);
+  tauri::async_runtime::spawn_blocking(move || -> Result<(), String> {
+    std::io::Write::flush(&mut writer)
+      .map_err(|e| format!("Error flushing JDK archive to disk: {}", e))
+  })
+  .await
+  .map_err(|e| format!("JDK flush task panicked: {}", e))??;
 
   let _ = app.emit("jdk_download_progress", JdkDownloadProgressEvent {
     percent: 88.0,
@@ -807,51 +851,82 @@ pub async fn download_real_jdk(
     total_bytes: total_size,
   });
 
-  // Extract Zip archive
-  let zip_file = std::fs::File::open(&temp_zip)
-    .map_err(|e| format!("Failed to open downloaded archive: {}", e))?;
-  let mut archive = zip::ZipArchive::new(zip_file)
-    .map_err(|e| format!("Failed to read zip archive: {}", e))?;
+  // Extract Zip archive on a blocking thread with decompression bomb caps
+  let temp_zip_for_extract = temp_zip.clone();
+  let resolved_target_for_extract = resolved_target.clone();
+  let extracted_str = tauri::async_runtime::spawn_blocking(move || -> Result<String, String> {
+    const MAX_JDK_ENTRY_BYTES: u64 = 512 * 1024 * 1024; // 512 MiB per file
+    const MAX_JDK_TOTAL_BYTES: u64 = 1536 * 1024 * 1024; // 1.5 GiB total
 
-  for i in 0..archive.len() {
-    let mut item = archive.by_index(i).map_err(|e| e.to_string())?;
-    let enclosed = match item.enclosed_name() {
-      Some(p) => p.to_owned(),
-      None => continue,
-    };
-    let outpath = resolved_target.join(enclosed);
-    if item.is_dir() {
-      let _ = std::fs::create_dir_all(&outpath);
-    } else {
-      if let Some(p) = outpath.parent() {
-        let _ = std::fs::create_dir_all(p);
-      }
-      let mut outfile = std::fs::File::create(&outpath).map_err(|e| e.to_string())?;
-      std::io::copy(&mut item, &mut outfile).map_err(|e| e.to_string())?;
-    }
-  }
+    let zip_file = std::fs::File::open(&temp_zip_for_extract)
+      .map_err(|e| format!("Failed to open downloaded archive: {}", e))?;
+    let mut archive = zip::ZipArchive::new(zip_file)
+      .map_err(|e| format!("Failed to read zip archive: {}", e))?;
 
-  // Remove temp zip
-  let _ = std::fs::remove_file(&temp_zip);
-
-  // If contents were extracted into a single root subfolder (e.g., jdk-21.0.3+9), flatten
-  if !resolved_target.join("bin").exists() {
-    if let Ok(entries) = std::fs::read_dir(&resolved_target) {
-      for entry in entries.flatten() {
-        if entry.path().is_dir() && entry.path().join("bin").exists() {
-          let sub_dir = entry.path();
-          if let Ok(sub_entries) = std::fs::read_dir(&sub_dir) {
-            for sub_e in sub_entries.flatten() {
-              let dest = resolved_target.join(sub_e.file_name());
-              let _ = std::fs::rename(sub_e.path(), dest);
-            }
-          }
-          let _ = std::fs::remove_dir_all(sub_dir);
-          break;
+    let mut total_extracted: u64 = 0;
+    for i in 0..archive.len() {
+      let mut item = archive.by_index(i).map_err(|e| e.to_string())?;
+      let enclosed = match item.enclosed_name() {
+        Some(p) => p.to_owned(),
+        None => continue,
+      };
+      let outpath = resolved_target_for_extract.join(enclosed);
+      if item.is_dir() {
+        let _ = std::fs::create_dir_all(&outpath);
+      } else {
+        if let Some(p) = outpath.parent() {
+          let _ = std::fs::create_dir_all(p);
+        }
+        let mut outfile = std::fs::File::create(&outpath).map_err(|e| e.to_string())?;
+        let mut limited = std::io::Read::take(&mut item, MAX_JDK_ENTRY_BYTES + 1);
+        let copied = std::io::copy(&mut limited, &mut outfile).map_err(|e| e.to_string())?;
+        if copied > MAX_JDK_ENTRY_BYTES {
+          return Err(format!(
+            "JDK archive entry '{}' exceeds {} MiB safety limit",
+            outpath.display(),
+            MAX_JDK_ENTRY_BYTES / (1024 * 1024)
+          ));
+        }
+        total_extracted = total_extracted.saturating_add(copied);
+        if total_extracted > MAX_JDK_TOTAL_BYTES {
+          return Err(format!(
+            "JDK archive extracted size exceeds {} MiB safety limit",
+            MAX_JDK_TOTAL_BYTES / (1024 * 1024)
+          ));
         }
       }
     }
-  }
+
+    // Remove temp zip
+    let _ = std::fs::remove_file(&temp_zip_for_extract);
+
+    // If contents were extracted into a single root subfolder (e.g., jdk-21.0.3+9), flatten
+    if !resolved_target_for_extract.join("bin").exists() {
+      if let Ok(entries) = std::fs::read_dir(&resolved_target_for_extract) {
+        for entry in entries.flatten() {
+          if entry.path().is_dir() && entry.path().join("bin").exists() {
+            let sub_dir = entry.path();
+            let sub_entries = std::fs::read_dir(&sub_dir)
+              .map_err(|e| format!("Failed to read extracted JDK folder '{}': {}", sub_dir.display(), e))?;
+            for sub_e in sub_entries {
+              let sub_e = sub_e.map_err(|e| format!("Failed to enumerate extracted JDK entry: {}", e))?;
+              let dest = resolved_target_for_extract.join(sub_e.file_name());
+              std::fs::rename(sub_e.path(), &dest).map_err(|e| {
+                format!("Failed to move JDK entry '{}' to '{}': {}", sub_e.path().display(), dest.display(), e)
+              })?;
+            }
+            std::fs::remove_dir_all(&sub_dir)
+              .map_err(|e| format!("Failed to clean up extracted JDK subfolder '{}': {}", sub_dir.display(), e))?;
+            break;
+          }
+        }
+      }
+    }
+
+    Ok(resolved_target_for_extract.to_string_lossy().to_string())
+  })
+  .await
+  .map_err(|e| format!("JDK extraction task panicked: {}", e))??;
 
   let _ = app.emit("jdk_download_progress", JdkDownloadProgressEvent {
     percent: 100.0,
@@ -860,8 +935,7 @@ pub async fn download_real_jdk(
     total_bytes: total_size,
   });
 
-  let target_str = resolved_target.to_string_lossy().to_string();
-  validate_and_parse_jdk(target_str)
+  validate_and_parse_jdk(extracted_str)
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, TS)]
@@ -1088,7 +1162,11 @@ pub fn test_remote_ssh_connection(host: String, port: Option<u16>) -> Result<Con
     return Err("Host address cannot be empty.".to_string());
   }
 
-  let address_str = format!("{}:{}", clean_host, target_port);
+  let address_str = if clean_host.contains(':') && !clean_host.starts_with('[') {
+    format!("[{}]:{}", clean_host, target_port)
+  } else {
+    format!("{}:{}", clean_host, target_port)
+  };
   let start = std::time::Instant::now();
 
   use std::net::ToSocketAddrs;
@@ -1115,28 +1193,34 @@ pub fn test_remote_ssh_connection(host: String, port: Option<u16>) -> Result<Con
     });
   }
 
-  // Attempt TCP connect with 4 seconds timeout
-  match std::net::TcpStream::connect_timeout(&addrs[0], Duration::from_secs(4)) {
-    Ok(_) => {
-      let latency = start.elapsed().as_millis() as u64;
-      Ok(ConnectionTestResultDto {
-        success: true,
-        host: clean_host.to_string(),
-        port: target_port,
-        latency_ms: Some(latency),
-        message: format!("TCP handshake successful with {}:{} in {}ms.", clean_host, target_port, latency),
-      })
-    }
-    Err(e) => {
-      Ok(ConnectionTestResultDto {
-        success: false,
-        host: clean_host.to_string(),
-        port: target_port,
-        latency_ms: None,
-        message: format!("Connection refused or timed out on {}:{}: {}", clean_host, target_port, e),
-      })
+  // Attempt TCP connect across resolved addresses (handles AAAA/A fallback cleanly)
+  let mut last_err: Option<std::io::Error> = None;
+  for addr in &addrs {
+    match std::net::TcpStream::connect_timeout(addr, Duration::from_secs(4)) {
+      Ok(_) => {
+        let latency = start.elapsed().as_millis() as u64;
+        return Ok(ConnectionTestResultDto {
+          success: true,
+          host: clean_host.to_string(),
+          port: target_port,
+          latency_ms: Some(latency),
+          message: format!("TCP handshake successful with {}:{} in {}ms.", clean_host, target_port, latency),
+        });
+      }
+      Err(e) => {
+        last_err = Some(e);
+      }
     }
   }
+
+  let err_msg = last_err.map(|e| e.to_string()).unwrap_or_else(|| "Unknown connection error".to_string());
+  Ok(ConnectionTestResultDto {
+    success: false,
+    host: clean_host.to_string(),
+    port: target_port,
+    latency_ms: None,
+    message: format!("Connection refused or timed out on {}:{}: {}", clean_host, target_port, err_msg),
+  })
 }
 
 #[tauri::command]
@@ -1307,6 +1391,18 @@ mod tests {
     assert!(fetch_github_issues("../../etc/passwd".to_string(), None).await.is_err());
     assert!(fetch_github_issues("a/b/c".to_string(), None).await.is_err());
     assert!(fetch_github_issues("".to_string(), None).await.is_err());
+  }
+
+  #[test]
+  fn test_resolve_executable_single_quote_and_jdk_numeric_sort() {
+    // Single-quote string must not panic in slicing
+    assert_eq!(resolve_executable_path("\"", "."), "\"");
+    assert_eq!(resolve_executable_path("'", "."), "'");
+
+    // Numeric JDK version tuple comparison beats lexicographical ("8" > "21")
+    let mut versions = vec!["1.8.0_402", "21.0.2", "17.0.10", "9.0.4"];
+    versions.sort_by(|a, b| parse_jdk_version_tuple(b).cmp(&parse_jdk_version_tuple(a)));
+    assert_eq!(versions, vec!["21.0.2", "17.0.10", "9.0.4", "1.8.0_402"]);
   }
 }
 

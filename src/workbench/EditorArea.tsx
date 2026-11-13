@@ -127,8 +127,6 @@ export interface EditorAreaProps {
   onShowBookmarksModal?: () => void;
 }
 
-export type CodeEditorProps = EditorAreaProps;
-
 export const getTabIcon = (fileName: string, tab?: OpenTab) => {
   if (tab?.tabType === 'diff') {
     return <GitCommit size={13} className="text-[#3574F0] flex-shrink-0" />;
@@ -1332,8 +1330,13 @@ export const EditorArea = forwardRef<EditorAreaHandle, EditorAreaProps>(
                 <div
                   onClick={() => {
                     if (typeof window !== 'undefined' && ('__TAURI_INTERNALS__' in window || '__TAURI__' in window)) {
-                      invoke('open_new_window', { path: targetTab.path }).catch(() => {
-                        onShowToast?.('New Window', `Opened ${targetTab.title} in new window`, 'info');
+                      const resolvedProjName =
+                        (projectPath || '').split(/[\\/]/).filter(Boolean).pop() || targetTab.title;
+                      invoke('open_in_new_window', {
+                        projectName: resolvedProjName,
+                        projectPath: projectPath || null,
+                      }).catch((err) => {
+                        onShowToast?.('New Window Failed', String(err), 'error');
                       });
                     } else {
                       onShowToast?.('New Window', `Opened ${targetTab.title} in new window`, 'info');

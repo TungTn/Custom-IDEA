@@ -150,3 +150,67 @@ async fn test_db_get_table_data_with_quoted_table_name() {
     let _ = db_close_pool(db_url).await;
     test_res.expect("quoted table query test failed");
 }
+
+#[test]
+fn test_normalize_connection_url_and_sql_classification() {
+    assert_eq!(
+        normalize_connection_url("D:\\IDE\\data\\app.sqlite?cache=shared"),
+        "sqlite://D:/IDE/data/app.sqlite?cache=shared&mode=rwc"
+    );
+    assert_eq!(
+        normalize_connection_url("sqlite://D:/data/app.db?cache=shared&mode=ro"),
+        "sqlite://D:/data/app.db?cache=shared&mode=ro"
+    );
+    assert_eq!(
+        normalize_connection_url("sqlite:///D:/data/app.sqlite"),
+        "sqlite:///D:/data/app.sqlite?mode=rwc"
+    );
+
+    assert!(sql_returns_rows("(SELECT 1) UNION (SELECT 2)"));
+    assert!(sql_returns_rows("INSERT INTO users (name) VALUES ('a') RETURNING *"));
+    assert!(sql_returns_rows("WITH d AS (DELETE FROM users WHERE id = 1 RETURNING *) SELECT * FROM d"));
+    assert!(!sql_returns_rows("WITH c AS (SELECT 1) DELETE FROM users WHERE id IN (SELECT 1 FROM c)"));
+    assert!(sql_returns_rows("WITH d AS (SELECT 1) DELETE FROM users WHERE id = 1 RETURNING id"));
+}
+
+#[tokio::test]
+async fn test_db_get_table_data_rejects_sqli_in_where_and_order_by() {
+    let err_where = db_get_table_data(
+        "sqlite::memory:".to_string(),
+        Some("main".into()),
+        "users".to_string(),
+        Some(10),
+        Some(0),
+        Some("1=1; DROP TABLE users--".to_string()),
+        None,
+    )
+    .await
+    .unwrap_err();
+    assert!(!err_where.is_empty());
+
+    let err_subquery = db_get_table_data(
+        "sqlite::memory:".to_string(),
+        Some("main".into()),
+        "users".to_string(),
+        Some(10),
+        Some(0),
+        Some("id = (SELECT 1)".to_string()),
+        None,
+    )
+    .await
+    .unwrap_err();
+    assert!(!err_subquery.is_empty());
+
+    let err_order = db_get_table_data(
+        "sqlite::memory:".to_string(),
+        Some("main".into()),
+        "users".to_string(),
+        Some(10),
+        Some(0),
+        None,
+        Some("id DESC; DROP TABLE users".to_string()),
+    )
+    .await
+    .unwrap_err();
+    assert!(!err_order.is_empty());
+}

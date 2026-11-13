@@ -15,16 +15,6 @@ pub struct DockerContainerDto {
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[ts(export)]
-pub struct DockerImageDto {
-    pub id: String,
-    pub repository: String,
-    pub tag: String,
-    pub size: String,
-    pub created_since: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
-#[ts(export)]
 pub struct DockerDaemonStatusDto {
     pub is_available: bool,
     pub version: Option<String>,

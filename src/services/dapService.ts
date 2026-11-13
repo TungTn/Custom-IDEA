@@ -29,13 +29,6 @@ export interface DapStackFrame {
   };
 }
 
-export interface DapVariable {
-  name: string;
-  value: string;
-  type?: string;
-  variablesReference?: number;
-}
-
 class DapService {
   private activeSessionId: string | null = null;
   private stoppedListeners = new Set<(event: DapStoppedEvent) => void>();
@@ -57,8 +50,10 @@ class DapService {
           l(e.payload);
         }
       });
-      const u2 = await listen('dap-terminated', () => {
-        this.activeSessionId = null;
+      const u2 = await listen<{ session_id?: string }>('dap-terminated', (e) => {
+        if (!e.payload?.session_id || e.payload.session_id === this.activeSessionId) {
+          this.activeSessionId = null;
+        }
         for (const l of this.terminatedListeners) {
           l();
         }
@@ -93,8 +88,11 @@ class DapService {
     program: string,
     args: string[] = [],
     cwd?: string,
-    debugType: string = 'node'
+    debugType: string = 'python'
   ): Promise<string> {
+    if (this.activeSessionId) {
+      await this.stop().catch(() => {});
+    }
     const sessionId = `dap-${Date.now()}`;
     await invoke<string>('dap_start_session', {
       sessionId,
@@ -108,7 +106,7 @@ class DapService {
   }
 
   public async setBreakpoints(filePath: string, lines: number[]): Promise<number[]> {
-    if (!this.activeSessionId) return lines;
+    if (!this.activeSessionId) return [];
     return await invoke<number[]>('dap_set_breakpoints', {
       sessionId: this.activeSessionId,
       filePath,

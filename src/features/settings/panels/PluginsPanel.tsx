@@ -185,6 +185,11 @@ export const PluginsPanel: React.FC<SettingPanelProps> = ({
   }, [selectedId, pluginTab]);
 
   const searchTimeoutRef = useRef<any>(null);
+  useEffect(() => {
+    return () => {
+      if (searchTimeoutRef.current) clearTimeout(searchTimeoutRef.current);
+    };
+  }, []);
   const handleMarketplaceSearch = (val: string) => {
     setPluginSearch(val);
     if (searchTimeoutRef.current) clearTimeout(searchTimeoutRef.current);

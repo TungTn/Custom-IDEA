@@ -494,7 +494,12 @@ export const GitToolWindow: React.FC<GitToolWindowProps> = ({
   const handleFetch = async () => {
     addConsoleLog('git fetch --all --prune', 'Fetching from all remotes...');
     if (typeof window !== 'undefined' && ('__TAURI_INTERNALS__' in window || '__TAURI__' in window)) {
-      await invoke('git_fetch', { projectPath }).catch((e) => onShowToast?.('Git Fetch', String(e), 'warning'));
+      try {
+        await invoke('git_fetch', { projectPath });
+      } catch (e) {
+        onShowToast?.('Git Fetch', String(e), 'warning');
+        return;
+      }
     }
     onShowToast?.('Git Fetch', 'Fetched latest branches from remotes', 'success');
     loadGitLog();
@@ -503,7 +508,12 @@ export const GitToolWindow: React.FC<GitToolWindowProps> = ({
   const handlePull = async () => {
     addConsoleLog('git pull', 'Pulling updates into current branch...');
     if (typeof window !== 'undefined' && ('__TAURI_INTERNALS__' in window || '__TAURI__' in window)) {
-      await invoke('git_pull', { projectPath }).catch((e) => onShowToast?.('Git Pull', String(e), 'warning'));
+      try {
+        await invoke('git_pull', { projectPath });
+      } catch (e) {
+        onShowToast?.('Git Pull', String(e), 'warning');
+        return;
+      }
     }
     onShowToast?.('Git Pull', 'Fast-forward updated working tree', 'success');
     loadGitLog();
@@ -512,7 +522,12 @@ export const GitToolWindow: React.FC<GitToolWindowProps> = ({
   const handlePush = async () => {
     addConsoleLog('git push', 'Pushing commits to remote tracking branch...');
     if (typeof window !== 'undefined' && ('__TAURI_INTERNALS__' in window || '__TAURI__' in window)) {
-      await invoke('git_push', { projectPath }).catch((e) => onShowToast?.('Git Push', String(e), 'warning'));
+      try {
+        await invoke('git_push', { projectPath });
+      } catch (e) {
+        onShowToast?.('Git Push', String(e), 'warning');
+        return;
+      }
     }
     onShowToast?.('Git Push', 'Pushed commits successfully', 'success');
     loadGitLog();

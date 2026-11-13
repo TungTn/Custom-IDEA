@@ -8,23 +8,40 @@ use nucleo_matcher::{Config, Matcher, Utf32Str};
 use crate::types::{IndexStatsDto, IndexedFile, IndexedSymbol, SearchResultItem};
 use crate::symbols::extract_symbols_from_content;
 
+fn strip_verbatim_prefix(p: &Path) -> std::borrow::Cow<'_, Path> {
+    let s = p.to_string_lossy();
+    if let Some(rest) = s.strip_prefix(r"\\?\UNC\").or_else(|| s.strip_prefix("//?/UNC/")) {
+        return std::borrow::Cow::Owned(std::path::PathBuf::from(format!(r"\\{}", rest)));
+    }
+    if let Some(rest) = s.strip_prefix(r"\\?\").or_else(|| s.strip_prefix("//?/")) {
+        return std::borrow::Cow::Owned(std::path::PathBuf::from(rest.to_string()));
+    }
+    std::borrow::Cow::Borrowed(p)
+}
+
 fn is_ignored_relative_path(root: &Path, path: &Path) -> bool {
-    let root_str = root.to_string_lossy().replace('\\', "/");
-    let root_clean = root_str.strip_prefix("//?/").or_else(|| root_str.strip_prefix(r"\\?\")).unwrap_or(&root_str);
-    let path_str = path.to_string_lossy().replace('\\', "/");
-    let path_clean = path_str.strip_prefix("//?/").or_else(|| path_str.strip_prefix(r"\\?\")).unwrap_or(&path_str);
+    let root_norm = strip_verbatim_prefix(root);
+    let path_norm = strip_verbatim_prefix(path);
 
-    let rel_str = if !root_clean.is_empty() && path_clean.to_lowercase().starts_with(&root_clean.to_lowercase()) {
-        let rem = &path_clean[root_clean.len()..];
-        rem.trim_start_matches('/')
-    } else {
-        match path.strip_prefix(root) {
-            Ok(p) => return check_components(p),
-            Err(_) => path_clean,
+    let root_comps: Vec<std::path::Component<'_>> = root_norm.components().collect();
+    let path_comps: Vec<std::path::Component<'_>> = path_norm.components().collect();
+
+    if !root_comps.is_empty() && path_comps.len() >= root_comps.len() {
+        let prefix_matches = root_comps.iter().zip(path_comps.iter()).all(|(rc, pc)| {
+            std::mem::discriminant(rc) == std::mem::discriminant(pc)
+                && rc.as_os_str().to_string_lossy().to_lowercase()
+                    == pc.as_os_str().to_string_lossy().to_lowercase()
+        });
+        if prefix_matches {
+            let mut rel = std::path::PathBuf::new();
+            for comp in &path_comps[root_comps.len()..] {
+                rel.push(comp.as_os_str());
+            }
+            return check_components(&rel);
         }
-    };
+    }
 
-    check_components(Path::new(rel_str))
+    check_components(&path_norm)
 }
 
 fn check_components(rel: &Path) -> bool {
@@ -78,6 +95,10 @@ impl IndexManager {
     }
 
     pub fn build_index(&self, project_path: &str) -> Result<IndexStatsDto, String> {
+        self.build_index_internal(project_path, true)
+    }
+
+    fn build_index_internal(&self, project_path: &str, force_rebuild: bool) -> Result<IndexStatsDto, String> {
         let start = Instant::now();
         let root = Path::new(project_path);
         if !root.exists() {
@@ -87,15 +108,17 @@ impl IndexManager {
         let key = canonicalize_project_key(project_path);
         let _guard = self.build_mutex.lock().map_err(|e| e.to_string())?;
 
-        // Double-checked re-validation: return cached index if another thread just built it
-        if let Ok(lock) = self.indices.read() {
-            if let Some(existing) = lock.get(&key) {
-                return Ok(IndexStatsDto {
-                    project_path: project_path.to_string(),
-                    total_files: existing.files.len(),
-                    total_symbols: existing.symbols.len(),
-                    duration_ms: 0,
-                });
+        // Double-checked re-validation when called from get_or_build (non-forced)
+        if !force_rebuild {
+            if let Ok(lock) = self.indices.read() {
+                if let Some(existing) = lock.get(&key) {
+                    return Ok(IndexStatsDto {
+                        project_path: project_path.to_string(),
+                        total_files: existing.files.len(),
+                        total_symbols: existing.symbols.len(),
+                        duration_ms: 0,
+                    });
+                }
             }
         }
 
@@ -190,7 +213,7 @@ impl IndexManager {
                 }
             }
         }
-        let _ = self.build_index(project_path);
+        let _ = self.build_index_internal(project_path, false);
         if let Ok(lock) = self.indices.read() {
             if let Some(index) = lock.get(&key) {
                 return Arc::clone(index);
@@ -323,5 +346,39 @@ mod tests {
         assert!(is_ignored_relative_path(root, Path::new("D:/build/my_app/target/debug/app.exe")));
         assert!(is_ignored_relative_path(root, Path::new("D:/build/my_app/.git/HEAD")));
         assert!(is_ignored_relative_path(root, Path::new("D:/build/my_app/Build/output.js")));
+    }
+
+    #[test]
+    fn test_index_manager_build_index_forces_fresh_rebuild() {
+        struct TempDir(std::path::PathBuf);
+        impl Drop for TempDir {
+            fn drop(&mut self) {
+                let _ = std::fs::remove_dir_all(&self.0);
+            }
+        }
+        let uniq = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("ide_index_refresh_{}_{}", std::process::id(), uniq));
+        std::fs::create_dir_all(&dir).unwrap();
+        let _guard = TempDir(dir.clone());
+        let dir_str = dir.to_string_lossy().to_string();
+
+        let src = dir.join("lib.rs");
+        std::fs::write(&src, "pub fn initial_symbol() {}\n").unwrap();
+
+        let mgr = IndexManager::new();
+        let stats1 = mgr.build_index(&dir_str).unwrap();
+        assert_eq!(stats1.total_files, 1);
+
+        // Add another function and file, then verify build_index rebuilds instead of returning stale cache
+        std::fs::write(&src, "pub fn initial_symbol() {}\npub fn added_later_symbol() {}\n").unwrap();
+        std::fs::write(dir.join("extra.kt"), "fun kotlinHelper() {}\n").unwrap();
+
+        let stats2 = mgr.build_index(&dir_str).unwrap();
+        assert_eq!(stats2.total_files, 2);
+        let hits = mgr.search(&dir_str, "added_later_symbol", Some("Symbols"), Some(10));
+        assert!(!hits.is_empty(), "forced rebuild must reflect updated symbols");
     }
 }

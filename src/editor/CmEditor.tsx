@@ -1555,24 +1555,27 @@ export const CmEditor = forwardRef<CmEditorHandle, CmEditorProps>(
       });
     }, [wordWrap]);
 
-    // Fetch and track Git Diff for change markers (Blue/Green stripes on Gutter)
+    // Fetch and track Git Diff for change markers (Blue/Green stripes on Gutter) — debounced to avoid spawning git per keystroke
     useEffect(() => {
       if (!filePath || !projectPath) {
         setGitDiffMap(null);
         return;
       }
       let isMounted = true;
-      invoke<string>('git_get_diff', { projectPath, filePath })
-        .then((diffText) => {
-          if (isMounted) {
-            setGitDiffMap(parseGitDiff(diffText));
-          }
-        })
-        .catch(() => {
-          if (isMounted) setGitDiffMap(null);
-        });
+      const timer = setTimeout(() => {
+        invoke<string>('git_get_diff', { projectPath, filePath })
+          .then((diffText) => {
+            if (isMounted) {
+              setGitDiffMap(parseGitDiff(diffText));
+            }
+          })
+          .catch(() => {
+            if (isMounted) setGitDiffMap(null);
+          });
+      }, 500);
       return () => {
         isMounted = false;
+        clearTimeout(timer);
       };
     }, [filePath, projectPath, content]);
 
@@ -1909,7 +1912,17 @@ export const CmEditor = forwardRef<CmEditorHandle, CmEditorProps>(
               onClick={() => {
                 setEditorContextMenu(null);
                 setActiveSubmenu(null);
-                document.execCommand('cut');
+                const view = viewRef.current;
+                if (view) {
+                  const sel = view.state.selection.main;
+                  const txt = view.state.sliceDoc(sel.from, sel.to);
+                  if (txt) {
+                    navigator.clipboard.writeText(txt).catch(() => {});
+                    if (!view.state.readOnly) {
+                      view.dispatch({ changes: { from: sel.from, to: sel.to, insert: '' } });
+                    }
+                  }
+                }
               }}
               onMouseEnter={() => setActiveSubmenu(null)}
               className="w-full px-3 py-1.5 hover:bg-[#3574F0] hover:text-white flex items-center justify-between transition-colors cursor-pointer text-left group"
@@ -1925,7 +1938,14 @@ export const CmEditor = forwardRef<CmEditorHandle, CmEditorProps>(
               onClick={() => {
                 setEditorContextMenu(null);
                 setActiveSubmenu(null);
-                document.execCommand('copy');
+                const view = viewRef.current;
+                if (view) {
+                  const sel = view.state.selection.main;
+                  const txt = view.state.sliceDoc(sel.from, sel.to);
+                  if (txt) {
+                    navigator.clipboard.writeText(txt).catch(() => {});
+                  }
+                }
               }}
               onMouseEnter={() => setActiveSubmenu(null)}
               className="w-full px-3 py-1.5 hover:bg-[#3574F0] hover:text-white flex items-center justify-between transition-colors cursor-pointer text-left group"
@@ -2015,8 +2035,8 @@ export const CmEditor = forwardRef<CmEditorHandle, CmEditorProps>(
                     const sel = view.state.selection.main;
                     view.dispatch({ changes: { from: sel.from, to: sel.to, insert: clip } });
                   }
-                } catch {
-                  document.execCommand('paste');
+                } catch (err) {
+                  console.warn('Clipboard paste unavailable:', err);
                 }
               }}
               onMouseEnter={() => setActiveSubmenu(null)}

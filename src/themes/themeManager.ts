@@ -258,61 +258,6 @@ export const getThemeById = (themeId: IdeThemeId | string): ThemeDefinition => {
   return all.find(t => t.id === themeId) || IDE_THEMES[0];
 };
 
-export const buildMonacoTheme = (
-  theme: ThemeDefinition,
-  customSyntax?: Partial<SyntaxTokenColors>
-): any => {
-  const syn = { ...theme.syntaxColors, ...(customSyntax || {}) };
-  const col = theme.colors;
-
-  return {
-    base: theme.type === 'light' ? 'vs' : 'vs-dark',
-    inherit: true,
-    rules: [
-      { token: '', foreground: col.textPrimary.replace('#', ''), background: col.bgPrimary.replace('#', '') },
-      { token: 'comment', foreground: syn.comment.replace('#', ''), fontStyle: 'italic' },
-      { token: 'keyword', foreground: syn.keyword.replace('#', ''), fontStyle: 'bold' },
-      { token: 'number', foreground: syn.number.replace('#', '') },
-      { token: 'string', foreground: syn.string.replace('#', '') },
-      { token: 'type', foreground: syn.type.replace('#', '') },
-      { token: 'function', foreground: syn.function.replace('#', '') },
-      { token: 'variable', foreground: syn.variable.replace('#', '') },
-      { token: 'operator', foreground: syn.operator.replace('#', '') },
-      { token: 'delimiter', foreground: syn.operator.replace('#', '') },
-      { token: 'delimiter.bracket', foreground: syn.operator.replace('#', '') },
-      { token: 'tag', foreground: (syn.tagName || (theme.type === 'light' ? '#0033B3' : '#56A8F5')).replace('#', '') },
-      { token: 'tag.id', foreground: syn.variable.replace('#', '') },
-      { token: 'tag.class', foreground: syn.variable.replace('#', '') },
-      { token: 'delimiter.html', foreground: (syn.tagBracket || (theme.type === 'light' ? '#0033B3' : '#7A7E85')).replace('#', '') },
-      { token: 'attribute.name', foreground: (syn.attributeName || (theme.type === 'light' ? '#174AD4' : '#BCBEC4')).replace('#', '') },
-      { token: 'attribute.value', foreground: syn.string.replace('#', '') },
-      { token: 'keyword.directive', foreground: syn.annotation.replace('#', ''), fontStyle: 'bold' },
-      { token: 'metatag', foreground: syn.annotation.replace('#', '') },
-      { token: 'identifier', foreground: col.textPrimary.replace('#', '') },
-      { token: 'constant', foreground: syn.variable.replace('#', '') }
-    ],
-    colors: {
-      'editor.background': col.bgPrimary,
-      'editor.foreground': col.textPrimary,
-      'editorLineNumber.foreground': col.textSecondary,
-      'editorLineNumber.activeForeground': col.textPrimary,
-      'editorCursor.foreground': col.accentColor,
-      'editor.selectionBackground': col.selectionBg,
-      'editor.inactiveSelectionBackground': col.selectionBg + '88',
-      'editor.lineHighlightBackground': theme.type === 'light' ? '#EAEFF8' : '#26282E',
-      'editorGutter.background': col.gutterBg,
-      'editorGutter.modifiedBackground': '#59A869',
-      'editorGutter.addedBackground': '#437EE3',
-      'editorGutter.deletedBackground': '#E05555',
-      'editorIndentGuide.background': theme.type === 'light' ? '#E5E5E5' : '#313438',
-      'editorIndentGuide.activeBackground': theme.type === 'light' ? '#C0C0C0' : '#4E5157',
-      'editorWhitespace.foreground': theme.type === 'light' ? '#E0E0E0' : '#313438',
-      'editorBracketMatch.background': col.accentColor + '33',
-      'editorBracketMatch.border': col.accentColor
-    }
-  };
-};
-
 export const buildCodeMirrorTheme = (
   theme: ThemeDefinition,
   customSyntax?: Partial<SyntaxTokenColors>
@@ -459,14 +404,6 @@ export const applyIdeTheme = (
   const classesToRemove = Array.from(document.body.classList).filter(c => c.startsWith('theme-'));
   classesToRemove.forEach(c => document.body.classList.remove(c));
   document.body.classList.add(`theme-${theme.id}`);
-
-  // Register theme in Monaco Editor if available
-  if (typeof window !== 'undefined' && (window as any).monaco?.editor) {
-    const monaco = (window as any).monaco;
-    const monacoTheme = buildMonacoTheme(theme, customSyntax);
-    monaco.editor.defineTheme(theme.id, monacoTheme);
-    monaco.editor.setTheme(theme.id);
-  }
 
   // Notify listeners
   if (typeof window !== 'undefined') {

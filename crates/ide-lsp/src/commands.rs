@@ -12,9 +12,12 @@ use tauri::Emitter;
 use std::os::windows::process::CommandExt;
 
 static REQUEST_COUNTER: AtomicU64 = AtomicU64::new(1);
+static LSP_INSTANCE_COUNTER: AtomicU64 = AtomicU64::new(1);
 const MAX_LSP_CONTENT_LENGTH: usize = 64 * 1024 * 1024;
+const MAX_LSP_HEADER_LINE_BYTES: usize = 64 * 1024;
 
 struct LspProcess {
+  instance_id: u64,
   server_name: String,
   child: Child,
   writer: Arc<Mutex<Box<dyn Write + Send>>>,
@@ -52,6 +55,9 @@ fn validate_custom_lsp_path(path: &str) -> Result<String, String> {
     return Err("UNC/network executable paths are not allowed for LSP servers".to_string());
   }
   let p = std::path::Path::new(trimmed);
+  if !p.is_absolute() {
+    return Err(format!("Custom LSP server path must be an absolute path: {}", trimmed));
+  }
   if !p.is_file() {
     return Err(format!("LSP executable does not exist or is not a file: {}", trimmed));
   }
@@ -147,8 +153,16 @@ fn find_lsp_executable(lang: &str) -> Option<(String, Vec<String>)> {
   if let Ok(guard) = CUSTOM_LSP_PATHS.read() {
     if let Some(custom_path) = guard.get(&lang_lower) {
       if validate_custom_lsp_path(custom_path).is_ok() {
+        let stem = std::path::Path::new(custom_path)
+          .file_stem()
+          .and_then(|s| s.to_str())
+          .map(|s| s.to_ascii_lowercase())
+          .unwrap_or_default();
         let args = match lang_lower.as_str() {
-          "typescript" | "javascript" | "ts" | "js" | "tsx" | "jsx" | "python" | "py" => vec!["--stdio".to_string()],
+          "typescript" | "javascript" | "ts" | "js" | "tsx" | "jsx" => vec!["--stdio".to_string()],
+          "python" | "py" if !matches!(stem.as_str(), "pylsp" | "python-lsp-server") => {
+            vec!["--stdio".to_string()]
+          }
           _ => vec![],
         };
         return Some((custom_path.clone(), args));
@@ -187,8 +201,85 @@ pub fn lsp_set_server_path(lang: String, custom_path: Option<String>) -> Result<
   Ok(())
 }
 
+#[derive(Debug, PartialEq, Eq)]
+enum LspMessageKind {
+  ClientResponse(u64),
+  ServerRequest,
+  Notification,
+  Ignored,
+}
+
+fn read_next_content_length<R: BufRead>(reader: &mut R) -> Result<Option<usize>, String> {
+  let mut header_buf: Vec<u8> = Vec::with_capacity(128);
+  let mut content_length: Option<usize> = None;
+  loop {
+    header_buf.clear();
+    match reader.read_until(b'\n', &mut header_buf) {
+      Ok(0) => return Err("LSP stream closed".to_string()),
+      Err(e) => return Err(format!("LSP header read error: {}", e)),
+      Ok(_) => {
+        if header_buf.len() > MAX_LSP_HEADER_LINE_BYTES {
+          return Err("LSP header line exceeded limit".to_string());
+        }
+        let line = String::from_utf8_lossy(&header_buf);
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+          return Ok(content_length);
+        }
+        if trimmed.to_ascii_lowercase().starts_with("content-length:") {
+          if let Some(val) = trimmed.split(':').nth(1) {
+            if let Ok(len) = val.trim().parse::<usize>() {
+              content_length = Some(len);
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+fn classify_lsp_message(val: &Value) -> LspMessageKind {
+  let has_method = val.get("method").and_then(|m| m.as_str()).is_some();
+  let id_opt = val.get("id").filter(|id| !id.is_null());
+  if !has_method {
+    match id_opt.and_then(|v| v.as_u64()) {
+      Some(id) => LspMessageKind::ClientResponse(id),
+      None => LspMessageKind::Ignored,
+    }
+  } else if id_opt.is_some() {
+    LspMessageKind::ServerRequest
+  } else {
+    LspMessageKind::Notification
+  }
+}
+
+fn remove_exited_lsp_server(lang_key: &str, instance_id: u64) {
+  let removed = if let Ok(mut map) = ACTIVE_SERVERS.lock() {
+    if map.get(lang_key).is_some_and(|p| p.instance_id == instance_id) {
+      map.remove(lang_key)
+    } else {
+      None
+    }
+  } else {
+    None
+  };
+  if let Some(mut dead) = removed {
+    let _ = dead.child.wait();
+  }
+}
+
 #[tauri::command]
-pub fn lsp_start_server(
+pub async fn lsp_start_server(
+  app: tauri::AppHandle,
+  lang: String,
+  project_path: String,
+) -> Result<String, String> {
+  tauri::async_runtime::spawn_blocking(move || lsp_start_server_sync(app, lang, project_path))
+    .await
+    .map_err(|e| format!("LSP start task failed: {}", e))?
+}
+
+fn lsp_start_server_sync(
   app: tauri::AppHandle,
   lang: String,
   project_path: String,
@@ -202,16 +293,19 @@ pub fn lsp_start_server(
   }
 
   // If already active and still running, return success; remove dead exited entries
-  {
+  let stale_proc = {
     let mut map = ACTIVE_SERVERS.lock().map_err(|e| e.to_string())?;
     if let Some(proc) = map.get_mut(&lang_key) {
       if let Ok(None) = proc.child.try_wait() {
         return Ok(format!("Active: {}", proc.server_name));
       }
-      if let Some(mut dead) = map.remove(&lang_key) {
-        let _ = dead.child.wait();
-      }
+      map.remove(&lang_key)
+    } else {
+      None
     }
+  };
+  if let Some(mut dead) = stale_proc {
+    let _ = dead.child.wait();
   }
 
   let (exe, args) = find_lsp_executable(&lang_key).ok_or_else(|| {
@@ -246,11 +340,14 @@ pub fn lsp_start_server(
     }
   };
 
+  let instance_id = LSP_INSTANCE_COUNTER.fetch_add(1, Ordering::SeqCst);
   let writer: Arc<Mutex<Box<dyn Write + Send>>> = Arc::new(Mutex::new(Box::new(stdin)));
   let pending_requests: Arc<Mutex<HashMap<u64, Sender<Result<Value, String>>>>> = Arc::new(Mutex::new(HashMap::new()));
 
   let app_clone = app.clone();
   let pending_clone = pending_requests.clone();
+  let writer_clone = writer.clone();
+  let lang_key_clone = lang_key.clone();
   let server_name = exe.clone();
 
   // Background thread parsing JSON-RPC messages from LSP stdout
@@ -265,47 +362,36 @@ pub fn lsp_start_server(
     };
 
     loop {
-      let mut line = String::new();
-      let mut content_length: Option<usize> = None;
-
       // Read header lines until empty line
-      loop {
-        line.clear();
-        match reader.read_line(&mut line) {
-          Ok(0) | Err(_) => {
-            drain_pending("LSP server disconnected");
-            return;
-          }
-          Ok(_) => {
-            let trimmed = line.trim();
-            if trimmed.is_empty() {
-              break; // Header boundary
-            }
-            if trimmed.to_lowercase().starts_with("content-length:") {
-              if let Some(val) = trimmed.split(':').nth(1) {
-                if let Ok(len) = val.trim().parse::<usize>() {
-                  content_length = Some(len);
-                }
-              }
-            }
-          }
+      let content_length = match read_next_content_length(&mut reader) {
+        Ok(cl) => cl,
+        Err(reason) => {
+          let msg = if reason.contains("limit") {
+            "LSP header line exceeded limit"
+          } else {
+            "LSP server disconnected"
+          };
+          drain_pending(msg);
+          remove_exited_lsp_server(&lang_key_clone, instance_id);
+          return;
         }
-      }
+      };
 
       if let Some(len) = content_length {
         if validate_lsp_frame_size(len).is_err() {
           drain_pending("LSP message exceeded maximum size limit");
+          remove_exited_lsp_server(&lang_key_clone, instance_id);
           return;
         }
         let mut body_buf = vec![0u8; len];
         if reader.read_exact(&mut body_buf).is_err() {
           drain_pending("LSP stream ended unexpectedly");
+          remove_exited_lsp_server(&lang_key_clone, instance_id);
           return;
         }
         if let Ok(val) = serde_json::from_slice::<Value>(&body_buf) {
-          // Check if this is a response to a pending request
-          if let Some(id_val) = val.get("id") {
-            if let Some(id) = id_val.as_u64() {
+          match classify_lsp_message(&val) {
+            LspMessageKind::ClientResponse(id) => {
               let mut map = match pending_clone.lock() {
                 Ok(m) => m,
                 Err(_) => continue,
@@ -317,18 +403,30 @@ pub fn lsp_start_server(
                   let res = val.get("result").cloned().unwrap_or(Value::Null);
                   let _ = tx.send(Ok(res));
                 }
-                continue;
               }
             }
-          }
-
-          // Check if this is a server notification (e.g., publishDiagnostics)
-          if let Some(method) = val.get("method").and_then(|m| m.as_str()) {
-            if method == "textDocument/publishDiagnostics" {
-              if let Some(params) = val.get("params") {
-                let _ = app_clone.emit("lsp-diagnostics", params);
+            LspMessageKind::ServerRequest => {
+              if let Some(req_id) = val.get("id").filter(|id| !id.is_null()) {
+                let reply = serde_json::json!({
+                  "jsonrpc": "2.0",
+                  "id": req_id,
+                  "result": Value::Null,
+                });
+                if let Ok(mut w) = writer_clone.lock() {
+                  let _ = write_jsonrpc_message(&mut **w, &reply);
+                }
               }
             }
+            LspMessageKind::Notification => {
+              if let Some(method) = val.get("method").and_then(|m| m.as_str()) {
+                if method == "textDocument/publishDiagnostics" {
+                  if let Some(params) = val.get("params") {
+                    let _ = app_clone.emit("lsp-diagnostics", params);
+                  }
+                }
+              }
+            }
+            LspMessageKind::Ignored => {}
           }
         }
       }
@@ -422,7 +520,7 @@ pub fn lsp_start_server(
   }
 
   // Store active process after successful handshake
-  {
+  let replaced = {
     let mut map = match ACTIVE_SERVERS.lock() {
       Ok(m) => m,
       Err(e) => {
@@ -432,11 +530,16 @@ pub fn lsp_start_server(
       }
     };
     map.insert(lang_key, LspProcess {
+      instance_id,
       server_name: server_name.clone(),
       child,
       writer,
       pending_requests,
-    });
+    })
+  };
+  if let Some(mut old) = replaced {
+    let _ = old.child.kill();
+    let _ = old.child.wait();
   }
 
   let name_output = init_res
@@ -449,7 +552,17 @@ pub fn lsp_start_server(
 }
 
 #[tauri::command]
-pub fn lsp_send_request(
+pub async fn lsp_send_request(
+  lang: String,
+  method: String,
+  params: Value,
+) -> Result<Value, String> {
+  tauri::async_runtime::spawn_blocking(move || lsp_send_request_sync(lang, method, params))
+    .await
+    .map_err(|e| format!("LSP request task failed: {}", e))?
+}
+
+fn lsp_send_request_sync(
   lang: String,
   method: String,
   params: Value,
@@ -521,30 +634,6 @@ pub fn lsp_send_notification(
 
   let mut w = writer.lock().map_err(|e| e.to_string())?;
   write_jsonrpc_message(&mut **w, &notif)
-}
-
-#[tauri::command]
-pub fn lsp_stop_server(lang: String) -> Result<(), String> {
-  let lang_key = lang.to_lowercase();
-  let removed = {
-    let mut map = ACTIVE_SERVERS.lock().map_err(|e| e.to_string())?;
-    map.remove(&lang_key)
-  };
-  if let Some(mut proc) = removed {
-    let _ = proc.child.kill();
-    let _ = proc.child.wait();
-  }
-  Ok(())
-}
-
-#[tauri::command]
-pub fn lsp_get_active_servers() -> Result<HashMap<String, String>, String> {
-  let map = ACTIVE_SERVERS.lock().map_err(|e| e.to_string())?;
-  let mut result = HashMap::new();
-  for (lang, proc) in map.iter() {
-    result.insert(lang.clone(), proc.server_name.clone());
-  }
-  Ok(result)
 }
 
 #[cfg(test)]
@@ -630,8 +719,57 @@ mod tests {
     let err = lsp_set_server_path("test_lang_invalid".into(), Some(bad_script.to_string_lossy().into()));
     assert!(err.is_err());
 
-    let active = lsp_get_active_servers().unwrap();
-    assert!(!active.contains_key("test_lang_invalid"));
-    assert!(lsp_stop_server("test_lang_invalid".into()).is_ok());
+    assert!(!CUSTOM_LSP_PATHS.read().unwrap().contains_key("test_lang_invalid"));
+    assert!(!ACTIVE_SERVERS.lock().unwrap().contains_key("test_lang_invalid"));
+  }
+
+  #[test]
+  fn test_jsonrpc_classification_header_recovery_and_custom_pylsp_args() {
+    // 1. Server -> client request with colliding id=1 must NOT resolve pending client request 1
+    let server_req = serde_json::json!({
+      "jsonrpc": "2.0",
+      "id": 1,
+      "method": "workspace/configuration",
+      "params": {}
+    });
+    assert_eq!(classify_lsp_message(&server_req), LspMessageKind::ServerRequest);
+
+    let client_resp = serde_json::json!({
+      "jsonrpc": "2.0",
+      "id": 1,
+      "result": {"ok": true}
+    });
+    assert_eq!(classify_lsp_message(&client_resp), LspMessageKind::ClientResponse(1));
+
+    let notif = serde_json::json!({
+      "jsonrpc": "2.0",
+      "method": "textDocument/publishDiagnostics",
+      "params": {}
+    });
+    assert_eq!(classify_lsp_message(&notif), LspMessageKind::Notification);
+
+    // 2. Non-UTF-8 header recovery still extracts Content-Length
+    let mut raw: &[u8] = b"X-Garbage: \xFF\xFE\r\nContent-Length: 42\r\n\r\n";
+    assert_eq!(read_next_content_length(&mut raw).unwrap(), Some(42));
+
+    // 3. Relative custom path rejected; custom pylsp path omits --stdio
+    assert!(validate_custom_lsp_path("relative/bin/pylsp.exe").is_err());
+
+    struct CustomPathGuard(&'static str);
+    impl Drop for CustomPathGuard {
+      fn drop(&mut self) {
+        let _ = lsp_set_server_path(self.0.to_string(), None);
+      }
+    }
+
+    let tmp = TempLspDir::new("pylsp_args");
+    let pylsp_exe = tmp.0.join("pylsp.exe");
+    std::fs::write(&pylsp_exe, b"MZ").unwrap();
+    // Temporarily configure "python" and guarantee cleanup on unwind
+    lsp_set_server_path("python".into(), Some(pylsp_exe.to_string_lossy().into())).unwrap();
+    let _path_guard = CustomPathGuard("python");
+    let (resolved, args) = find_lsp_executable("python").unwrap();
+    assert_eq!(resolved, pylsp_exe.to_string_lossy());
+    assert!(args.is_empty(), "pylsp must not receive --stdio: {:?}", args);
   }
 }

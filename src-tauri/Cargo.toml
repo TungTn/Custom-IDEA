@@ -35,8 +35,11 @@ tauri-plugin-log = { workspace = true }
 log = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
-ts-rs = { workspace = true }
 chrono = { workspace = true }
 reqwest = { workspace = true }
 zip = { workspace = true }
 keyring = { workspace = true }
+sha2 = "0.10.9"
+
+[dev-dependencies]
+ts-rs = { workspace = true }

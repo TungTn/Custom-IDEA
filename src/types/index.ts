@@ -141,15 +141,6 @@ export interface ProblemItem {
   quickFixTitle?: string;
 }
 
-export interface IntentionAction {
-  id: string;
-  title: string;
-  shortcut?: string;
-  category?: 'quick-fix' | 'refactor' | 'style';
-  icon?: string;
-  handler: () => void;
-}
-
 export interface GitStashItem {
   id: string;
   index: number;
@@ -158,20 +149,6 @@ export interface GitStashItem {
   relativeTime: string;
   branch: string;
   files?: Array<{ path: string; status: string }>;
-}
-
-export interface GitGraphCommit {
-  hash: string;
-  short_hash: string;
-  author: string;
-  email: string;
-  date: string;
-  subject: string;
-  parents?: string[];
-  branches?: string[];
-  tags?: string[];
-  lane?: number;
-  color?: string;
 }
 
 export type GitResetMode = 'soft' | 'mixed' | 'hard' | 'keep';

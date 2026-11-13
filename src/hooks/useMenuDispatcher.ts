@@ -1,4 +1,4 @@
-import React, { useCallback } from 'react';
+import React, { useCallback, useRef } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import {
   useEditorStore,
@@ -11,6 +11,7 @@ import {
 } from '../stores';
 import { OpenTab } from '../types';
 import { CodeEditorHandle } from '../workbench';
+import { resolveProjectPath } from '../utils/pathUtils';
 
 export interface UseMenuDispatcherOptions {
   codeEditorRef: React.RefObject<CodeEditorHandle>;
@@ -184,7 +185,54 @@ export function useMenuDispatcher({
     setIsClipboardHistoryOpen,
   } = useModalStore();
 
+  const volatileStateRef = useRef({
+    cursorPos,
+    tabs,
+    activeTabId,
+    currentProjectDirectory,
+    projectName,
+    currentBranch,
+    sideBarWidth,
+    bottomHeight,
+    activeSideTab,
+    isSideBarOpen,
+    bottomTab,
+    isBottomOpen,
+    settings,
+  });
+  volatileStateRef.current = {
+    cursorPos,
+    tabs,
+    activeTabId,
+    currentProjectDirectory,
+    projectName,
+    currentBranch,
+    sideBarWidth,
+    bottomHeight,
+    activeSideTab,
+    isSideBarOpen,
+    bottomTab,
+    isBottomOpen,
+    settings,
+  };
+
   const handleMenuAction = useCallback((actionId: string) => {
+    const {
+      cursorPos,
+      tabs,
+      activeTabId,
+      currentProjectDirectory,
+      projectName,
+      currentBranch,
+      sideBarWidth,
+      bottomHeight,
+      activeSideTab,
+      isSideBarOpen,
+      bottomTab,
+      isBottomOpen,
+      settings,
+    } = volatileStateRef.current;
+
     const promoter = ACTION_SHORTCUT_MAP[actionId];
     if (promoter) {
       usePluginStore.getState().notifyAction(promoter.name, promoter.shortcut);
@@ -221,16 +269,18 @@ export function useMenuDispatcher({
       case 'file.newFolder': {
         const folderName = window.prompt('Enter new directory name:', 'new-folder');
         if (folderName && folderName.trim()) {
-          invoke('create_directory', {
-            path: `${currentProjectDirectory}/${folderName.trim()}`
-          })
+          const targetPath = resolveProjectPath(folderName, currentProjectDirectory);
+          if (!targetPath) {
+            addToast('New Directory Failed', 'Cannot resolve directory path without an open workspace.', 'error');
+            break;
+          }
+          invoke('vfs_create_dir', { path: targetPath })
             .then(() => {
               addToast('New Directory', `Created directory: ${folderName.trim()}`, 'success');
               syncProjectFilesFromDisk();
             })
-            .catch(() => {
-              addToast('New Directory', `Directory initialized: ${folderName.trim()}`, 'info');
-              syncProjectFilesFromDisk();
+            .catch(err => {
+              addToast('New Directory Failed', String(err), 'error');
             });
         }
         break;
@@ -239,16 +289,18 @@ export function useMenuDispatcher({
         const pkgName = window.prompt('Enter new package name (e.g. com.example.service):');
         if (pkgName && pkgName.trim()) {
           const folderPath = pkgName.trim().replace(/\./g, '/');
-          invoke('create_directory', {
-            path: `${currentProjectDirectory}/src/main/java/${folderPath}`
-          })
+          const targetPath = resolveProjectPath(`src/main/java/${folderPath}`, currentProjectDirectory);
+          if (!targetPath) {
+            addToast('New Package Failed', 'Cannot resolve package path without an open workspace.', 'error');
+            break;
+          }
+          invoke('vfs_create_dir', { path: targetPath })
             .then(() => {
               addToast('New Package', `Created package: ${pkgName.trim()}`, 'success');
               syncProjectFilesFromDisk();
             })
-            .catch(() => {
-              addToast('New Package', `Package module initialized: ${pkgName.trim()}`, 'info');
-              syncProjectFilesFromDisk();
+            .catch(err => {
+              addToast('New Package Failed', String(err), 'error');
             });
         }
         break;
@@ -974,16 +1026,18 @@ export function useMenuDispatcher({
           addToast('Move File', 'No active file in editor to move', 'info');
           break;
         }
-        const newPath = window.prompt('Enter new destination file path:', curTab.path);
-        if (newPath && newPath.trim() && newPath.trim() !== curTab.path) {
+        const sourcePath = resolveProjectPath(curTab.path, currentProjectDirectory);
+        const newPath = window.prompt('Enter new destination file path:', sourcePath || curTab.path);
+        const destPath = newPath ? resolveProjectPath(newPath, currentProjectDirectory) : '';
+        if (sourcePath && destPath && destPath !== sourcePath) {
           invoke('vfs_move_path', {
-            source_path: curTab.path,
-            dest_path: newPath.trim()
+            sourcePath,
+            destPath
           })
             .then(() => {
-              setTabs(prev => prev.map(t => t.id === curTab.id ? { ...t, path: newPath.trim(), title: newPath.trim().split(/[\\/]/).pop() || t.title } : t));
+              setTabs(prev => prev.map(t => t.id === curTab.id ? { ...t, path: destPath, title: destPath.split(/[\\/]/).pop() || t.title } : t));
               syncProjectFilesFromDisk();
-              addToast('Move File', `Moved ${curTab.title} to ${newPath.trim()}`, 'success');
+              addToast('Move File', `Moved ${curTab.title} to ${destPath}`, 'success');
             })
             .catch(err => addToast('Move File Failed', String(err), 'error'));
         }
@@ -995,18 +1049,20 @@ export function useMenuDispatcher({
           addToast('Copy File', 'No active file in editor to copy', 'info');
           break;
         }
+        const sourcePath = resolveProjectPath(curTab.path, currentProjectDirectory);
         const ext = curTab.title.includes('.') ? '.' + curTab.title.split('.').pop() : '';
         const base = curTab.title.replace(/\.[^.]+$/, '');
-        const defaultDest = curTab.path.replace(curTab.title, `${base}Copy${ext}`);
-        const destPath = window.prompt('Enter path for copied file:', defaultDest);
-        if (destPath && destPath.trim() && destPath.trim() !== curTab.path) {
+        const defaultDest = (sourcePath || curTab.path).replace(curTab.title, `${base}Copy${ext}`);
+        const rawDest = window.prompt('Enter path for copied file:', defaultDest);
+        const destPath = rawDest ? resolveProjectPath(rawDest, currentProjectDirectory) : '';
+        if (sourcePath && destPath && destPath !== sourcePath) {
           invoke('vfs_copy_file', {
-            source_path: curTab.path,
-            dest_path: destPath.trim()
+            sourcePath,
+            destPath
           })
             .then(() => {
               syncProjectFilesFromDisk();
-              addToast('Copy File', `Copied to ${destPath.trim()}`, 'success');
+              addToast('Copy File', `Copied to ${destPath}`, 'success');
             })
             .catch(err => addToast('Copy File Failed', String(err), 'error'));
         }
@@ -1018,9 +1074,14 @@ export function useMenuDispatcher({
           addToast('Safe Delete', 'No active file in editor to delete', 'info');
           break;
         }
-        const confirmed = window.confirm(`Are you sure you want to delete "${curTab.title}"?\nPath: ${curTab.path}`);
+        const targetPath = resolveProjectPath(curTab.path, currentProjectDirectory);
+        if (!targetPath) {
+          addToast('Safe Delete Failed', 'Cannot resolve file path without an open workspace.', 'error');
+          break;
+        }
+        const confirmed = window.confirm(`Are you sure you want to delete "${curTab.title}"?\nPath: ${targetPath}`);
         if (confirmed) {
-          invoke('vfs_delete_path', { path: curTab.path })
+          invoke('vfs_delete_path', { path: targetPath })
             .then(() => {
               handleCloseActiveTab();
               syncProjectFilesFromDisk();
@@ -1061,14 +1122,19 @@ export function useMenuDispatcher({
           invoke<string[]>('coverage_detect_reports', { projectPath: currentProjectDirectory })
             .then(reports => {
               if (reports && reports.length > 0) {
-                invoke('coverage_load_file', { filePath: reports[0] });
-                addToast('Coverage Active', `Loaded coverage report: ${reports[0]}`, 'success');
+                invoke('coverage_load_file', { coverageFilePath: reports[0] })
+                  .then(() => {
+                    addToast('Coverage Active', `Loaded coverage report: ${reports[0]}`, 'success');
+                  })
+                  .catch(err => {
+                    addToast('Coverage Load Failed', String(err), 'error');
+                  });
               } else {
                 addToast('Run with Coverage', 'Running tests with coverage profiling', 'info');
               }
             })
-            .catch(() => {
-              addToast('Run with Coverage', 'Running tests with coverage profiling', 'info');
+            .catch(err => {
+              addToast('Coverage Detection Failed', String(err), 'warning');
             });
         }
         setBottomTab('coverage');
@@ -1324,13 +1390,20 @@ export function useMenuDispatcher({
         addToast('Layout Restored', 'Restored default IDE layout', 'success');
         break;
       case 'window.layoutSave': {
+        const {
+          isSideBarOpen: curSideBarOpen,
+          sideBarWidth: curSideBarWidth,
+          activeSideTab: curSideTab,
+          isBottomOpen: curBottomOpen,
+          bottomHeight: curBottomHeight,
+        } = volatileStateRef.current;
         const currentLayout = {
-          isSideBarOpen,
-          sideBarWidth,
-          activeSideTab,
-          isBottomOpen,
+          isSideBarOpen: curSideBarOpen,
+          sideBarWidth: curSideBarWidth,
+          activeSideTab: curSideTab,
+          isBottomOpen: curBottomOpen,
           bottomTab: useLayoutStore.getState().bottomTab,
-          bottomHeight,
+          bottomHeight: curBottomHeight,
           splitMode: useEditorStore.getState().splitMode,
         };
         try {
@@ -1390,23 +1463,12 @@ export function useMenuDispatcher({
     refreshGitStatus,
     syncProjectFilesFromDisk,
     addToast,
-    currentBranch,
-    currentProjectDirectory,
-    projectName,
-    cursorPos,
-    tabs,
-    activeTabId,
-    activeSideTab,
-    isSideBarOpen,
-    settings,
     codeEditorRef,
     setTabs,
     setActiveTabId,
     setIsSideBarOpen,
     setActiveSideTab,
     setBottomTab,
-    bottomTab,
-    isBottomOpen,
     setIsBottomOpen,
     setActiveRightPanel,
     handleMarkAllNotificationsRead,
@@ -1452,9 +1514,7 @@ export function useMenuDispatcher({
     splitDown,
     closeAllTabs,
     unsplit,
-    sideBarWidth,
     setSideBarWidth,
-    bottomHeight,
     setBottomHeight,
     toggleStatusBar,
   ]);

@@ -49,7 +49,6 @@ rfd = "0.15"
 portable-pty = "0.8"
 walkdir = "2.5"
 notify = "6.1.1"
-ropey = "1.6"
 nucleo-matcher = "0.3"
 notify-debouncer-mini = "0.3"
 ts-rs = { version = "12.0.1", default-features = true }

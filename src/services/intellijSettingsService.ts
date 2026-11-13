@@ -706,6 +706,14 @@ export class IntelliJSettingsService {
     customJdks?: Array<{ name: string; path: string; version?: string }>,
     customKeymap?: Record<string, string[]>
   ): Record<string, string> {
+    const escapeXmlAttr = (val: unknown): string =>
+      String(val ?? '')
+        .replace(/&/g, '&amp;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&apos;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;');
+
     const entries: Record<string, string> = {
       'IntelliJ IDEA Global Settings': ''
     };
@@ -713,28 +721,28 @@ export class IntelliJSettingsService {
     // 1. UI & Theme
     if (selectedIds.includes('ui')) {
       const themeId = settings.theme === 'darcula-classic' ? 'Islands Darcula' : 'IntelliJ Light';
-      entries['options/laf.xml'] = `<application>\n  <component name="LafManager">\n    <preferred-dark-laf themeId="${themeId}" />\n  </component>\n</application>`;
-      entries['options/colors.scheme.xml'] = `<application>\n  <component name="EditorColorsManagerImpl">\n    <global_color_scheme name="${themeId}" />\n  </component>\n</application>`;
+      entries['options/laf.xml'] = `<application>\n  <component name="LafManager">\n    <preferred-dark-laf themeId="${escapeXmlAttr(themeId)}" />\n  </component>\n</application>`;
+      entries['options/colors.scheme.xml'] = `<application>\n  <component name="EditorColorsManagerImpl">\n    <global_color_scheme name="${escapeXmlAttr(themeId)}" />\n  </component>\n</application>`;
     }
 
     // 2. Editor & Fonts
     if (selectedIds.includes('editor')) {
-      entries['options/editor-font.xml'] = `<application>\n  <component name="DefaultFont">\n    <option name="VERSION" value="1" />\n    <option name="FONT_SIZE" value="${settings.fontSize || 13}" />\n    <option name="FONT_FAMILY" value="${settings.fontFamily || 'JetBrains Mono'}" />\n    <option name="LINE_SPACING" value="${settings.lineHeight || 1.4}" />\n  </component>\n</application>`;
-      entries['options/editor.xml'] = `<application>\n  <component name="CodeInsightSettings">\n    <option name="TAB_SIZE" value="${settings.tabSize || 4}" />\n    <option name="ENABLE_SECOND_REFORMAT" value="true" />\n  </component>\n</application>`;
+      entries['options/editor-font.xml'] = `<application>\n  <component name="DefaultFont">\n    <option name="VERSION" value="1" />\n    <option name="FONT_SIZE" value="${escapeXmlAttr(settings.fontSize || 13)}" />\n    <option name="FONT_FAMILY" value="${escapeXmlAttr(settings.fontFamily || 'JetBrains Mono')}" />\n    <option name="LINE_SPACING" value="${escapeXmlAttr(settings.lineHeight || 1.4)}" />\n  </component>\n</application>`;
+      entries['options/editor.xml'] = `<application>\n  <component name="CodeInsightSettings">\n    <option name="TAB_SIZE" value="${escapeXmlAttr(settings.tabSize || 4)}" />\n    <option name="ENABLE_SECOND_REFORMAT" value="true" />\n  </component>\n</application>`;
     }
 
     // 3. Code Style
     if (selectedIds.includes('codestyle')) {
-      entries['codestyles/Default.xml'] = `<code_scheme name="Default" version="173">\n  <indentOptions>\n    <option name="INDENT_SIZE" value="${settings.tabSize || 4}" />\n    <option name="CONTINUATION_INDENT_SIZE" value="${settings.tabSize || 4}" />\n  </indentOptions>\n</code_scheme>`;
+      entries['codestyles/Default.xml'] = `<code_scheme name="Default" version="173">\n  <indentOptions>\n    <option name="INDENT_SIZE" value="${escapeXmlAttr(settings.tabSize || 4)}" />\n    <option name="CONTINUATION_INDENT_SIZE" value="${escapeXmlAttr(settings.tabSize || 4)}" />\n  </indentOptions>\n</code_scheme>`;
     }
 
     // 4. Keymaps
     if (selectedIds.includes('keymap') && customKeymap) {
       let keymapXml = '<keymap version="1" name="custom-idea" parent="$default">\n';
       for (const [actionId, shortcuts] of Object.entries(customKeymap)) {
-        keymapXml += `  <action id="${actionId}">\n`;
+        keymapXml += `  <action id="${escapeXmlAttr(actionId)}">\n`;
         shortcuts.forEach(sc => {
-          keymapXml += `    <keyboard-shortcut first-keystroke="${sc}" />\n`;
+          keymapXml += `    <keyboard-shortcut first-keystroke="${escapeXmlAttr(sc)}" />\n`;
         });
         keymapXml += '  </action>\n';
       }
@@ -744,13 +752,13 @@ export class IntelliJSettingsService {
 
     // 5. Terminal
     if (selectedIds.includes('terminal')) {
-      entries['options/terminal.xml'] = `<application>\n  <component name="TerminalOptionsProvider">\n    <option name="myShellPath" value="${settings.terminalShell || 'powershell.exe'}" />\n  </component>\n</application>`;
+      entries['options/terminal.xml'] = `<application>\n  <component name="TerminalOptionsProvider">\n    <option name="myShellPath" value="${escapeXmlAttr(settings.terminalShell || 'powershell.exe')}" />\n  </component>\n</application>`;
     }
 
     // 6. System & General
     if (selectedIds.includes('general')) {
       const openModeVal = settings.projectOpenMode === 'this_window' ? '0' : settings.projectOpenMode === 'new_window' ? '1' : '2';
-      entries['options/ide.general.xml'] = `<application>\n  <component name="GeneralSettings">\n    <option name="showTipsOnStartup" value="false" />\n    <option name="confirmExit" value="${settings.confirmExit ? 'true' : 'false'}" />\n    <option name="confirmOpenNewProject2" value="${openModeVal}" />\n  </component>\n</application>`;
+      entries['options/ide.general.xml'] = `<application>\n  <component name="GeneralSettings">\n    <option name="showTipsOnStartup" value="false" />\n    <option name="confirmExit" value="${settings.confirmExit ? 'true' : 'false'}" />\n    <option name="confirmOpenNewProject2" value="${escapeXmlAttr(openModeVal)}" />\n  </component>\n</application>`;
     }
 
     // 7. Project View
@@ -760,14 +768,14 @@ export class IntelliJSettingsService {
 
     // 8. Database Tools
     if (selectedIds.includes('database')) {
-      entries['options/databaseSettings.xml'] = `<application>\n  <component name="DatabaseSettings" version="10">\n    <option name="pageSize" value="${settings.dataEditorPageSize || 500}" />\n    <option name="rowLimit" value="${settings.sqlRowLimit || 500}" />\n  </component>\n</application>`;
+      entries['options/databaseSettings.xml'] = `<application>\n  <component name="DatabaseSettings" version="10">\n    <option name="pageSize" value="${escapeXmlAttr(settings.dataEditorPageSize || 500)}" />\n    <option name="rowLimit" value="${escapeXmlAttr(settings.sqlRowLimit || 500)}" />\n  </component>\n</application>`;
     }
 
     // 9. Installed JDKs
     if (selectedIds.includes('jdk') && customJdks && customJdks.length > 0) {
       let jdkXml = '<application>\n  <component name="ProjectJdkTable">\n';
       for (const jdk of customJdks) {
-        jdkXml += `    <jdk version="2">\n      <name value="${jdk.name}" />\n      <type value="JavaSDK" />\n      <version value="${jdk.version || jdk.name}" />\n      <homePath value="${jdk.path}" />\n    </jdk>\n`;
+        jdkXml += `    <jdk version="2">\n      <name value="${escapeXmlAttr(jdk.name)}" />\n      <type value="JavaSDK" />\n      <version value="${escapeXmlAttr(jdk.version || jdk.name)}" />\n      <homePath value="${escapeXmlAttr(jdk.path)}" />\n    </jdk>\n`;
       }
       jdkXml += '  </component>\n</application>';
       entries['options/jdk.table.xml'] = jdkXml;

@@ -175,9 +175,19 @@ export async function verifySha256(buffer: ArrayBuffer, expectedSha256: string):
 /**
  * Gọi backend Rust để ghi đè file .exe và kích hoạt kịch bản tự hủy update.bat
  */
-export async function applyUpdateAndRestart(buffer: ArrayBuffer): Promise<void> {
+export async function applyUpdateAndRestart(
+  buffer: ArrayBuffer,
+  expectedSha256: string
+): Promise<void> {
+  const trimmedSha = expectedSha256.trim();
+  if (!trimmedSha) {
+    throw new Error('Missing expected SHA-256 checksum for update payload.');
+  }
   const bytes = Array.from(new Uint8Array(buffer));
-  await invoke('apply_update_and_restart', { newExeBytes: bytes });
+  await invoke('apply_update_and_restart', {
+    newExeBytes: bytes,
+    expectedSha256: trimmedSha,
+  });
 }
 
 /**

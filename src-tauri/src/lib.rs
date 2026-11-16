@@ -13,7 +13,6 @@ pub use ide_coverage as coverage;
 pub mod window;
 pub mod commands;
 pub mod updater;
-pub mod profiler;
 pub mod secrets;
 
 static CLEANUP_DONE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);

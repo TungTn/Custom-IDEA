@@ -176,11 +176,11 @@ pub fn get_ipc_handler() -> impl Fn(tauri::ipc::Invoke<tauri::Wry>) -> bool + Se
     crate::updater::apply_update_and_restart,
     crate::updater::get_app_version_info,
 
-    // ─── 14. Profiler & System Metrics Commands ───
-    crate::profiler::get_process_metrics,
-    crate::profiler::list_running_java_processes,
-    crate::profiler::trigger_jvm_gc,
-    crate::profiler::trigger_jvm_heap_dump,
+    // ─── 14. Profiler & System Metrics Commands (ide-run) ───
+    process::get_process_metrics,
+    process::list_running_java_processes,
+    process::trigger_jvm_gc,
+    process::trigger_jvm_heap_dump,
 
     // ─── 15. OS Keyring Secret Storage ───
     crate::secrets::app_secret_set,

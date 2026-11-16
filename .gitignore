@@ -30,3 +30,11 @@ release/
 *.sw?
 package-lock.json
 
+# Tools & External Runtimes
+tools/
+expui/
+resp.json
+
+# Workspace lockfile centralization (managed only at root)
+src-tauri/Cargo.lock
+

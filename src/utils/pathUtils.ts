@@ -19,6 +19,6 @@ export function resolveProjectPath(targetPath: string, projectDir?: string): str
   if (isAbsoluteFsPath(trimmed)) return trimmed;
   if (!projectDir) return '';
   const base = projectDir.replace(/[\\/]+$/, '').replace(/\\/g, '/');
-  const rel = trimmed.replace(/\\/g, '/').replace(/^\/+/, '');
+  const rel = trimmed.replace(/\\/g, '/').replace(/^(\.\/)+/, '').replace(/^\/+/, '');
   return `${base}/${rel}`;
 }

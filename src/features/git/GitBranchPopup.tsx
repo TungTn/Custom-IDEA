@@ -73,6 +73,34 @@ export const GitBranchPopup: React.FC<GitBranchPopupProps> = ({
   // Flyout Submenu State
   const [selectedBranch, setSelectedBranch] = useState<GitBranchItem | null>(null);
   const [submenuPosition, setSubmenuPosition] = useState<{ top: number } | null>(null);
+  const closeSubmenuTimerRef = useRef<NodeJS.Timeout | null>(null);
+
+  const cancelCloseSubmenu = () => {
+    if (closeSubmenuTimerRef.current) {
+      clearTimeout(closeSubmenuTimerRef.current);
+      closeSubmenuTimerRef.current = null;
+    }
+  };
+
+  const scheduleCloseSubmenu = (delay = 200) => {
+    cancelCloseSubmenu();
+    closeSubmenuTimerRef.current = setTimeout(() => {
+      setSelectedBranch(null);
+      setSubmenuPosition(null);
+    }, delay);
+  };
+
+  const closeSubmenuImmediately = () => {
+    cancelCloseSubmenu();
+    setSelectedBranch(null);
+    setSubmenuPosition(null);
+  };
+
+  useEffect(() => {
+    return () => {
+      cancelCloseSubmenu();
+    };
+  }, []);
 
   // Favorites state (stored in localStorage)
   const [favorites, setFavorites] = useState<string[]>(() => {
@@ -170,7 +198,7 @@ export const GitBranchPopup: React.FC<GitBranchPopupProps> = ({
 
   useEffect(() => {
     if (isOpen) {
-      setSelectedBranch(null);
+      closeSubmenuImmediately();
       setIsCreatingBranch(false);
       setIsCheckingOutRevision(false);
       setSearchQuery('');
@@ -180,6 +208,8 @@ export const GitBranchPopup: React.FC<GitBranchPopupProps> = ({
       setTimeout(() => {
         searchInputRef.current?.focus();
       }, 50);
+    } else {
+      closeSubmenuImmediately();
     }
   }, [isOpen, projectPath, currentBranch]);
 
@@ -188,16 +218,23 @@ export const GitBranchPopup: React.FC<GitBranchPopupProps> = ({
     if (!isOpen) return;
 
     const handleClickOutside = (e: MouseEvent) => {
-      if (popupRef.current && !popupRef.current.contains(e.target as Node)) {
-        onClose();
+      const target = e.target as Node;
+      if (popupRef.current && popupRef.current.contains(target)) {
+        return;
       }
+      // If clicking the branch trigger button in TopBar, let button handler deal with toggle
+      const toggleBtn = popupRef.current?.parentElement?.querySelector('button');
+      if (toggleBtn && toggleBtn.contains(target)) {
+        return;
+      }
+      closeSubmenuImmediately();
+      onClose();
     };
 
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
         if (selectedBranch) {
-          setSelectedBranch(null);
-          setSubmenuPosition(null);
+          closeSubmenuImmediately();
         } else if (isCreatingBranch) {
           setIsCreatingBranch(false);
         } else if (isCheckingOutRevision) {
@@ -212,10 +249,10 @@ export const GitBranchPopup: React.FC<GitBranchPopupProps> = ({
       }
     };
 
-    document.addEventListener('mousedown', handleClickOutside);
+    document.addEventListener('mousedown', handleClickOutside, true);
     window.addEventListener('keydown', handleKeyDown);
     return () => {
-      document.removeEventListener('mousedown', handleClickOutside);
+      document.removeEventListener('mousedown', handleClickOutside, true);
       window.removeEventListener('keydown', handleKeyDown);
     };
   }, [isOpen, onClose, selectedBranch, isCreatingBranch, isCheckingOutRevision]);
@@ -445,15 +482,20 @@ export const GitBranchPopup: React.FC<GitBranchPopupProps> = ({
       ref={popupRef}
       className="absolute left-0 top-full mt-1 w-[330px] bg-[#2B2D30] text-[#DFE1E5] border border-[#393B40] rounded-md shadow-2xl z-50 text-[12px] select-none flex flex-col overflow-visible animate-in fade-in duration-75 font-sans"
       onClick={(e) => e.stopPropagation()}
+      onMouseLeave={() => scheduleCloseSubmenu(150)}
     >
       {/* ─── Search & Header Bar ─── */}
-      <div className="p-2 border-b border-[#393B40] flex items-center gap-1.5 bg-[#2B2D30] rounded-t-md">
+      <div 
+        className="p-2 border-b border-[#393B40] flex items-center gap-1.5 bg-[#2B2D30] rounded-t-md"
+        onMouseEnter={closeSubmenuImmediately}
+      >
         <div className="relative flex-1 flex items-center">
           <Search size={13} className="absolute left-2 text-[#868A91] pointer-events-none" />
           <input
             ref={searchInputRef}
             type="text"
             value={searchQuery}
+            onMouseDown={closeSubmenuImmediately}
             onChange={(e) => setSearchQuery(e.target.value)}
             placeholder="Search for branches and actions"
             className="w-full bg-[#1E1F22] border border-[#393B40] focus:border-[#3574F0] rounded px-2 pl-7 py-1 text-xs text-[#DFE1E5] placeholder-[#868A91] outline-none"
@@ -497,7 +539,10 @@ export const GitBranchPopup: React.FC<GitBranchPopupProps> = ({
 
       {/* ─── Quick Actions (New Branch, Checkout Revision) ─── */}
       {!isCreatingBranch && !isCheckingOutRevision ? (
-        <div className="py-1 border-b border-[#393B40]">
+        <div 
+          className="py-1 border-b border-[#393B40]"
+          onMouseEnter={closeSubmenuImmediately}
+        >
           <div
             onClick={() => {
               setIsCreatingBranch(true);
@@ -613,6 +658,7 @@ export const GitBranchPopup: React.FC<GitBranchPopupProps> = ({
             <div>
               <div
                 onClick={() => setIsLocalExpanded(!isLocalExpanded)}
+                onMouseEnter={closeSubmenuImmediately}
                 className="px-2.5 py-1 text-[11px] font-semibold text-[#868A91] hover:text-[#DFE1E5] cursor-pointer flex items-center justify-between"
               >
                 <div className="flex items-center gap-1">
@@ -636,6 +682,7 @@ export const GitBranchPopup: React.FC<GitBranchPopupProps> = ({
                           key={b.name}
                           onClick={() => handleCheckout(b)}
                           onMouseEnter={(e) => {
+                            cancelCloseSubmenu();
                             setSelectedBranch(b);
                             const rect = e.currentTarget.getBoundingClientRect();
                             const popupRect = popupRef.current?.getBoundingClientRect();
@@ -643,6 +690,7 @@ export const GitBranchPopup: React.FC<GitBranchPopupProps> = ({
                               setSubmenuPosition({ top: rect.top - popupRect.top });
                             }
                           }}
+                          onMouseLeave={() => scheduleCloseSubmenu(250)}
                           className={`group px-3 py-1 flex items-center justify-between cursor-pointer transition-colors ${
                             isSelected
                               ? 'bg-[#3574F0] text-white'
@@ -697,6 +745,7 @@ export const GitBranchPopup: React.FC<GitBranchPopupProps> = ({
             <div>
               <div
                 onClick={() => setIsRemoteExpanded(!isRemoteExpanded)}
+                onMouseEnter={closeSubmenuImmediately}
                 className="px-2.5 py-1 text-[11px] font-semibold text-[#868A91] hover:text-[#DFE1E5] cursor-pointer flex items-center justify-between"
               >
                 <div className="flex items-center gap-1">
@@ -719,6 +768,7 @@ export const GitBranchPopup: React.FC<GitBranchPopupProps> = ({
                             onClick={() =>
                               setExpandedRemotes(prev => ({ ...prev, [remoteName]: !isExpanded }))
                             }
+                            onMouseEnter={closeSubmenuImmediately}
                             className="px-5 py-1 text-[11px] text-[#A8ADBD] hover:text-white cursor-pointer flex items-center gap-1.5"
                           >
                             {isExpanded ? <ChevronDown size={11} /> : <ChevronRight size={11} />}
@@ -743,6 +793,7 @@ export const GitBranchPopup: React.FC<GitBranchPopupProps> = ({
                                     key={b.name}
                                     onClick={() => handleCheckout(b)}
                                     onMouseEnter={(e) => {
+                                      cancelCloseSubmenu();
                                       setSelectedBranch(b);
                                       const rect = e.currentTarget.getBoundingClientRect();
                                       const popupRect = popupRef.current?.getBoundingClientRect();
@@ -750,6 +801,7 @@ export const GitBranchPopup: React.FC<GitBranchPopupProps> = ({
                                         setSubmenuPosition({ top: rect.top - popupRect.top });
                                       }
                                     }}
+                                    onMouseLeave={() => scheduleCloseSubmenu(250)}
                                     className={`group px-3 py-1 flex items-center justify-between cursor-pointer transition-colors ${
                                       isSelected
                                         ? 'bg-[#3574F0] text-white'
@@ -786,6 +838,7 @@ export const GitBranchPopup: React.FC<GitBranchPopupProps> = ({
                 <div>
                   <div
                     onClick={() => setIsTagsExpanded(!isTagsExpanded)}
+                    onMouseEnter={closeSubmenuImmediately}
                     className="px-2.5 py-1 text-[11px] font-semibold text-[#868A91] hover:text-[#DFE1E5] cursor-pointer flex items-center justify-between"
                   >
                     <div className="flex items-center gap-1">
@@ -800,6 +853,7 @@ export const GitBranchPopup: React.FC<GitBranchPopupProps> = ({
                       {filteredTags.map((t) => (
                         <div
                           key={t}
+                          onMouseEnter={closeSubmenuImmediately}
                           onClick={() => {
                             setRevisionInput(t);
                             handleCheckoutRevision();
@@ -823,7 +877,9 @@ export const GitBranchPopup: React.FC<GitBranchPopupProps> = ({
       {selectedBranch && submenuPosition && (
         <div
           style={{ top: Math.max(0, submenuPosition.top - 10) }}
-          className="absolute left-full ml-1 w-64 bg-[#2B2D30] text-[#DFE1E5] border border-[#393B40] rounded-md shadow-2xl py-1 z-50 text-[12px] animate-in fade-in duration-75 select-none"
+          onMouseEnter={cancelCloseSubmenu}
+          onMouseLeave={() => scheduleCloseSubmenu(200)}
+          className="absolute left-full ml-1 w-64 bg-[#2B2D30] text-[#DFE1E5] border border-[#393B40] rounded-md shadow-2xl py-1 z-50 text-[12px] animate-in fade-in duration-75 select-none before:absolute before:-left-2 before:top-0 before:bottom-0 before:w-2 before:content-['']"
         >
           {/* Submenu Header: Selected Branch Short Name */}
           <div className="px-3 py-1 text-[11px] font-semibold text-[#868A91] border-b border-[#393B40] truncate">

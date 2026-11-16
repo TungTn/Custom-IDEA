@@ -38,3 +38,6 @@ resp.json
 # Workspace lockfile centralization (managed only at root)
 src-tauri/Cargo.lock
 
+# Internal Planning Artifacts
+plans/
+

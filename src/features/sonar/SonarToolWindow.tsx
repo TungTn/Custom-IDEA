@@ -1104,13 +1104,15 @@ export const SonarToolWindow: React.FC<SonarToolWindowProps> = ({
   const handleTestConnection = async () => {
     setServerChecking(true);
     try {
-      const info = await checkSonarServer(sonarConfig.serverUrl);
+      const info = await checkSonarServer(sonarConfig.serverUrl, sonarConfig.token);
       setServerOnline(info.status === 'UP');
       setServerVersion(info.version);
-      onShowToast?.('SonarQube Connected', `Server is UP (version ${info.version})`, 'success');
+      const tokenVerified = sonarConfig.token?.trim() ? ' — Token verified' : '';
+      onShowToast?.('SonarQube Connected', `Server is UP (version ${info.version || 'unknown'})${tokenVerified}`, 'success');
     } catch (e: any) {
       setServerOnline(false);
-      onShowToast?.('SonarQube Connection Failed', String(e), 'error');
+      const errMsg = e?.message || String(e);
+      onShowToast?.('SonarQube Connection Failed', errMsg, 'error');
     } finally {
       setServerChecking(false);
     }

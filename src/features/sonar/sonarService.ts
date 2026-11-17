@@ -210,46 +210,100 @@ export const getSonarTokenAsync = async (connectionId: string = 'default'): Prom
   return token || '';
 };
 
+export interface SonarCheckResult extends SonarServerStatus {
+  tokenValid?: boolean;
+}
+
 /**
  * Executes an HTTP request via Tauri IPC (ide-http) to bypass browser CORS restrictions.
- * Falls back to standard browser fetch if running outside Tauri.
+ * Surfaces descriptive backend errors and avoids failing over to browser fetch inside Tauri.
  */
 async function executeHttpRequest(
   method: string,
   url: string,
   headers: Record<string, string> = {}
 ): Promise<{ status: number; body: string }> {
-  try {
-    const res = await invoke<{ status: number; body: string }>('http_execute_request', {
-      request: {
-        method,
-        url,
-        headers,
-        body: null,
-      },
-    });
-    return res;
-  } catch {
-    // Fallback to fetch
-    const response = await fetch(url, {
-      method,
-      headers,
-    });
-    const body = await response.text();
-    return { status: response.status, body };
+  const isTauri = typeof window !== 'undefined' && ('__TAURI_INTERNALS__' in window || '__TAURI__' in window);
+  if (isTauri) {
+    try {
+      const res = await invoke<{ status: number; body: string }>('http_execute_request', {
+        request: {
+          method,
+          url,
+          headers,
+          body: null,
+        },
+      });
+      return res;
+    } catch (err: any) {
+      const msg = typeof err === 'string' ? err : err?.message || String(err);
+      throw new Error(`HTTP request failed: ${msg}`);
+    }
   }
+
+  // Fallback to fetch for web/test environment outside Tauri
+  const response = await fetch(url, {
+    method,
+    headers,
+  });
+  const body = await response.text();
+  return { status: response.status, body };
 }
 
 /**
- * Checks if the SonarQube server is reachable and online
+ * Checks if the SonarQube server is reachable and online,
+ * and if token is provided, validates user authentication token.
  */
-export async function checkSonarServer(serverUrl: string): Promise<SonarServerStatus> {
-  const url = `${serverUrl.replace(/\/+$/, '')}/api/system/status`;
-  const res = await executeHttpRequest('GET', url);
-  if (res.status >= 200 && res.status < 300) {
-    return JSON.parse(res.body);
+export async function checkSonarServer(serverUrl: string, token?: string): Promise<SonarCheckResult> {
+  const cleanUrl = serverUrl.replace(/\/+$/, '');
+  validateSonarUrl(cleanUrl, Boolean(token));
+
+  // Step 1: Check server status
+  const statusUrl = `${cleanUrl}/api/system/status`;
+  const res = await executeHttpRequest('GET', statusUrl);
+  if (res.status < 200 || res.status >= 300) {
+    throw new Error(`Server returned HTTP ${res.status}: ${res.body}`);
   }
-  throw new Error(`Server returned HTTP ${res.status}: ${res.body}`);
+
+  let serverStatus: SonarServerStatus;
+  try {
+    serverStatus = JSON.parse(res.body);
+  } catch {
+    throw new Error(`Invalid response from SonarQube server: ${res.body}`);
+  }
+
+  if (serverStatus.status !== 'UP') {
+    throw new Error(`SonarQube server is not ready (Status: ${serverStatus.status})`);
+  }
+
+  // Step 2: Validate token if provided
+  if (token && token.trim()) {
+    const authUrl = `${cleanUrl}/api/authentication/validate`;
+    const headers: Record<string, string> = {
+      Authorization: `Basic ${btoa(token.trim() + ':')}`,
+    };
+    const authRes = await executeHttpRequest('GET', authUrl, headers);
+    if (authRes.status === 200) {
+      try {
+        const authData = JSON.parse(authRes.body);
+        if (authData.valid === false) {
+          throw new Error('SonarQube server is online, but the Authentication Token is invalid or expired.');
+        }
+      } catch (err: any) {
+        if (err.message && err.message.includes('Authentication Token is invalid')) {
+          throw err;
+        }
+      }
+    } else if (authRes.status === 401) {
+      throw new Error('Authentication failed (HTTP 401): Invalid or unauthorized SonarQube token.');
+    } else {
+      throw new Error(`Failed to validate token (HTTP ${authRes.status}): ${authRes.body}`);
+    }
+
+    return { ...serverStatus, tokenValid: true };
+  }
+
+  return serverStatus;
 }
 
 /**

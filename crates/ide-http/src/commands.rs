@@ -72,13 +72,17 @@ pub fn is_loopback_host(host: &str) -> bool {
 }
 
 pub fn is_blocked_ssrf_resolved_ip(ip: IpAddr, allow_loopback: bool) -> bool {
-    if is_metadata_or_link_local_ip(ip) || is_private_or_ula_ip(ip) {
+    // Cloud metadata link-local address (e.g. 169.254.169.254) is ALWAYS blocked to prevent credential exfiltration
+    if is_metadata_or_link_local_ip(ip) {
         return true;
     }
-    if allow_loopback && is_loopback_or_unspecified_ip(ip) {
-        return false;
+    // Loopback / unspecified addresses are allowed only when host explicitly targeted loopback
+    if is_loopback_or_unspecified_ip(ip) {
+        return !allow_loopback;
     }
-    is_loopback_or_unspecified_ip(ip)
+    // Private enterprise IPs (10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, ULA) are allowed
+    // so developers can connect to corporate intranet services (SonarQube, GitLab, staging APIs)
+    false
 }
 
 pub fn validate_initial_http_url(parsed_url: &reqwest::Url) -> Result<(), String> {
@@ -350,10 +354,12 @@ mod tests {
         assert!(is_loopback_host("[::ffff:127.0.0.1]"));
         assert!(!is_loopback_host("example.com"));
 
-        // Public IP passes, private IP blocked
+        // Public IP and private intranet IP pass, metadata IP blocked
         let public_ip: IpAddr = "93.184.216.34".parse().unwrap();
         let private_ip: IpAddr = "10.0.0.5".parse().unwrap();
         assert!(!is_blocked_ssrf_resolved_ip(public_ip, false));
-        assert!(is_blocked_ssrf_resolved_ip(private_ip, false));
+        assert!(!is_blocked_ssrf_resolved_ip(private_ip, false));
+        let meta_ip: IpAddr = "169.254.169.254".parse().unwrap();
+        assert!(is_blocked_ssrf_resolved_ip(meta_ip, false));
     }
 }

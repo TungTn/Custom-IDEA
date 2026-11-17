@@ -494,13 +494,20 @@ const SonarQubeSettingsPanel: React.FC<{ onShowToast?: (t: string, m: string, ty
     saveSonarBinding(next);
   };
 
-  const handleOpenConfigConn = () => {
-    setEditingConn(activeConnection ? { ...activeConnection } : {
+  const handleOpenConfigConn = async () => {
+    const baseConn = activeConnection ? { ...activeConnection } : {
       id: `conn-${Date.now()}`,
       name: 'Sonar',
       serverUrl: 'https://sonar.example.com',
       token: '',
-    });
+    };
+    if (baseConn.id && !baseConn.token) {
+      try {
+        const stored = await getSecret('sonar', baseConn.id);
+        if (stored) baseConn.token = stored;
+      } catch {}
+    }
+    setEditingConn(baseConn);
     setConnTestResult(null);
     setIsConfigConnOpen(true);
   };
@@ -526,18 +533,20 @@ const SonarQubeSettingsPanel: React.FC<{ onShowToast?: (t: string, m: string, ty
     setTestingConn(true);
     setConnTestResult(null);
     try {
-      const res = await checkSonarServer(editingConn.serverUrl);
+      const res = await checkSonarServer(editingConn.serverUrl, editingConn.token);
+      const tokenVerified = editingConn.token?.trim() ? ' — Token verified' : '';
       setConnTestResult({
         success: true,
-        message: `Connected successfully to SonarQube ${res.version || ''} (Server Status: ${res.status || 'UP'})`,
+        message: `Connected successfully to SonarQube ${res.version || ''} (Server Status: ${res.status || 'UP'}${tokenVerified})`,
       });
-      onShowToast?.('SonarQube Connected', `Server is UP (version ${res.version})`, 'success');
+      onShowToast?.('SonarQube Connected', `Server is UP (version ${res.version || 'unknown'})${tokenVerified}`, 'success');
     } catch (e: any) {
+      const errMsg = e?.message || String(e);
       setConnTestResult({
         success: false,
-        message: `Connection failed: ${String(e.message || e)}`,
+        message: `Connection failed: ${errMsg}`,
       });
-      onShowToast?.('Connection Failed', String(e), 'error');
+      onShowToast?.('Connection Failed', errMsg, 'error');
     } finally {
       setTestingConn(false);
     }
@@ -548,7 +557,11 @@ const SonarQubeSettingsPanel: React.FC<{ onShowToast?: (t: string, m: string, ty
     setSearchingProjects(true);
     try {
       if (activeConnection) {
-        const found = await searchSonarProjects(activeConnection.serverUrl, activeConnection.token);
+        let token = activeConnection.token;
+        if (!token) {
+          token = (await getSecret('sonar', activeConnection.id)) || '';
+        }
+        const found = await searchSonarProjects(activeConnection.serverUrl, token);
         if (found.length > 0) {
           setProjectList(found);
         }

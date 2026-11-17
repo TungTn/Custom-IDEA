@@ -226,13 +226,15 @@ async function executeHttpRequest(
   const isTauri = typeof window !== 'undefined' && ('__TAURI_INTERNALS__' in window || '__TAURI__' in window);
   if (isTauri) {
     try {
+      const payload = {
+        method,
+        url,
+        headers,
+        body: null,
+      };
       const res = await invoke<{ status: number; body: string }>('http_execute_request', {
-        request: {
-          method,
-          url,
-          headers,
-          body: null,
-        },
+        req: payload,
+        request: payload,
       });
       return res;
     } catch (err: any) {

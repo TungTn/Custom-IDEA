@@ -1,5 +1,5 @@
 use ide_http::parser::parse_http_file;
-use ide_http::{http_execute_request, HttpRequestDto};
+use ide_http::{execute_http_request, http_execute_request, HttpRequestDto};
 use std::collections::HashMap;
 
 #[test]
@@ -79,7 +79,7 @@ async fn test_http_execute_request_error() {
         body: None,
     };
 
-    let result = http_execute_request(req).await;
+    let result = execute_http_request(req).await;
     assert!(result.is_err());
 
     let ftp_req = HttpRequestDto {
@@ -89,7 +89,7 @@ async fn test_http_execute_request_error() {
         headers: HashMap::new(),
         body: None,
     };
-    assert!(http_execute_request(ftp_req).await.is_err());
+    assert!(execute_http_request(ftp_req).await.is_err());
 }
 
 #[tokio::test]
@@ -102,7 +102,7 @@ async fn test_http_execute_blocks_invalid_schemes() {
         body: None,
     };
 
-    let result = http_execute_request(req).await;
+    let result = execute_http_request(req).await;
     assert!(result.is_err());
     let err = result.unwrap_err();
     assert!(err.contains("Unsupported URL scheme"));
@@ -118,7 +118,7 @@ async fn test_http_execute_blocks_metadata_ip() {
         body: None,
     };
 
-    let result = http_execute_request(req).await;
+    let result = execute_http_request(req).await;
     assert!(result.is_err());
     let err = result.unwrap_err();
     assert!(err.contains("cloud metadata"));
@@ -149,7 +149,7 @@ async fn test_http_execute_local_roundtrip() {
         body: None,
     };
 
-    let res = http_execute_request(req).await.expect("local roundtrip should succeed");
+    let res = execute_http_request(req).await.expect("local roundtrip should succeed");
     assert_eq!(res.status, 200);
     assert_eq!(res.body, "hello");
     assert_eq!(res.size_bytes, 5);
@@ -182,7 +182,7 @@ async fn test_http_execute_blocks_redirect_to_metadata_ip() {
         body: None,
     };
 
-    let err = http_execute_request(req).await.unwrap_err();
+    let err = execute_http_request(req).await.unwrap_err();
     assert!(
         err.to_lowercase().contains("redirect") || err.contains("metadata"),
         "expected redirect SSRF block error, got: {}",
@@ -230,7 +230,7 @@ async fn test_http_execute_rejects_oversized_response() {
         body: None,
     };
 
-    let err = http_execute_request(req).await.unwrap_err();
+    let err = execute_http_request(req).await.unwrap_err();
     assert!(
         err.contains("Response body exceeded"),
         "expected size-limit error, got: {}",
@@ -294,11 +294,15 @@ async fn test_http_execute_binary_and_multi_header_response() {
         body: None,
     };
 
-    let res = http_execute_request(req).await.expect("binary response should succeed");
+    let res = http_execute_request(Some(req), None).await.expect("binary response should succeed");
     assert_eq!(res.status, 200);
     assert_eq!(res.size_bytes, 4);
     let cookies = res.headers.get("set-cookie").map(String::as_str).unwrap_or("");
     assert!(cookies.contains("a=1") && cookies.contains("b=2"), "cookies={}", cookies);
     assert!(res.body.contains('\u{FFFD}') && res.body.ends_with('A'));
+
+    // Also verify missing both args errors out
+    assert!(http_execute_request(None, None).await.is_err());
+
     let _ = server.join();
 }

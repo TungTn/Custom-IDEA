@@ -184,8 +184,7 @@ static HTTP_CLIENT: LazyLock<reqwest::Client> = LazyLock::new(|| {
         .expect("Failed to initialize static HTTP client")
 });
 
-#[tauri::command]
-pub async fn http_execute_request(req: HttpRequestDto) -> Result<HttpResponseDto, String> {
+pub async fn execute_http_request(req: HttpRequestDto) -> Result<HttpResponseDto, String> {
     let parsed_url = reqwest::Url::parse(&req.url)
         .map_err(|e| format!("Invalid URL '{}': {e}", req.url))?;
 
@@ -269,6 +268,18 @@ pub async fn http_execute_request(req: HttpRequestDto) -> Result<HttpResponseDto
 }
 
 #[tauri::command]
+pub async fn http_execute_request(
+    req: Option<HttpRequestDto>,
+    request: Option<HttpRequestDto>,
+) -> Result<HttpResponseDto, String> {
+    let actual_req = req
+        .or(request)
+        .ok_or_else(|| "Missing required parameter 'req' or 'request'".to_string())?;
+
+    execute_http_request(actual_req).await
+}
+
+#[tauri::command]
 pub fn http_parse_file(content: String) -> Result<Vec<HttpBlockDto>, String> {
     Ok(parse_http_file(&content))
 }
@@ -292,7 +303,7 @@ pub async fn http_execute_file_block(
         body: block.body,
     };
 
-    http_execute_request(req).await
+    execute_http_request(req).await
 }
 
 #[cfg(test)]

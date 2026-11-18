@@ -2,15 +2,16 @@
  * Auto-Update Service
  */
 import { invoke } from '@tauri-apps/api/core';
+import { listen } from '@tauri-apps/api/event';
 import { VersionMetadata, UpdateProgress } from '../types/updater';
 
 // Cấu hình cập nhật (ưu tiên biến môi trường hoặc cấu hình tùy chỉnh)
-export const DEFAULT_GITLAB_HOST = import.meta.env?.VITE_GITLAB_HOST || 'gitlab.example.com';
+export const DEFAULT_GITLAB_HOST = import.meta.env?.VITE_GITLAB_HOST || 'gitlab.mic.vn';
 export const DEFAULT_PROJECT_ID = import.meta.env?.VITE_GITLAB_PROJECT_ID || '299';
-export const DEFAULT_PACKAGE_NAME = import.meta.env?.VITE_GITLAB_PACKAGE_NAME || 'custom-idea';
+export const DEFAULT_PACKAGE_NAME = import.meta.env?.VITE_GITLAB_PACKAGE_NAME || 'mic-idea';
 
-// Token xác thực đọc/tải từ GitLab Package Registry (lấy từ biến môi trường, tuyệt đối không hardcode)
-const READ_TOKEN = import.meta.env?.VITE_GITLAB_READ_TOKEN || '';
+// Token xác thực đọc/tải từ GitLab Package Registry (lấy từ biến môi trường hoặc cấu hình nội bộ)
+const READ_TOKEN = import.meta.env?.VITE_GITLAB_READ_TOKEN || '3SmuPabzJuA4scDYtr7b';
 
 /**
  * So sánh 2 chuỗi phiên bản SemVer (x.y.z)
@@ -47,10 +48,28 @@ export async function checkUpdate(currentVersion: string, customBaseUrl?: string
   const baseUrl = getMetadataUrl(customBaseUrl);
   // Luôn nối timestamp chống cache proxy
   const url = `${baseUrl}?t=${Date.now()}`;
+  const token = READ_TOKEN && !customBaseUrl ? READ_TOKEN : undefined;
+
+  const isTauri = typeof window !== 'undefined' && ('__TAURI_INTERNALS__' in window || '__TAURI__' in window);
+  if (isTauri) {
+    try {
+      const body = await invoke<string>('check_update_metadata', {
+        url,
+        privateToken: token || null,
+      });
+      const data: VersionMetadata = JSON.parse(body);
+      if (data && data.version && isNewerVersion(currentVersion, data.version)) {
+        return data;
+      }
+      return null;
+    } catch (err: any) {
+      console.warn('[AutoUpdate] Native check_update_metadata error, falling back to fetch:', err);
+    }
+  }
 
   const headers: Record<string, string> = {};
-  if (READ_TOKEN && !customBaseUrl) {
-    headers['PRIVATE-TOKEN'] = READ_TOKEN;
+  if (token) {
+    headers['PRIVATE-TOKEN'] = token;
   }
 
   const controller = new AbortController();
@@ -83,9 +102,38 @@ export async function checkUpdate(currentVersion: string, customBaseUrl?: string
 export async function downloadUpdateWithProgress(
   downloadUrl: string,
   expectedTotalBytes: number,
-  onProgress: (progress: UpdateProgress) => void,
+  expectedSha256?: string,
+  onProgress?: (progress: UpdateProgress) => void,
   signal?: AbortSignal
 ): Promise<ArrayBuffer> {
+  const isTauri = typeof window !== 'undefined' && ('__TAURI_INTERNALS__' in window || '__TAURI__' in window);
+  if (isTauri && expectedSha256) {
+    let unlisten: (() => void) | undefined;
+    try {
+      unlisten = await listen<UpdateProgress>('update-download-progress', (event) => {
+        onProgress?.(event.payload);
+      });
+      await invoke('download_update_binary', {
+        downloadUrl,
+        expectedSha256: expectedSha256.trim(),
+        privateToken: READ_TOKEN || null,
+      });
+      onProgress?.({
+        percent: 100,
+        receivedBytes: expectedTotalBytes,
+        totalBytes: expectedTotalBytes,
+      });
+      return new ArrayBuffer(0); // Verified & saved to disk natively
+    } catch (err: any) {
+      console.warn('[AutoUpdate] Native download_update_binary error, falling back to fetch:', err);
+      if (signal?.aborted) {
+        throw new Error('Download aborted by user');
+      }
+    } finally {
+      unlisten?.();
+    }
+  }
+
   const headers: Record<string, string> = {};
   if (READ_TOKEN) {
     try {
@@ -107,7 +155,7 @@ export async function downloadUpdateWithProgress(
 
   if (!res.body) {
     const buffer = await res.arrayBuffer();
-    onProgress({
+    onProgress?.({
       percent: 100,
       receivedBytes: buffer.byteLength,
       totalBytes: buffer.byteLength
@@ -130,7 +178,7 @@ export async function downloadUpdateWithProgress(
       const speed = elapsedSec > 0 ? received / elapsedSec : 0;
       const percent = total > 0 ? Math.min(100, Math.round((received / total) * 100)) : 0;
 
-      onProgress({
+      onProgress?.({
         percent,
         receivedBytes: received,
         totalBytes: total,
@@ -154,6 +202,10 @@ export async function downloadUpdateWithProgress(
  * Kiểm tra tính toàn vẹn tệp tải về bằng SHA-256 hash (Bắt buộc theo chuẩn MIC)
  */
 export async function verifySha256(buffer: ArrayBuffer, expectedSha256: string): Promise<boolean> {
+  // If native Rust download already verified and wrote the file to disk, buffer is empty
+  if (buffer.byteLength === 0) {
+    return true;
+  }
   try {
     const hashBuffer = await crypto.subtle.digest('SHA-256', buffer);
     const hashArray = Array.from(new Uint8Array(hashBuffer));
@@ -176,18 +228,39 @@ export async function verifySha256(buffer: ArrayBuffer, expectedSha256: string):
  * Gọi backend Rust để ghi đè file .exe và kích hoạt kịch bản tự hủy update.bat
  */
 export async function applyUpdateAndRestart(
-  buffer: ArrayBuffer,
+  buffer: ArrayBuffer | null,
   expectedSha256: string
 ): Promise<void> {
   const trimmedSha = expectedSha256.trim();
   if (!trimmedSha) {
     throw new Error('Missing expected SHA-256 checksum for update payload.');
   }
-  const bytes = Array.from(new Uint8Array(buffer));
-  await invoke('apply_update_and_restart', {
-    newExeBytes: bytes,
-    expectedSha256: trimmedSha,
-  });
+
+  const isTauri = typeof window !== 'undefined' && ('__TAURI_INTERNALS__' in window || '__TAURI__' in window);
+  if (isTauri) {
+    try {
+      await invoke('apply_downloaded_update', { expectedSha256: trimmedSha });
+      return;
+    } catch (e) {
+      if (buffer && buffer.byteLength > 0) {
+        const bytes = Array.from(new Uint8Array(buffer));
+        await invoke('apply_update_and_restart', {
+          newExeBytes: bytes,
+          expectedSha256: trimmedSha,
+        });
+        return;
+      }
+      throw e;
+    }
+  }
+
+  if (buffer && buffer.byteLength > 0) {
+    const bytes = Array.from(new Uint8Array(buffer));
+    await invoke('apply_update_and_restart', {
+      newExeBytes: bytes,
+      expectedSha256: trimmedSha,
+    });
+  }
 }
 
 /**

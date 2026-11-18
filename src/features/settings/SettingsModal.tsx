@@ -215,6 +215,7 @@ export interface SettingsModalProps {
   onSaveSettings: (newSettings: IdeSettings) => void;
   onShowToast?: (title: string, message: string, type?: 'info' | 'success' | 'warning' | 'error') => void;
   onOpenThemeStudio?: () => void;
+  currentProjectDirectory?: string;
 }
 
 export interface MarketplacePlugin {
@@ -610,6 +611,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   onSaveSettings,
   onShowToast,
   onOpenThemeStudio,
+  currentProjectDirectory,
 }) => {
   // Close on Escape key
   useEffect(() => {
@@ -873,6 +875,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     setKeymapProfile,
     liveTemplates,
     setLiveTemplates,
+    currentProjectDirectory,
   };
 
   return (

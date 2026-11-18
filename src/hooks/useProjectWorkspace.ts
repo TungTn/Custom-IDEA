@@ -4,6 +4,7 @@ import { listen } from '@tauri-apps/api/event';
 import { FileNode, OpenTab } from '../types';
 import { detectLanguage } from '../utils/languageDetector';
 import { useProjectStore } from '../stores';
+import { syncSonarBindingFromConnectedMode } from '../features/sonar/sonarService';
 
 export interface UseProjectWorkspaceOptions {
   tabs: OpenTab[];
@@ -142,6 +143,9 @@ export function useProjectWorkspace({
       }
 
       addToast('Project Opened', `Loaded project [${tree.name}] from ${tree.path}`, 'success');
+
+      // Auto-detect and sync SonarLint Connected Mode if .sonarlint/connectedMode.json is present
+      syncSonarBindingFromConnectedMode(tree.path).catch(() => {});
     },
     [setProjectName, setFiles, setProjectRootPath, saveRecentProject, setRunConfigurations, detectDefaultConfigurations, setActiveConfigId, setTabs, setActiveTabId, addToast]
   );

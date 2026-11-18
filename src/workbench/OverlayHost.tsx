@@ -68,6 +68,7 @@ export interface OverlayHostProps {
   problems?: any[];
   addToast?: (title: string, message?: string, type?: 'info' | 'success' | 'warning' | 'error') => void;
   onApplyTheme?: (themeId: IdeThemeId, customSyntax?: Partial<SyntaxTokenColors>) => void;
+  currentProjectDirectory?: string;
 }
 
 export const OverlayHost: React.FC<OverlayHostProps> = (props) => {
@@ -141,6 +142,7 @@ export const OverlayHost: React.FC<OverlayHostProps> = (props) => {
               addToast('Settings Saved', 'Applied preferences', 'success');
             }}
             onShowToast={addToast}
+            currentProjectDirectory={props.currentProjectDirectory || projectStore.projectRootPath}
           />
         )}
 

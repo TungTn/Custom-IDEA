@@ -53,6 +53,25 @@ export interface SonarProjectBinding {
   fileExclusions?: string[];
 }
 
+export interface SonarConnectedModeFile {
+  $schema?: string;
+  sonarQubeUri?: string;
+  sonarCloudOrganization?: string;
+  projectKey: string;
+  connectionId?: string;
+}
+
+export const SONARLINT_CONNECTED_MODE_SCHEMA =
+  'https://raw.githubusercontent.com/SonarSource/sonarlint-core/master/core/src/main/resources/connectedModeSchema.json';
+
+/**
+ * Resolves the path to .sonarlint/connectedMode.json for a project directory.
+ */
+export function getSonarConnectedModePath(projectDirectory: string): string {
+  const cleanDir = projectDirectory.replace(/[/\\]+$/, '');
+  return `${cleanDir}/.sonarlint/connectedMode.json`;
+}
+
 const STORAGE_KEY = 'intellij_sonarqube_config';
 const CONNECTIONS_STORAGE_KEY = 'intellij_sonarqube_connections';
 const BINDING_STORAGE_KEY = 'intellij_sonarqube_binding';
@@ -391,4 +410,103 @@ export async function searchSonarProjects(
  */
 export function buildMavenSonarCommand(config: SonarServerConfig): string {
   return `mvn.cmd sonar:sonar -Dsonar.host.url=${config.serverUrl} -Dsonar.projectKey=${config.projectKey}`;
+}
+
+/**
+ * Exports project binding configuration to .sonarlint/connectedMode.json in standard IntelliJ/SonarLint format.
+ */
+export async function exportSonarConnectedMode(
+  projectDirectory: string,
+  binding: SonarProjectBinding,
+  connection?: SonarConnection
+): Promise<{ filePath: string; content: string }> {
+  if (!projectDirectory) {
+    throw new Error('Project directory is required to share configuration.');
+  }
+  const filePath = getSonarConnectedModePath(projectDirectory);
+  const serverUrl = connection?.serverUrl?.trim().replace(/\/+$/, '') || 'https://sonar.example.com';
+  const isSonarCloud = serverUrl.includes('sonarcloud.io');
+
+  const payload: SonarConnectedModeFile = {
+    $schema: SONARLINT_CONNECTED_MODE_SCHEMA,
+    ...(isSonarCloud
+      ? { sonarCloudOrganization: connection?.name || 'default-org' }
+      : { sonarQubeUri: serverUrl }),
+    projectKey: binding.projectKey.trim(),
+    connectionId: connection?.name || connection?.id || 'Sonar',
+  };
+
+  const content = JSON.stringify(payload, null, 2) + '\n';
+
+  const isTauri = typeof window !== 'undefined' && ('__TAURI_INTERNALS__' in window || '__TAURI__' in window);
+  if (isTauri) {
+    await invoke('save_file_content', { path: filePath, content });
+  }
+
+  return { filePath, content };
+}
+
+/**
+ * Reads .sonarlint/connectedMode.json from the project directory if it exists.
+ */
+export async function readSonarConnectedMode(
+  projectDirectory: string
+): Promise<SonarConnectedModeFile | null> {
+  if (!projectDirectory) return null;
+  const filePath = getSonarConnectedModePath(projectDirectory);
+  const isTauri = typeof window !== 'undefined' && ('__TAURI_INTERNALS__' in window || '__TAURI__' in window);
+  if (isTauri) {
+    try {
+      const exists = await invoke<boolean>('file_exists', { path: filePath });
+      if (!exists) return null;
+      const raw = await invoke<string>('read_file_content', { path: filePath });
+      if (!raw || !raw.trim()) return null;
+      return JSON.parse(raw) as SonarConnectedModeFile;
+    } catch (e) {
+      console.warn('Failed to read .sonarlint/connectedMode.json:', e);
+      return null;
+    }
+  }
+  return null;
+}
+
+/**
+ * Automatically syncs the IDE's Sonar project binding from .sonarlint/connectedMode.json if available.
+ */
+export async function syncSonarBindingFromConnectedMode(
+  projectDirectory: string
+): Promise<SonarProjectBinding | null> {
+  const fileConfig = await readSonarConnectedMode(projectDirectory);
+  if (!fileConfig || !fileConfig.projectKey) {
+    return null;
+  }
+
+  const connections = getSavedSonarConnections();
+  let matchedConn = connections.find(
+    (c) =>
+      (fileConfig.connectionId && (c.name === fileConfig.connectionId || c.id === fileConfig.connectionId)) ||
+      (fileConfig.sonarQubeUri && c.serverUrl.replace(/\/+$/, '') === fileConfig.sonarQubeUri.replace(/\/+$/, ''))
+  );
+
+  if (!matchedConn && fileConfig.sonarQubeUri) {
+    const newConn: SonarConnection = {
+      id: `conn-sonar-${Date.now()}`,
+      name: fileConfig.connectionId || 'Sonar',
+      serverUrl: fileConfig.sonarQubeUri,
+      token: '',
+    };
+    matchedConn = newConn;
+    saveSonarConnections([...connections, newConn]);
+  }
+
+  const currentBinding = getSavedSonarBinding();
+  const nextBinding: SonarProjectBinding = {
+    ...currentBinding,
+    bindEnabled: true,
+    connectionId: matchedConn ? matchedConn.id : currentBinding.connectionId,
+    projectKey: fileConfig.projectKey,
+  };
+
+  saveSonarBinding(nextBinding);
+  return nextBinding;
 }

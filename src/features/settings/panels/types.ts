@@ -21,4 +21,6 @@ export interface SettingPanelProps {
   setLiveTemplates?: React.Dispatch<React.SetStateAction<LiveTemplate[]>>;
   // Toolchain
   toolchainData?: any;
+  // Project Workspace
+  currentProjectDirectory?: string;
 }

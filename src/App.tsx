@@ -2633,6 +2633,7 @@ export const App: React.FC = () => {
 
         {/* Centralized Modals Host */}
         <OverlayHost
+          currentProjectDirectory={currentProjectDirectory}
           handleOpenFileAtLocation={handleOpenFileAtLocation}
           handleSelectSearchAction={handleSelectSearchAction}
           handleCreateNewFile={handleCreateNewFile}

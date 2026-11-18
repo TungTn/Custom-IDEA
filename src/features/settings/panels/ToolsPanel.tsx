@@ -11,15 +11,20 @@ import {
   getSavedSonarBinding, 
   saveSonarBinding, 
   checkSonarServer, 
-  searchSonarProjects 
+  searchSonarProjects,
+  exportSonarConnectedMode,
+  readSonarConnectedMode,
+  getSonarConnectedModePath
 } from '../../sonar/sonarService';
 import { getSecret } from '../../../services/secretService';
+import { useProjectStore } from '../../../stores/projectStore';
 
 export const ToolsPanel: React.FC<SettingPanelProps> = ({
   selectedId,
   formSettings,
   updateSetting,
   onShowToast,
+  currentProjectDirectory,
 }) => {
   const [fileWatchersList, setFileWatchersList] = React.useState([
     { id: 'w1', name: 'Prettier Formatter', pattern: '*.{ts,tsx,js,json,css}', enabled: true },
@@ -453,18 +458,51 @@ export const ToolsPanel: React.FC<SettingPanelProps> = ({
 
       {/* Sub-page: Tools > SonarQube for IDE > Project Settings */}
       {(selectedId === 'tools-sonarqube' || selectedId === 'tools-sonarqube-parent') && (
-        <SonarQubeSettingsPanel onShowToast={onShowToast} />
+        <SonarQubeSettingsPanel onShowToast={onShowToast} projectPath={currentProjectDirectory} />
       )}
     </div>
   );
 };
 
-const SonarQubeSettingsPanel: React.FC<{ onShowToast?: (t: string, m: string, type?: any) => void }> = ({ onShowToast }) => {
+const SonarQubeSettingsPanel: React.FC<{
+  onShowToast?: (t: string, m: string, type?: any) => void;
+  projectPath?: string;
+}> = ({ onShowToast, projectPath }) => {
+  const storeProjectRoot = useProjectStore((s) => s.projectRootPath);
+  const activeProjectPath =
+    projectPath || storeProjectRoot || (typeof window !== 'undefined' ? localStorage.getItem('ij_current_project_path') || '' : '') || 'D:\\IDE';
+
   const [topTab, setTopTab] = React.useState<'analysis' | 'languages'>('analysis');
   const [subTab, setSubTab] = React.useState<'bind' | 'exclusions'>('bind');
 
   const [connections, setConnections] = React.useState<SonarConnection[]>(getSavedSonarConnections);
   const [binding, setBinding] = React.useState<SonarProjectBinding>(getSavedSonarBinding);
+  const [isSharing, setIsSharing] = React.useState(false);
+  const [hasConnectedModeFile, setHasConnectedModeFile] = React.useState(false);
+
+  // Auto-sync or detect .sonarlint/connectedMode.json from disk on mount or path change
+  React.useEffect(() => {
+    if (!activeProjectPath) return;
+    readSonarConnectedMode(activeProjectPath).then((fileConfig) => {
+      if (fileConfig && fileConfig.projectKey) {
+        setHasConnectedModeFile(true);
+        setBinding((prev) => {
+          if (prev.projectKey !== fileConfig.projectKey) {
+            const updated: SonarProjectBinding = {
+              ...prev,
+              bindEnabled: true,
+              projectKey: fileConfig.projectKey,
+            };
+            saveSonarBinding(updated);
+            return updated;
+          }
+          return prev;
+        });
+      } else {
+        setHasConnectedModeFile(false);
+      }
+    });
+  }, [activeProjectPath]);
 
   // Configure Connection Modal
   const [isConfigConnOpen, setIsConfigConnOpen] = React.useState(false);
@@ -487,6 +525,25 @@ const SonarQubeSettingsPanel: React.FC<{ onShowToast?: (t: string, m: string, ty
   const [newExclusionPattern, setNewExclusionPattern] = React.useState('');
 
   const activeConnection = connections.find(c => c.id === binding.connectionId) || connections[0];
+
+  const handleShareConfiguration = async () => {
+    if (!binding.bindEnabled) return;
+    if (!binding.projectKey?.trim()) {
+      onShowToast?.('Share Configuration', 'Please enter a valid Project Key before sharing configuration.', 'warning');
+      return;
+    }
+    setIsSharing(true);
+    try {
+      await exportSonarConnectedMode(activeProjectPath, binding, activeConnection);
+      setHasConnectedModeFile(true);
+      onShowToast?.('Connected Mode', 'Project binding configuration shared to .sonarlint/connectedMode.json', 'success');
+    } catch (err: any) {
+      const msg = typeof err === 'string' ? err : err?.message || String(err);
+      onShowToast?.('Share Failed', `Failed to export .sonarlint/connectedMode.json: ${msg}`, 'error');
+    } finally {
+      setIsSharing(false);
+    }
+  };
 
   const handleUpdateBinding = (updates: Partial<SonarProjectBinding>) => {
     const next = { ...binding, ...updates };
@@ -662,12 +719,11 @@ const SonarQubeSettingsPanel: React.FC<{ onShowToast?: (t: string, m: string, ty
                 </label>
 
                 <button
-                  onClick={() => {
-                    onShowToast?.('Connected Mode', 'Project binding configuration shared to .sonarlint/connectedMode.json', 'success');
-                  }}
-                  disabled={!binding.bindEnabled}
-                  className="px-3 py-1 bg-[#2B2D30] hover:bg-[#35373B] disabled:opacity-40 text-[#DFE1E5] border border-[#393B40] rounded text-xs transition-colors cursor-pointer disabled:cursor-not-allowed"
+                  onClick={handleShareConfiguration}
+                  disabled={!binding.bindEnabled || isSharing}
+                  className="px-3 py-1 bg-[#2B2D30] hover:bg-[#35373B] disabled:opacity-40 text-[#DFE1E5] border border-[#393B40] rounded text-xs transition-colors cursor-pointer disabled:cursor-not-allowed flex items-center gap-1.5"
                 >
+                  {isSharing && <RotateCw size={11} className="animate-spin text-[#868A91]" />}
                   Share configuration...
                 </button>
               </div>

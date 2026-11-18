@@ -156,6 +156,7 @@ export function useAutoUpdate(
                   const buf = await downloadUpdateWithProgress(
                     latestMeta.downloadUrl,
                     latestMeta.size || 0,
+                    latestMeta.sha256,
                     (p) => setProgress(p),
                     abortController.signal
                   );
@@ -230,6 +231,7 @@ export function useAutoUpdate(
       const buffer = await downloadUpdateWithProgress(
         metadata.downloadUrl,
         metadata.size || 0,
+        metadata.sha256,
         (p) => setProgress(p),
         abortController.signal
       );
